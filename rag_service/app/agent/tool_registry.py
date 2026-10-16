@@ -14,7 +14,7 @@ from copy import deepcopy
 from typing import Any, Dict, List
 
 from app.agent.tool_contract import ToolWarningCode
-from app.agent_workflows.enums import NodeCapability, NodeCategory, ToolContractId, ToolName, WorkflowNodeType
+from app.product_orchestration.enums import NodeCapability, NodeCategory, ToolContractId, ToolName, WorkflowNodeType
 
 
 NODE_CONTEXT_LOADER = WorkflowNodeType.CONTEXT_LOADER.value
@@ -27,8 +27,12 @@ NODE_THREAD_EVENTS_WORKER = WorkflowNodeType.THREAD_EVENTS_WORKER.value
 NODE_WEB_WORKER = WorkflowNodeType.WEB_WORKER.value
 NODE_EVIDENCE_EVALUATOR = WorkflowNodeType.EVIDENCE_EVALUATOR.value
 NODE_REPLANNER = WorkflowNodeType.REPLANNER.value
+NODE_DIRECT_ANSWER = WorkflowNodeType.DIRECT_ANSWER.value
+NODE_SYNTHESIZER = WorkflowNodeType.SYNTHESIZER.value
+NODE_ANSWER_REVISER = WorkflowNodeType.ANSWER_REVISER.value
 NODE_FINALIZER = WorkflowNodeType.FINALIZER.value
 NODE_DEEP_RESEARCH_SUBAGENT = WorkflowNodeType.DEEP_RESEARCH_SUBAGENT.value
+NODE_DEEP_TASK_SYNTHESIZER = WorkflowNodeType.DEEP_TASK_SYNTHESIZER.value
 
 CAT_CONTEXT = NodeCategory.CONTEXT.value
 CAT_CONTROL = NodeCategory.CONTROL.value
@@ -38,6 +42,7 @@ CAT_DURABLE_MEMORY = NodeCategory.DURABLE_MEMORY.value
 CAT_THREAD_EVENTS = NodeCategory.THREAD_EVENTS.value
 CAT_WEB = NodeCategory.WEB.value
 CAT_EXTERNAL_RESEARCH = NodeCategory.EXTERNAL_RESEARCH.value
+CAT_ANSWER = NodeCategory.ANSWER.value
 
 CAP_CONTEXT_PREFETCH = NodeCapability.CONTEXT_PREFETCH.value
 CAP_ROUTE_INTENT = NodeCapability.ROUTE_INTENT.value
@@ -48,10 +53,12 @@ CAP_RETRIEVAL_DURABLE_MEMORY = NodeCapability.RETRIEVAL_DURABLE_MEMORY.value
 CAP_RETRIEVAL_THREAD_EVENTS = NodeCapability.RETRIEVAL_THREAD_EVENTS.value
 CAP_RETRIEVAL_WEB = NodeCapability.RETRIEVAL_WEB.value
 CAP_EXTERNAL_RESEARCH = NodeCapability.EXTERNAL_RESEARCH.value
+CAP_ANSWER_DIRECT = NodeCapability.ANSWER_DIRECT.value
+CAP_ANSWER_SYNTHESIZE = NodeCapability.ANSWER_SYNTHESIZE.value
+CAP_REVISE_ANSWER = NodeCapability.REVISE_ANSWER.value
+CAP_TASK_SYNTHESIZE = NodeCapability.TASK_SYNTHESIZE.value
 
 TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
-TOOL_DOCUMENT_EVIDENCE = ToolContractId.DOCUMENT_EVIDENCE.value
-TOOL_FOCUSED_DOCUMENT_EVIDENCE = ToolContractId.FOCUSED_DOCUMENT_EVIDENCE.value
 TOOL_THREAD_CONVERSATION_HISTORY = ToolContractId.THREAD_CONVERSATION_HISTORY.value
 TOOL_DURABLE_MEMORY = ToolContractId.DURABLE_MEMORY.value
 TOOL_THREAD_EVENTS = ToolContractId.THREAD_EVENTS.value
@@ -64,10 +71,9 @@ TOOL_SEMANTIC_SCHOLAR_RESEARCH = ToolContractId.SEMANTIC_SCHOLAR_RESEARCH.value
 TOOL_STACKEXCHANGE_REFERENCE = ToolContractId.STACKEXCHANGE_REFERENCE.value
 TOOL_YAHOO_FINANCE_NEWS = ToolContractId.YAHOO_FINANCE_NEWS.value
 TOOL_CLARIFY_INTENT = ToolContractId.CLARIFY_INTENT.value
+TOOL_RESEARCH_CANVAS_PUBLISH = ToolContractId.RESEARCH_CANVAS_PUBLISH.value
 
 TOOL_NAME_GET_THREAD_SHAPE = ToolName.GET_THREAD_SHAPE.value
-TOOL_NAME_SEARCH_DOCUMENTS = ToolName.SEARCH_DOCUMENTS.value
-TOOL_NAME_SEARCH_DOCUMENT_BY_ID = ToolName.SEARCH_DOCUMENT_BY_ID.value
 TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY = ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value
 TOOL_NAME_SEARCH_DURABLE_MEMORY = ToolName.SEARCH_DURABLE_MEMORY.value
 TOOL_NAME_SEARCH_THREAD_EVENTS = ToolName.SEARCH_THREAD_EVENTS.value
@@ -82,6 +88,7 @@ TOOL_NAME_SEMANTIC_SCHOLAR = ToolName.SEMANTIC_SCHOLAR.value
 TOOL_NAME_STACK_EXCHANGE = ToolName.STACK_EXCHANGE.value
 TOOL_NAME_YAHOO_FINANCE_NEWS = ToolName.YAHOO_FINANCE_NEWS.value
 TOOL_NAME_ASK_FOR_CLARIFICATION = ToolName.ASK_FOR_CLARIFICATION.value
+TOOL_NAME_PUBLISH_CANVAS = ToolName.PUBLISH_CANVAS.value
 
 
 TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
@@ -94,28 +101,32 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "artifact_keys": [TOOL_THREAD_SHAPE],
         "warning_codes": [ToolWarningCode.MISSING_THREAD_ID],
     },
-    TOOL_NAME_SEARCH_DOCUMENTS: {
-        "id": TOOL_DOCUMENT_EVIDENCE,
+    "search_knowledge": {
+        "id": "document_search_knowledge",
         "category": CAT_RETRIEVAL,
-        "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER],
-        "allowed_node_types": [NODE_RETRIEVAL_WORKER],
+        "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
+        "allowed_node_types": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
         "required_node_capabilities": [CAP_RETRIEVAL_DOCUMENT],
-        "artifact_keys": ["document_sources", "web_sources"],
-        "warning_codes": [
-            ToolWarningCode.MISSING_THREAD_CONTEXT,
-            ToolWarningCode.NO_THREAD_DOCUMENTS,
-            ToolWarningCode.MISSING_DOCUMENT_VECTORS,
-            ToolWarningCode.NO_RELEVANT_CONTENT,
-        ],
+        "artifact_keys": ["matches", "readiness", "continuation"],
+        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_THREAD_DOCUMENTS, ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.NO_RELEVANT_CONTENT, ToolWarningCode.RESPONSE_TRUNCATED],
     },
-    TOOL_NAME_SEARCH_DOCUMENT_BY_ID: {
-        "id": TOOL_FOCUSED_DOCUMENT_EVIDENCE,
+    "inspect_document": {
+        "id": "document_inspection",
         "category": CAT_RETRIEVAL,
-        "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER],
-        "allowed_node_types": [NODE_RETRIEVAL_WORKER],
+        "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
+        "allowed_node_types": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
         "required_node_capabilities": [CAP_RETRIEVAL_DOCUMENT],
-        "artifact_keys": ["document_sources"],
-        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_THREAD_DOCUMENTS, ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.NO_RELEVANT_CONTENT],
+        "artifact_keys": ["outline", "tags", "valid_expansion_targets", "continuation"],
+        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.MISSING_DOCUMENT_VECTORS],
+    },
+    "read_context": {
+        "id": "document_context",
+        "category": CAT_RETRIEVAL,
+        "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
+        "allowed_node_types": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
+        "required_node_capabilities": [CAP_RETRIEVAL_DOCUMENT],
+        "artifact_keys": ["original_evidence_source_id", "continuation", "readiness"],
+        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_RELEVANT_CONTENT, ToolWarningCode.RESPONSE_TRUNCATED],
     },
     TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY: {
         "id": TOOL_THREAD_CONVERSATION_HISTORY,
@@ -234,6 +245,15 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "artifact_keys": ["provider_tool"],
         "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
+    TOOL_NAME_PUBLISH_CANVAS: {
+        "id": TOOL_RESEARCH_CANVAS_PUBLISH,
+        "category": CAT_ANSWER,
+        "allowed_caller_nodes": [NODE_SYNTHESIZER, NODE_DIRECT_ANSWER, NODE_ANSWER_REVISER, NODE_DEEP_TASK_SYNTHESIZER],
+        "allowed_node_types": [NODE_SYNTHESIZER, NODE_DIRECT_ANSWER, NODE_ANSWER_REVISER, NODE_DEEP_TASK_SYNTHESIZER],
+        "required_node_capabilities": [CAP_ANSWER_SYNTHESIZE, CAP_ANSWER_DIRECT, CAP_REVISE_ANSWER, CAP_TASK_SYNTHESIZE],
+        "artifact_keys": ["canvas"],
+        "warning_codes": [],
+    },
     TOOL_NAME_ASK_FOR_CLARIFICATION: {
         "id": TOOL_CLARIFY_INTENT,
         "category": CAT_CONTROL,
@@ -249,8 +269,9 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
 # Profile grants are intersected at runtime; adding this caller does not grant a
 # tool unless the frozen workflow and selected profile both allow it.
 for _deep_tool_name in (
-    TOOL_NAME_SEARCH_DOCUMENTS,
-    TOOL_NAME_SEARCH_DOCUMENT_BY_ID,
+    "search_knowledge",
+    "inspect_document",
+    "read_context",
     TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY,
     TOOL_NAME_SEARCH_DURABLE_MEMORY,
     TOOL_NAME_SEARCH_THREAD_EVENTS,
@@ -396,17 +417,26 @@ def validate_tool_call_allowed(
 
 
 TOOL_FRIENDLY_CONFIG = {
-    TOOL_NAME_SEARCH_DOCUMENTS: {
-        "id": TOOL_DOCUMENT_EVIDENCE,
-        "display_name": "Document Evidence",
-        "description": "Semantic search across uploaded documents and cached web snippets when the user needs evidence content. Use this when the target document is unknown, the question spans multiple documents, or cached web snippets may contain the answer. Do not use it just to answer first/latest/since/order questions; use search_thread_events when chronology is central.",
-        "default_prompt": "Use for evidence content from uploaded documents or cached web snippets. Prefer search_document_by_id when a specific file_hash is known. Prefer search_thread_events when the user's wording depends on first/latest/earlier/since/before/after or mixed-source ordering.",
+    "search_knowledge": {
+        "id": "document_search_knowledge",
+        "display_name": "Search Knowledge",
+        "description": "Search attached PDFs at document, section, or precise chunk level. Use chunk for direct evidence, document or section for structural discovery, then read_context to expand a returned source.",
+        "default_prompt": "Search attached documents directly. Use level=chunk for precise evidence, level=section or document for discovery, and pass document_id or typed filters only when they are relevant. Do not treat outline entries or tags as evidence. Ranked results include a source catalog; after tool_response_truncated, call read_context on omitted or tabular source_ids (expansion=table for tables, otherwise expansion=section). Do not repeat a similar search_knowledge query.",
+        "mcp_server": "first_party_context", "mcp_tool": "search_knowledge", "mcp_enabled": True, "contract_version": "1",
     },
-    TOOL_NAME_SEARCH_DOCUMENT_BY_ID: {
-        "id": TOOL_FOCUSED_DOCUMENT_EVIDENCE,
-        "display_name": "Focused Document Evidence",
-        "description": "Semantic search within one uploaded document identified by file_hash. Use this when the user names or clearly points to a specific document and thread shape provides the file_hash. Do not use it for cross-document comparison or timeline ordering unless paired with search_thread_events.",
-        "default_prompt": "Use when a specific document is known and its file_hash is available. Keep the query focused on the requested fact. Use search_thread_events instead for document added-to-thread time or chronology questions.",
+    "inspect_document": {
+        "id": "document_inspection",
+        "display_name": "Inspect Document",
+        "description": "Inspect the heading outline, structural tags, pages, and valid section/table expansion targets of an attached PDF.",
+        "default_prompt": "Use for broad document discovery or when the user names a section. Treat the returned outline and tags as navigation metadata, not supporting evidence; call read_context for evidence.",
+        "mcp_server": "first_party_context", "mcp_tool": "inspect_document", "mcp_enabled": True, "contract_version": "1",
+    },
+    "read_context": {
+        "id": "document_context",
+        "display_name": "Read Context",
+        "description": "Read the original body text for a returned document source with bounded chunk, section, or table expansion and continuation.",
+        "default_prompt": "Use with a source_id from search_knowledge, including omitted catalog ids. Prefer expansion=table when the source has a table_id and expansion=section otherwise. Keep within the requested token budget, and cite source IDs/pages from the returned evidence.",
+        "mcp_server": "first_party_context", "mcp_tool": "read_context", "mcp_enabled": True, "contract_version": "1",
     },
     TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY: {
         "id": TOOL_THREAD_CONVERSATION_HISTORY,
@@ -489,6 +519,21 @@ TOOL_FRIENDLY_CONFIG = {
         "display_name": "Yahoo Finance News",
         "description": "Search Yahoo Finance news for a public company ticker.",
         "default_prompt": "Use for recent public-company finance/business news only after you know the listed ticker. Input must be only the ticker symbol, such as AAPL, MSFT, or NVDA; do not pass a company name, natural-language sentence, exchange name, or private company. If the user gives only a company name, first call search_web with a query like \"Nvidia stock ticker\" to find the ticker, then call yahoo_finance_news with just that ticker. If no public ticker exists, do not call this tool. Use for news context, not investment advice, valuation, real-time quotes, or private-company research.",
+    },
+    TOOL_NAME_PUBLISH_CANVAS: {
+        "id": TOOL_RESEARCH_CANVAS_PUBLISH,
+        "display_name": "Publish Canvas",
+        "description": "Publish a durable research canvas draft for this thread; the server compiles it to canvas_spec_v1.",
+        "default_prompt": (
+            "Call publish_canvas when a structured comparison, timeline, or evidence map would help more than prose. "
+            "Pass layout compare|matrix|timeline, title, and claims with source_ids from the Citation menu. "
+            "Map canvas_compare_papers to compare, canvas_evidence_matrix to matrix, canvas_timeline to timeline. "
+            "After a successful publish, mention the canvas title in the answer."
+        ),
+        "mcp_server": "first_party_context",
+        "mcp_tool": "publish_canvas",
+        "mcp_enabled": True,
+        "contract_version": "1",
     },
     TOOL_NAME_ASK_FOR_CLARIFICATION: {
         "id": TOOL_CLARIFY_INTENT,
@@ -575,8 +620,9 @@ for _tool_name, _tool_config in TOOL_FRIENDLY_CONFIG.items():
 
 for _tool_name in (
     TOOL_NAME_GET_THREAD_SHAPE,
-    TOOL_NAME_SEARCH_DOCUMENTS,
-    TOOL_NAME_SEARCH_DOCUMENT_BY_ID,
+    "search_knowledge",
+    "inspect_document",
+    "read_context",
     TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY,
     TOOL_NAME_SEARCH_DURABLE_MEMORY,
     TOOL_NAME_SEARCH_THREAD_EVENTS,
@@ -590,6 +636,7 @@ for _tool_name in (
     TOOL_NAME_SEMANTIC_SCHOLAR,
     TOOL_NAME_STACK_EXCHANGE,
     TOOL_NAME_YAHOO_FINANCE_NEWS,
+    TOOL_NAME_PUBLISH_CANVAS,
 ):
     TOOL_FRIENDLY_CONFIG[_tool_name]["mcp_enabled"] = True
 

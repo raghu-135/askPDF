@@ -6,11 +6,29 @@ including connection management, session handling, and test data.
 """
 
 import os
+import sys
 import asyncio
+import json
 import uuid
+from pathlib import Path
 from typing import AsyncGenerator, Generator
 from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
+
+# Hermes tests live in the control-plane image (`/app/tests`) but import the
+# sibling `hermes_runtime` package from the repository root. CI also invokes
+# pytest with `--entrypoint pytest`, which bypasses scripts/run_tests.py's
+# PYTHONPATH. Keep the mounted repo on sys.path before those modules load.
+_REPO_CANDIDATES = (
+    Path(os.environ.get("ASKPDF_REPO_DIR", "/workspace")),
+    Path(__file__).resolve().parents[2],
+)
+for _repo_root in _REPO_CANDIDATES:
+    if (_repo_root / "hermes_runtime").is_dir():
+        _repo_path = str(_repo_root)
+        if _repo_path not in sys.path:
+            sys.path.insert(0, _repo_path)
+        break
 
 import asyncpg
 import pytest
@@ -25,9 +43,24 @@ from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 from httpx import ASGITransport, AsyncClient
 
+
+os.environ.setdefault("HERMES_API_TOKEN", "test-hermes-api-token-32-characters")
+os.environ.setdefault("HERMES_RUNTIME_TOKEN", "test-hermes-runtime-token-32-characters")
+os.environ.setdefault("MCP_EXECUTION_CONTEXT_SECRET", "test-mcp-execution-context-secret-32-characters")
+os.environ.setdefault("ASKPDF_ADMIN_TOKEN", "test-control-plane-token-32-characters")
+os.environ.setdefault("ASKPDF_CORS_ORIGINS", "http://localhost:3000")
+os.environ.setdefault("ASKPDF_MCP_URL", "http://127.0.0.1:8000/internal/mcp/")
+os.environ.setdefault("ASKPDF_MCP_HEALTH_URL", "http://127.0.0.1:8000/health")
+os.environ.setdefault("LLM_API_URL", "http://127.0.0.1:1234/v1")
+# Control-plane pytest invokes first-party tools in-process. CI copies
+# `.env.ci` into the test runner, and that file uses loopback HTTP against
+# `rag-service`, which is not part of docker-compose.test.yml.
+os.environ["MCP_TRANSPORT"] = "in_process"
+os.environ.setdefault("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
+
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,
-    ChatTurn, ProcessStatus, MessageRole
+    ChatTurn, ProcessStatus, MessageRole, AgentRuntimeOperation
 )
 
 
@@ -35,6 +68,15 @@ collect_ignore = [
     "test_modular_visualization.py",
     "test_parsing_service.py",
 ]
+
+_test_inventory_path = Path(__file__).with_name("test_inventory.json")
+try:
+    _test_inventory = json.loads(_test_inventory_path.read_text())
+    for _excluded_test in (_test_inventory.get("excluded") or {}):
+        if _excluded_test not in collect_ignore:
+            collect_ignore.append(_excluded_test)
+except (OSError, json.JSONDecodeError) as exc:
+    raise RuntimeError(f"Unable to load test inventory: {_test_inventory_path}") from exc
 
 
 _askpdf_completed_test_calls = 0
@@ -214,7 +256,9 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_repo_sqlmodel,
     )
     from app.services import (
+        agent_task_chat_publish,
         agent_task_repository,
+        agent_task_runtime_projection,
         embedding_materialization_service,
         effective_memory_service,
         memory_manager_engine,
@@ -225,11 +269,11 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         memory_workspace_service,
         project_lifecycle_service,
         thread_management_service,
+        tool_approval,
     )
-    from app.agent_workflows import (
+    from app.product_orchestration import (
         chat_cancellation,
         repository as agent_workflow_repository,
-        studio_runtime,
     )
 
     for module in (
@@ -253,9 +297,11 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         project_lifecycle_service,
         embedding_materialization_service,
         agent_workflow_repository,
-        studio_runtime,
         chat_cancellation,
         agent_task_repository,
+        agent_task_runtime_projection,
+        agent_task_chat_publish,
+        tool_approval,
     ):
         monkeypatch.setattr(module, "async_session_maker", session_maker)
 
@@ -270,10 +316,30 @@ def _patch_app_session_makers(monkeypatch, session_maker):
 def api_client(test_database_url, monkeypatch) -> Generator:
     """Create a sync FastAPI test client wired to the isolated test database."""
     from fastapi.testclient import TestClient
+    from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
+    from app.runtime.registry import RuntimeRegistry
+    from app.runtime import registry as registry_module
+    from tests.support.fake_runtime import FakeRuntimeServer
 
     engine = _build_test_engine(test_database_url)
     session_maker = _build_session_maker(engine)
     _patch_app_session_makers(monkeypatch, session_maker)
+
+    # Product API tests must exercise the external adapter boundary without
+    # depending on a separately deployed runtime.  This is an explicit HTTP
+    # test double, never a production registry fallback.
+    fake_runtime = FakeRuntimeServer()
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_URL", "http://fake-langgraph-runtime")
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_TOKEN", "test-langgraph-runtime-token-32-characters")
+    fake_adapter = HttpLangGraphRuntimeAdapter(
+        base_url="http://fake-langgraph-runtime",
+        client=fake_runtime.client(),
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_registry",
+        RuntimeRegistry(adapters=[fake_adapter]),
+    )
 
     import main as main_module
 
@@ -281,15 +347,19 @@ def api_client(test_database_url, monkeypatch) -> Generator:
         await stop_event.wait()
 
     monkeypatch.setattr(main_module, "run_task_worker", idle_task_worker)
-    # Replace only the DB initializer so startup creates the isolated schema
-    # on TestClient's portal loop before the normal seed operations run.
-    async def init_test_db():
-        await _create_test_schema(engine)
-    monkeypatch.setattr(main_module, "init_db", init_test_db)
+    # The isolated fixture owns test schema creation. Production startup must
+    # not call SQLModel.metadata.create_all; migrations are the schema authority.
+    asyncio.run(_create_test_schema(engine))
+    # The synchronous fixture creates the schema before Starlette starts its
+    # AnyIO portal. Dispose the schema-creation loop's connections before the
+    # same engine is used by the portal loop; otherwise asyncpg can retain a
+    # loop-bound cancellation task until the next unrelated test.
+    asyncio.run(engine.dispose())
     app = main_module.app
 
     try:
         with TestClient(app) as test_client:
+            test_client.headers.update({"Authorization": f"Bearer {os.environ['ASKPDF_ADMIN_TOKEN']}"})
             yield test_client
             test_client.portal.call(_drop_test_schema, engine)
     finally:
@@ -299,10 +369,28 @@ def api_client(test_database_url, monkeypatch) -> Generator:
 @pytest_asyncio.fixture(scope="function")
 async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[AsyncClient, None]:
     """Create an async FastAPI test client wired to the isolated test database."""
+    from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
+    from app.runtime.registry import RuntimeRegistry
+    from app.runtime import registry as registry_module
+    from tests.support.fake_runtime import FakeRuntimeServer
+
     engine = _build_test_engine(test_database_url)
     session_maker = _build_session_maker(engine)
     await _create_test_schema(engine)
     _patch_app_session_makers(monkeypatch, session_maker)
+
+    fake_runtime = FakeRuntimeServer()
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_URL", "http://fake-langgraph-runtime")
+    monkeypatch.setenv("LANGGRAPH_RUNTIME_TOKEN", "test-langgraph-runtime-token-32-characters")
+    fake_adapter = HttpLangGraphRuntimeAdapter(
+        base_url="http://fake-langgraph-runtime",
+        client=fake_runtime.client(),
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_registry",
+        RuntimeRegistry(adapters=[fake_adapter]),
+    )
 
     import main as main_module
 
@@ -313,7 +401,11 @@ async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[Asy
     app = main_module.app
 
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": f"Bearer {os.environ['ASKPDF_ADMIN_TOKEN']}"},
+        ) as client:
             yield client
     finally:
         app.dependency_overrides.clear()

@@ -31,23 +31,6 @@ try:
         ReasoningFormat,
         ThreadCloneMode,
     )
-    from app.agent_workflows.enums import (
-        AgentCheckpointerMode,
-        AgentRunResumeAction,
-        EvidenceCompressionMode,
-        EvaluatorRoute,
-        HitlInterruptType,
-        HitlMode,
-        HitlPhase,
-        HitlRejectBehavior,
-        HitlSelectionMode,
-        InterruptStatus,
-        PlannerRiskLevel,
-        PlannerRoute,
-        RouteFunctionId,
-        RouterRoute,
-        WorkflowRuntimeKind,
-    )
     from app.rag.enums import (
         ReembedSkipReason,
         ThreadTimelineOrder,
@@ -240,18 +223,12 @@ class TestProcessStatusEnum:
         """Verify domain enum values remain wire-compatible strings."""
         assert FileSourceType.PDF.value == "pdf"
         assert FileSourceType.BROWSER.value == "browser"
+        assert FileSourceType.uses_pdf_conversion("pdf") is True
+        assert FileSourceType.uses_pdf_conversion("browser") is True
+        assert FileSourceType.uses_pdf_conversion("markdown") is False
         assert ChatTurnStatus.CANCELLED.value == "cancelled"
         assert WorkflowVisibility.INTERNAL.value == "internal"
         assert AgentRunStatus.AWAITING_HUMAN.value == "awaiting_human"
-        assert InterruptStatus.PENDING.value == "pending"
-        assert AgentRunResumeAction.CONTINUE_WITHOUT.value == "continue_without"
-        assert HitlMode.CHOICE.value == "choice"
-        assert HitlPhase.INSIDE_TOOL.value == "inside_tool"
-        assert HitlSelectionMode.SINGLE_OR_MULTI.value == "single_or_multi"
-        assert RouterRoute.DOCUMENT.value == "document"
-        assert PlannerRoute.EXECUTE.value == "execute"
-        assert EvaluatorRoute.ANSWER_BUDGET_EXHAUSTED.value == "answer_budget_exhausted"
-        assert RouteFunctionId.HITL_GATE.value == "hitl_gate_route"
         assert OperationResultStatus.SUCCESS.value == "success"
         assert OperationResultStatus.SKIPPED.value == "skipped"
         assert EmbeddingReadinessStatus.NOT_READY.value == "not_ready"
@@ -264,12 +241,6 @@ class TestProcessStatusEnum:
         assert TimelineSourceType.CONVERSATION.value == "conversation"
         assert TimelineEventType.WEB_SEARCH_PERFORMED.value == "web_search_performed"
         assert ReembedSkipReason.REEMBED_IN_PROGRESS.value == "reembed_in_progress"
-        assert AgentCheckpointerMode.POSTGRES.value == "postgres"
-        assert EvidenceCompressionMode.COMPACT.value == "compact"
-        assert HitlInterruptType.OPTION_REVIEW.value == "option_review"
-        assert HitlRejectBehavior.RESUME.value == "resume"
-        assert WorkflowRuntimeKind.COMPILED_RAG.value == "compiled_rag"
-        assert PlannerRiskLevel.HIGH.value == "high"
         assert ToolWarningCode.WEB_SEARCH_DISABLED.value == "web_search_disabled"
         assert ToolErrorCode.failed("search_web") == "search_web_failed"
 

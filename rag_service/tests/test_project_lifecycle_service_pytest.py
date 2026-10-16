@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from datetime import timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -7,6 +8,7 @@ from sqlalchemy.future import select
 
 from app.db.models_sqlmodel import (
     AgentRun,
+    AgentTask,
     AgentWorkflow,
     ChatTurn,
     File,
@@ -19,13 +21,16 @@ from app.db.models_sqlmodel import (
     ThreadFile,
 )
 from app.services import project_lifecycle_service
+from app.services import agent_task_repository
 from app.time_utils import utc_now
 
 
 @pytest.fixture
 def lifecycle_sessionmaker(engine, monkeypatch):
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    monkeypatch.setattr(project_lifecycle_service, "async_session_maker", maker)
+    from conftest import _patch_app_session_makers
+
+    _patch_app_session_makers(monkeypatch, maker)
     monkeypatch.setattr(
         project_lifecycle_service,
         "_default_project_id",
@@ -192,7 +197,7 @@ async def test_clone_with_threads_copies_completed_history_annotations_and_trace
                 thread_id="source-thread",
                 workflow_id="workflow-1",
                 status="completed",
-                checkpoint_thread_id="checkpoint-source",
+                runtime_binding_json={"binding_type": "langgraph.checkpoint", "payload": {"binding_id": "checkpoint-source"}},
                 pending_interrupt_json={"id": "interrupt"},
                 debug_trace_json=debug,
                 completed_at=now,
@@ -251,7 +256,7 @@ async def test_clone_with_threads_copies_completed_history_annotations_and_trace
     assert cloned_turn.id != "source-turn"
     assert cloned_run.id != "source-run"
     assert cloned_run.thread_id == cloned_thread.id
-    assert cloned_run.checkpoint_thread_id is None
+    assert cloned_run.runtime_binding_json == {}
     assert cloned_run.pending_interrupt_json is None
     assert cloned_run.run_metadata_json["historical_clone"] is True
     assert cloned_run.debug_trace_json["trace"]["run_id"] == cloned_run.id
@@ -271,10 +276,12 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
         delete_document_vectors_by_file_hash_and_model=AsyncMock(return_value=True),
     )
     monkeypatch.setattr(project_lifecycle_service, "get_vector_db", lambda: vector_db)
-    checkpoint_cleanup = AsyncMock(return_value=["checkpoint-source"])
+    from app.runtime.cleanup import RunCleanupOutcome
+    checkpoint_cleanup = AsyncMock(return_value=[
+        RunCleanupOutcome(run_id="terminal-run", status="cleaned")
+    ])
     monkeypatch.setattr(
-        project_lifecycle_service,
-        "delete_agent_checkpoints",
+        "app.runtime.cleanup.cleanup_runs",
         checkpoint_cleanup,
     )
     delete_artifacts = AsyncMock(return_value=None)
@@ -314,7 +321,30 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
                 thread_id="source-thread",
                 workflow_id="workflow-1",
                 status="completed",
-                checkpoint_thread_id="checkpoint-source",
+                runtime_binding_json={
+                    "binding_type": "langgraph.checkpoint",
+                    "payload": {"binding_id": "checkpoint-source"},
+                },
+                runtime_binding_status="active",
+                completed_at=now,
+            ))
+            session.add(AgentRun(
+                id="ordinary-run-without-binding",
+                thread_id="source-thread",
+                workflow_id="workflow-1",
+                framework="langgraph",
+                status="completed",
+                runtime_binding_json=None,
+                completed_at=now,
+            ))
+            session.add(AgentRun(
+                id="hermes-run",
+                thread_id="source-thread",
+                workflow_id="workflow-1",
+                framework="hermes",
+                builder_id="hermes_agent",
+                status="completed",
+                runtime_binding_json={"binding_type": "hermes.session", "payload": {}},
                 completed_at=now,
             ))
             session.add_all([
@@ -337,8 +367,74 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
         assert await session.get(Memory, "global-memory") is not None
 
     vector_db.delete_thread_data.assert_awaited_once_with("source-thread")
-    checkpoint_cleanup.assert_awaited_once_with(["checkpoint-source"])
+    cleanup_runs = checkpoint_cleanup.await_args.args[0]
+    assert [run.id for run in cleanup_runs] == [
+        "terminal-run",
+        "ordinary-run-without-binding",
+        "hermes-run",
+    ]
     delete_artifacts.assert_awaited_once_with("orphan-file")
+
+
+@pytest.mark.asyncio
+async def test_runtime_lifecycle_queries_include_all_frameworks(lifecycle_sessionmaker):
+    now = utc_now()
+    async with lifecycle_sessionmaker() as session:
+        async with session.begin():
+            session.add(Project(id="runtime-project", name="Runtime", embedding_model="BAAI/bge-m3"))
+            session.add(Thread(
+                id="runtime-thread",
+                project_id="runtime-project",
+                name="Runtime thread",
+                embedding_model="BAAI/bge-m3",
+            ))
+            session.add(AgentWorkflow(
+                id="runtime-workflow",
+                name="Runtime workflow",
+                spec_json={},
+                validation_result_json={},
+            ))
+            await session.flush()
+            session.add(AgentTask(
+                id="runtime-task",
+                thread_id="runtime-thread",
+                project_id="runtime-project",
+                workflow_id="runtime-workflow",
+                objective="Retain runtime lifecycle coverage",
+                objective_hash="runtime-task-hash",
+                create_idempotency_key="runtime-task-key",
+            ))
+            await session.flush()
+            session.add_all([
+                AgentRun(
+                    id="langgraph-terminal",
+                    thread_id="runtime-thread",
+                    workflow_id="runtime-workflow",
+                    framework="langgraph",
+                    builder_id="langgraph_graph",
+                    task_id="runtime-task",
+                    status="completed",
+                    completed_at=now,
+                ),
+                AgentRun(
+                    id="hermes-terminal",
+                    thread_id="runtime-thread",
+                    workflow_id="runtime-workflow",
+                    framework="hermes",
+                    builder_id="hermes_agent",
+                    task_id="runtime-task",
+                    status="completed",
+                    completed_at=now,
+                ),
+            ])
+
+    thread_runs = await agent_task_repository.list_task_runtime_runs_for_threads(["runtime-thread"])
+    retained_runs = await agent_task_repository.list_terminal_task_runtime_runs_before(
+        now + timedelta(seconds=1),
+    )
+
+    assert {run.id for run in thread_runs} == {"langgraph-terminal", "hermes-terminal"}
+    assert {run.id for run in retained_runs} == {"langgraph-terminal", "hermes-terminal"}
 
 
 @pytest.mark.asyncio

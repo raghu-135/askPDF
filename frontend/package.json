@@ -36,12 +36,14 @@
     "react-dom": "^19.2.5",
     "react-json-view-lite": "^2.5.0",
     "react-markdown": "^10.1.0",
+    "reagraph": "^4.32.0",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@next/bundle-analyzer": "^15.5.15",
     "@types/node": "^25.5.2",
     "@types/react": "^19.2.14",
+    "jsdom": "^29.1.1",
     "typescript": "^6.0.2"
   }
 }

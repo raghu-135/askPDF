@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.agent_workflows.workflow_runtime import default_agent_workflow_key
+from runtime_protocol.context_budget import resolve_context_budget
+
+from app.product_orchestration.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
     DEFAULT_TOKEN_BUDGET,
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -161,6 +163,7 @@ class MemoryManagerConversationRequest(BaseModel):
     )
     llm_model: str = Field(min_length=1)
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
+    context_budget: Optional[ContextBudgetOverride] = None
     web_search_mode: Literal["off", "ask", "on"] = "off"
     web_search_decision: Optional[MemoryManagerWebSearchDecision] = None
     memory_review_cursor: Optional["MemoryConsistencyReviewCursor"] = None
@@ -259,6 +262,7 @@ class MemoryManagerPlanRequest(BaseModel):
     memory_id: Optional[str] = None
     llm_model: str = Field(min_length=1)
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
+    context_budget: Optional[ContextBudgetOverride] = None
     review_round: int = Field(default=1, ge=1)
     review_cursor: Optional[MemoryReviewCursor] = None
     memory_review_cursor: Optional[MemoryConsistencyReviewCursor] = None
@@ -325,17 +329,36 @@ class ThreadFileAnnotationsResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class ContextBudgetOverride(BaseModel):
+    """Optional per-run packing ratios. Omitted fields use environment defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    usable_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    recent_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    semantic_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    durable_memory_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    document_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    memory_expanded_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+
+    @model_validator(mode="after")
+    def _validate_prefetch_sum(self) -> "ContextBudgetOverride":
+        resolve_context_budget(self.model_dump(exclude_none=True))
+        return self
+
+
 class ThreadChatRequest(BaseModel):
     """Request body for thread-based chat."""
 
-    thread_id: str
-    question: str
-    llm_model: str
+    thread_id: str = Field(min_length=1)
+    question: str = Field(min_length=1, max_length=20_000)
+    llm_model: str = Field(min_length=1, max_length=300)
     use_web_search: bool = False
     hitl_web_approval: Optional[bool] = None
     use_reranker: Optional[bool] = None
     bypass_clarification: bool = False
-    context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size
+    context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
+    context_budget: Optional[ContextBudgetOverride] = None
     replans: Optional[int] = Field(default=None, ge=1, le=REPLANS_LIMIT)
     system_role_override: Optional[str] = Field(
         default=None, max_length=MAX_SYSTEM_ROLE_CHARS
@@ -347,6 +370,13 @@ class ThreadChatRequest(BaseModel):
     client_timezone: Optional[str] = Field(default=None, max_length=100)
     client_locale: Optional[str] = Field(default=None, max_length=50)
     client_now_iso: Optional[str] = Field(default=None, max_length=80)
+
+    @field_validator("question", "llm_model", mode="before")
+    @classmethod
+    def _strip_required_chat_text(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class ThreadMemorySettings(BaseModel):
@@ -366,8 +396,10 @@ class ThreadSettingsResponse(BaseModel):
         default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
     hitl_web_approval: bool = False
+    hitl_canvas_publish: bool = False
     use_reranker: bool = False
     agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
+    agent_workflow_validation: Optional[Dict[str, Any]] = None
     memory: ThreadMemorySettings = Field(default_factory=ThreadMemorySettings)
 
 
@@ -379,6 +411,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
         default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
     hitl_web_approval: Optional[bool] = None
+    hitl_canvas_publish: Optional[bool] = None
     use_reranker: Optional[bool] = None
     agent_workflow: Optional[Dict[str, str]] = None
     memory: Optional[ThreadMemorySettings] = None
@@ -394,15 +427,18 @@ class ToolCatalogEntry(BaseModel):
 class PromptDefaults(BaseModel):
     replans_limit: int
     context_window: int
+    context_budget: Dict[str, float]
     system_role: str
     tool_instructions: Dict[str, str]
     custom_instructions: str
     hitl_web_approval: bool = False
+    hitl_canvas_publish: bool = False
     use_reranker: bool = False
 
 
 class PromptPreviewRequest(BaseModel):
     context_window: int = DEFAULT_TOKEN_BUDGET
+    context_budget: Optional[ContextBudgetOverride] = None
     system_role: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Optional[Dict[str, str]] = None
     custom_instructions: Optional[str] = Field(
@@ -431,3 +467,44 @@ class ProcessPdfRequest(BaseModel):
     file_hash: str
     file_name: str
     backend_url: str
+
+
+class EmbeddingProjectionPoint(BaseModel):
+    """One projected embedding point for visualization."""
+
+    id: str
+    x: float
+    y: float
+    z: float
+    chunk_id: Optional[int] = None
+    file_hash: str
+    file_name: Optional[str] = None
+    text: str
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    pages: Optional[str] = None
+    source_kind: Optional[str] = None
+    table_id: Optional[str] = None
+    section_id: Optional[str] = None
+
+
+class EmbeddingProjectionEdge(BaseModel):
+    """A directed edge representing reading sequence or semantic similarity."""
+
+    id: str
+    source: str
+    target: str
+    label: Optional[str] = None
+    kind: str  # "sequence" | "similarity"
+    score: Optional[float] = None
+
+
+class EmbeddingProjectionResponse(BaseModel):
+    """3D embedding projection for a thread's indexed embedding collections."""
+
+    thread_id: str
+    embedding_model: str
+    point_count: int
+    truncated: bool
+    points: List[EmbeddingProjectionPoint]
+    edges: List[EmbeddingProjectionEdge] = Field(default_factory=list)

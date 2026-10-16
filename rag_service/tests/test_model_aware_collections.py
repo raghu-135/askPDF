@@ -14,6 +14,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 import app.db.vector as vector_module
+from app.db.vector.config import CollectionNames
 from app.db.vector.model_registry import EmbeddingModelRegistry, get_embedding_model_registry
 from app.db.vector.collection_manager import ModelAwareCollectionManager
 from app.db.vector.adapter import WeaviateAdapter
@@ -78,7 +79,10 @@ class TestEmbeddingModelRegistry:
     async def test_model_dimension_detection(self, registry):
         """Test dimension detection for different model types."""
         # Mock local model (384 dimensions)
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
+        with (
+            patch("app.db.vector.model_registry.should_use_local_embeddings", return_value=True),
+            patch("app.db.vector.model_registry.get_embedding_model") as mock_get_model,
+        ):
             mock_model = AsyncMock()
             mock_model.aembed_query.return_value = [0.1] * 384
             
@@ -87,6 +91,17 @@ class TestEmbeddingModelRegistry:
             
             assert dimensions == 384
             mock_model.aembed_query.assert_called_once_with("test")
+
+    @pytest.mark.asyncio
+    async def test_remote_model_dimension_detection_uses_embed_query(self, registry):
+        with (
+            patch("app.db.vector.model_registry.should_use_local_embeddings", return_value=False),
+            patch("app.db.vector.model_registry.embed_query", new_callable=AsyncMock, return_value=[0.1] * 2560) as embed_query,
+        ):
+            dimensions = await registry._probe_model_dimensions("qwen/qwen3-embedding-4b")
+
+        assert dimensions == 2560
+        embed_query.assert_awaited_once_with("qwen/qwen3-embedding-4b", "test")
     
     @pytest.mark.asyncio
     async def test_collection_naming(self, registry):
@@ -100,6 +115,15 @@ class TestEmbeddingModelRegistry:
         
         collection_name = registry.get_collection_name("DocumentChunk", "test-model")
         assert collection_name == "DocumentChunk_test_model_768"
+
+    def test_huggingface_model_ids_share_a_weaviate_collection_name(self, registry):
+        assert registry.sanitize_model_name("BAAI/bge-m3") == "baai_bge_m3"
+        assert registry.sanitize_model_name("baai/bge-m3") == "baai_bge_m3"
+        for model_name in ("BAAI/bge-m3", "baai/bge-m3"):
+            seed_model(registry, model_name, dimensions=1024)
+        assert registry.get_collection_name("DocumentChunk", "BAAI/bge-m3") == "DocumentChunk_baai_bge_m3_1024"
+        assert registry.get_collection_name("DocumentChunk", "baai/bge-m3") == "DocumentChunk_baai_bge_m3_1024"
+        assert registry.is_model_compatible("DocumentChunk_BAAI_bge_m3_1024", "baai/bge-m3")
     
     @pytest.mark.asyncio
     async def test_model_compatibility_check(self, registry):
@@ -139,6 +163,7 @@ class TestModelAwareCollectionManager:
         client = MagicMock()
         client.collections.exists.return_value = False
         client.collections.create.return_value = None
+        client.collections.list_all.return_value = {}
         client.collections.use.return_value = MagicMock()
         return client
     
@@ -164,6 +189,43 @@ class TestModelAwareCollectionManager:
             assert collection is not None
             mock_client.collections.exists.assert_called_once_with("DocumentChunk_test_model_384")
             mock_client.collections.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_collection_reuses_case_equivalent_weaviate_class(self, collection_manager, mock_client):
+        registry = EmbeddingModelRegistry()
+        seed_model(registry, "baai/bge-m3", dimensions=1024)
+        collection_manager.registry = registry
+        mock_client.collections.exists.return_value = False
+        mock_client.collections.list_all.return_value = {"DocumentChunk_BAAI_bge_m3_1024": object()}
+
+        collection = await collection_manager.get_collection("DocumentChunk", "baai/bge-m3")
+
+        assert collection is mock_client.collections.use.return_value
+        mock_client.collections.create.assert_not_called()
+        mock_client.collections.use.assert_called_with("DocumentChunk_BAAI_bge_m3_1024")
+
+    @pytest.mark.asyncio
+    async def test_create_reuses_similar_class_from_weaviate_422(self, collection_manager, mock_client):
+        from weaviate.exceptions import WeaviateBaseError
+
+        class DuplicateClass(WeaviateBaseError):
+            def __init__(self, message: str):
+                Exception.__init__(self, message)
+
+        registry = EmbeddingModelRegistry()
+        seed_model(registry, "baai/bge-m3", dimensions=1024)
+        collection_manager.registry = registry
+        mock_client.collections.exists.return_value = False
+        mock_client.collections.list_all.return_value = {}
+        mock_client.collections.create.side_effect = DuplicateClass(
+            'class already exists: found similar class "DocumentChunk_BAAI_bge_m3_1024"'
+        )
+
+        collection = await collection_manager.get_collection("DocumentChunk", "baai/bge-m3")
+
+        mock_client.collections.create.assert_called_once()
+        mock_client.collections.use.assert_called_with("DocumentChunk_BAAI_bge_m3_1024")
+        assert collection is mock_client.collections.use.return_value
     
     @pytest.mark.asyncio
     async def test_collection_caching(self, collection_manager, mock_client):
@@ -186,6 +248,39 @@ class TestModelAwareCollectionManager:
             # Should only check existence once
             mock_client.collections.exists.assert_called_once()
     
+    def test_find_existing_collection_matches_model_prefix(self, collection_manager, mock_client):
+        mock_client.collections.list_all.return_value = {
+            "ChatMemoryChunk_qwen_qwen3_embedding_4b_2560": object(),
+            "DocumentChunk_baai_bge_m3_1024": object(),
+        }
+        assert collection_manager.find_existing_collection(
+            CollectionNames.CHAT_MEMORY,
+            "qwen/qwen3-embedding-4b",
+        ) == "ChatMemoryChunk_qwen_qwen3_embedding_4b_2560"
+
+    def test_find_existing_collection_returns_none_when_absent(self, collection_manager, mock_client):
+        mock_client.collections.list_all.return_value = {
+            "DocumentChunk_baai_bge_m3_1024": object(),
+        }
+        assert collection_manager.find_existing_collection(
+            CollectionNames.CHAT_MEMORY,
+            "qwen/qwen3-embedding-4b",
+        ) is None
+
+    @pytest.mark.asyncio
+    async def test_get_existing_collections_skips_embedding_probe(self, collection_manager, mock_client):
+        mock_client.collections.list_all.return_value = {
+            "ChatMemoryChunk_qwen_qwen3_embedding_4b_2560": object(),
+        }
+        with patch.object(collection_manager.registry, "get_model_info", new_callable=AsyncMock) as get_model_info:
+            collections = await collection_manager.get_existing_collections(
+                CollectionNames.CHAT_MEMORY,
+                "qwen/qwen3-embedding-4b",
+            )
+        get_model_info.assert_not_called()
+        assert len(collections) == 1
+        mock_client.collections.use.assert_called_once_with("ChatMemoryChunk_qwen_qwen3_embedding_4b_2560")
+
     @pytest.mark.asyncio
     async def test_vector_validation(self, collection_manager, mock_client):
         """Test vector dimension validation."""
@@ -282,6 +377,40 @@ class TestWeaviateAdapterIntegration:
         assert "shared-file-hash" in filters
         assert "second-thread" not in filters
     
+    @pytest.mark.asyncio
+    async def test_delete_chat_memory_uses_existing_collection_without_probe(self, adapter):
+        mock_collection = MagicMock()
+        adapter.collection_manager.get_existing_collections = AsyncMock(return_value=[mock_collection])
+        adapter.collection_manager.get_collection = AsyncMock()
+
+        deleted = await adapter.delete_chat_memory_by_message_id(
+            "thread-1",
+            "turn-1",
+            "qwen/qwen3-embedding-4b",
+        )
+
+        assert deleted is True
+        adapter.collection_manager.get_existing_collections.assert_awaited_once_with(
+            CollectionNames.CHAT_MEMORY,
+            "qwen/qwen3-embedding-4b",
+        )
+        adapter.collection_manager.get_collection.assert_not_called()
+        mock_collection.data.delete_many.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_delete_chat_memory_noops_when_collection_missing(self, adapter):
+        adapter.collection_manager.get_existing_collections = AsyncMock(return_value=[])
+        adapter.collection_manager.get_collection = AsyncMock()
+
+        deleted = await adapter.delete_chat_memory_by_message_id(
+            "thread-1",
+            "turn-1",
+            "qwen/qwen3-embedding-4b",
+        )
+
+        assert deleted is True
+        adapter.collection_manager.get_collection.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_dimension_mismatch_prevention(self, adapter):
         """Test that dimension mismatches are prevented."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Any, Dict, List, Sequence
 
@@ -12,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, or_
 from sqlalchemy.future import select
 
-from app.agent_workflows.runtime_invocation import safe_json_object
+from app.json_utils import safe_json_object
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import ChatTurnStatus, MemoryScopeType
 from app.db.jsonb_utils import replace_jsonb_field
@@ -77,14 +78,18 @@ from app.services.effective_memory_service import (
     serialize_memories_with_relationships,
 )
 from app.time_utils import iso_utc_z, utc_now
-from app.mcp.langchain_adapter import create_mcp_langchain_tool
+from app.mcp.tool_adapter import create_mcp_tool
 from app.mcp.result_decoder import DecodedMCPResult, decode_mcp_result
 
 
 logger = logging.getLogger(__name__)
 
-MAX_MEMORY_MANAGER_TOOL_CALLS = 4
-MAX_MEMORY_MANAGER_WEB_CALLS = 2
+def memory_manager_tool_call_limit() -> int:
+    return int(os.environ["MEMORY_MANAGER_MAX_TOOL_CALLS"])
+
+
+def memory_manager_web_call_limit() -> int:
+    return int(os.environ["MEMORY_MANAGER_MAX_WEB_CALLS"])
 
 class MemoryManagerError(ValueError):
     code = "memory_curator_error"
@@ -434,15 +439,15 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
                 "web_search_decision": req.web_search_decision.model_dump(mode="json") if req.web_search_decision else None,
                 "curator_mode": req.mode,
                 "web_call_count": 0,
-                "web_call_limit": MAX_MEMORY_MANAGER_WEB_CALLS,
+                "web_call_limit": memory_manager_web_call_limit(),
             },
         }
     }
     tools = [
-        create_mcp_langchain_tool("memory_search"),
-        create_mcp_langchain_tool("memory_get"),
-        create_mcp_langchain_tool("memory_prepare_change"),
-        create_mcp_langchain_tool("internet_search"),
+        create_mcp_tool("memory_search"),
+        create_mcp_tool("memory_get"),
+        create_mcp_tool("memory_prepare_change"),
+        create_mcp_tool("internet_search"),
     ]
     tools_by_name = {tool.name: tool for tool in tools}
     tool_call_count = 0
@@ -578,9 +583,9 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
         llm = get_llm(req.llm_model, temperature=0.0)
         supports_tools = await check_model_supports_tools(req.llm_model)
         if supports_tools:
-            bound = llm.bind_tools(tools)
+            bound = llm.bind_tools([tool.model_tool_schema() for tool in tools])
             loop_count = 0
-            while loop_count < MAX_MEMORY_MANAGER_TOOL_CALLS + MAX_MEMORY_MANAGER_WEB_CALLS:
+            while loop_count < memory_manager_tool_call_limit() + memory_manager_web_call_limit():
                 loop_count += 1
                 response = await invoke_with_retry(bound.ainvoke, messages)
                 calls = list(getattr(response, "tool_calls", None) or [])
@@ -589,7 +594,7 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
                 messages.append(response)
                 for call in calls:
                     is_web_call = str(call.get("name") or "") == "internet_search"
-                    if not is_web_call and tool_call_count >= MAX_MEMORY_MANAGER_TOOL_CALLS:
+                    if not is_web_call and tool_call_count >= memory_manager_tool_call_limit():
                         break
                     if not is_web_call:
                         tool_call_count += 1
@@ -618,7 +623,7 @@ async def respond_to_memory_manager(req: MemoryManagerConversationRequest) -> Di
                         content=str(output),
                         tool_call_id=str(call.get("id") or f"curator-tool-{loop_count}"),
                     ))
-                if tool_call_count >= MAX_MEMORY_MANAGER_TOOL_CALLS:
+                if tool_call_count >= memory_manager_tool_call_limit():
                     messages.append(SystemMessage(content=tool_limit_prompt))
                     response = await invoke_with_retry(llm.ainvoke, messages)
                     break

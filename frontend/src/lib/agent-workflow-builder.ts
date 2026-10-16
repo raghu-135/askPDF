@@ -622,7 +622,7 @@ export function assembleAgentWorkflowSpec(
     ...overrides,
   };
   return {
-    schema_version: 2,
+    schema_version: 1,
     workflow_id: state.workflowId || 'custom_rag_agent',
     workflow_type: state.workflowType || 'custom_rag_agent',
     runtime,

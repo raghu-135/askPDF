@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import timedelta
 
 from app.services import agent_task_repository as tasks
@@ -9,22 +10,30 @@ from app.services.content_store import get_content_store
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import utc_now
 from app.services.agent_runtime_reconciliation import run_runtime_reconciliation
-from app.runtime.mode import external_runtime_enabled
 
 
 logger = logging.getLogger(__name__)
-CHECKPOINT_RETENTION_DAYS = 7
-MAINTENANCE_INTERVAL_SECONDS = 60.0
-MAINTENANCE_BATCH_SIZE = 100
 _maintenance_lock = asyncio.Lock()
 
 
-async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> dict[str, int]:
+def task_maintenance_interval_seconds() -> float:
+    return float(os.environ["AGENT_TASK_MAINTENANCE_INTERVAL_SECONDS"])
+
+
+def task_maintenance_batch_size() -> int:
+    return int(os.environ["AGENT_TASK_MAINTENANCE_BATCH_SIZE"])
+
+
+def checkpoint_retention_days() -> int:
+    return int(os.environ["TASK_CHECKPOINT_RETENTION_DAYS"])
+
+
+async def run_task_maintenance(*, batch_size: int | None = None) -> dict[str, int]:
     """Run bounded, idempotent maintenance without overlapping in one process."""
     if _maintenance_lock.locked():
         return {"skipped": 1}
     async with _maintenance_lock:
-        bounded = max(1, min(int(batch_size), 500))
+        bounded = max(1, min(int(batch_size if batch_size is not None else task_maintenance_batch_size()), 500))
         expired_tasks = await tasks.expire_stale_tasks()
         recovered_leases = await tasks.release_stale_task_leases(limit=bounded)
         deleted_tasks = 0
@@ -47,26 +56,30 @@ async def run_task_maintenance(*, batch_size: int = MAINTENANCE_BATCH_SIZE) -> d
         missing_artifacts = 0
         for artifact in live_artifacts[:bounded]:
             if not await store.exists(artifact.object_key):
+                if artifact.task_id is None:
+                    continue
                 await tasks.mark_artifact_invalid(artifact.task_id, artifact.id, reason="content_missing")
                 missing_artifacts += 1
 
         orphaned_content = 0
-        for key in (await store.list_keys("agent-tasks"))[:bounded]:
-            if key not in known_keys:
-                await store.delete(key)
-                orphaned_content += 1
+        for prefix in ("agent-tasks", "thread-artifacts"):
+            for key in (await store.list_keys(prefix))[:bounded]:
+                if key not in known_keys:
+                    await store.delete(key)
+                    orphaned_content += 1
 
         deleted_checkpoints = 0
-        if not external_runtime_enabled():
-            checkpoint_ids = await tasks.list_terminal_task_checkpoint_ids_before(
-                utc_now() - timedelta(days=CHECKPOINT_RETENTION_DAYS),
-                limit=bounded,
-            )
-            from app.runtime.langgraph.checkpointing import delete_agent_checkpoints
+        runtime_runs = await tasks.list_terminal_task_runtime_runs_before(
+            utc_now() - timedelta(days=checkpoint_retention_days()),
+            limit=bounded,
+        )
+        from app.runtime.cleanup import cleanup_runs
 
-            deleted_checkpoint_ids = await delete_agent_checkpoints(checkpoint_ids) if checkpoint_ids else []
-            await tasks.clear_task_checkpoint_ids(deleted_checkpoint_ids)
-            deleted_checkpoints = len(deleted_checkpoint_ids)
+        cleanup_results = await cleanup_runs(runtime_runs)
+        await tasks.clear_task_runtime_bindings(
+            result.run_id for result in cleanup_results if result.cleaned
+        )
+        deleted_checkpoints = sum(1 for result in cleanup_results if result.cleaned)
         runtime_reconciliation = await run_runtime_reconciliation(batch_size=bounded)
         return {
             "expired_tasks": expired_tasks,

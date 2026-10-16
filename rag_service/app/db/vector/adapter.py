@@ -10,10 +10,12 @@ Collections:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import uuid
-from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Mapping
 from urllib.parse import urlparse
 
 import weaviate
@@ -47,6 +49,35 @@ _DOCUMENT_THREAD_TEMPORAL_FIELDS = {
     "timeline_event_at",
     "timeline_event_type",
 }
+_DOCUMENT_IDENTITY_VERIFY_WORKERS = 16
+
+
+def _document_vector_uuid(
+    embedding_model: str,
+    file_hash: str,
+    manifest_id: str,
+    source_id: str,
+) -> str:
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"askpdf:document:{embedding_model}:{file_hash}:{manifest_id}:{source_id}",
+        )
+    )
+
+
+def web_search_snippet_hash(text: str) -> str:
+    normalized = " ".join(str(text or "").split())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def web_search_vector_uuid(embedding_model: str, thread_id: str, content_hash: str) -> str:
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"askpdf:web:{embedding_model}:{thread_id}:{content_hash}",
+        )
+    )
 
 
 class WeaviateAdapter:
@@ -146,7 +177,14 @@ class WeaviateAdapter:
                 ("embedding_model", wvc.config.DataType.TEXT),
                 ("source_kind", wvc.config.DataType.TEXT),
                 ("file_hash", wvc.config.DataType.TEXT),
+                ("manifest_id", wvc.config.DataType.TEXT),
+                ("generation", wvc.config.DataType.TEXT),
                 ("chunk_id", wvc.config.DataType.INT),
+                ("chunk_identity", wvc.config.DataType.TEXT),
+                ("source_id", wvc.config.DataType.TEXT),
+                ("tags", wvc.config.DataType.TEXT_ARRAY),
+                ("section_id", wvc.config.DataType.TEXT),
+                ("table_id", wvc.config.DataType.TEXT),
                 ("text", wvc.config.DataType.TEXT),
                 ("url", wvc.config.DataType.TEXT),
                 ("title", wvc.config.DataType.TEXT),
@@ -364,6 +402,25 @@ class WeaviateAdapter:
             logger.error("Unexpected error deleting %s: %s", description, e)
             return False
 
+    async def _delete_many_from_existing_collections(
+        self,
+        base_name: str,
+        embedding_model: str,
+        filt,
+        *,
+        description: str,
+    ) -> bool:
+        """Delete from stored model-aware collections without probing the embedding API."""
+        collections = await self.collection_manager.get_existing_collections(base_name, embedding_model)
+        if not collections:
+            logger.info("No existing '%s' collection for model '%s'; skipping %s", base_name, embedding_model, description)
+            return True
+        results = [
+            await self._delete_many_from_collection(col, filt, description=description)
+            for col in collections
+        ]
+        return all(results)
+
     async def delete_thread_data(self, thread_id: str) -> bool:
         """Delete only thread-scoped chat-memory and web-search vectors for a thread.
         
@@ -396,6 +453,7 @@ class WeaviateAdapter:
         texts: List[str],
         embeddings: List[List[float]],
         metadatas: Optional[List[Dict[str, Any]]] = None,
+        chunk_ids: Optional[List[str]] = None,
     ) -> int:
         """Index PDF chunks into DocumentChunk with embedding-model/file identifiers.
         
@@ -426,24 +484,47 @@ class WeaviateAdapter:
         logger.info(f"Indexing {len(texts)} PDF chunks for thread '{thread_id}', file '{file_hash}'")
         
         points: List[Dict[str, Any]] = []
+        if chunk_ids is not None and len(chunk_ids) != len(texts):
+            raise ValueError("chunk_ids must have the same length as texts")
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
             md = metadatas[i] if metadatas and i < len(metadatas) else {}
+            manifest_id = str(md.get("manifest_id") or "").strip()
+            generation = str(md.get("generation") or "").strip()
+            source_id = str(md.get("source_id") or "").strip()
+            if not manifest_id or not generation or not source_id:
+                raise ValueError("document vector metadata requires manifest_id, generation, and source_id")
+            source_kind = md.get("source_kind", FileSourceType.PDF.value)
+            if source_kind == FileSourceType.PDF.value:
+                if not str(md.get("extraction_fingerprint") or "").strip() or not str(md.get("chunking_fingerprint") or "").strip():
+                    raise ValueError("document vector metadata requires extraction and chunking fingerprints")
+                if "source_element_ids" not in md:
+                    raise ValueError("document vector metadata requires source_element_ids")
             md_for_storage = {
                 k: v
                 for k, v in md.items()
                 if k not in _DOCUMENT_THREAD_TEMPORAL_FIELDS and k != "document_indexed_at"
             }
-            source_kind = md.get("source_kind", FileSourceType.PDF.value)
             url = md.get("url") or md.get("original_url") or ""
             title = md.get("title") or ""
+            # Embeddings are computed from contextualized_text (`text` argument).
+            # BM25/hybrid search must use the body so a repeated "Document:" prefix
+            # cannot match every chunk.
+            search_text = str(md.get("body_text") or "").strip() or text
             properties = {
                 "thread_id": thread_id,
                 "type": "knowledge_source",
                 "embedding_model": embedding_model,
                 "source_kind": source_kind,
                 "file_hash": file_hash,
+                "manifest_id": manifest_id,
+                "generation": generation,
                 "chunk_id": i,
-                "text": text,
+                "chunk_identity": source_id,
+                "source_id": source_id,
+                "tags": [str(tag) for tag in (md.get("tags") or [])],
+                "section_id": md.get("section_id") or "",
+                "table_id": md.get("table_id") or "",
+                "text": search_text,
                 "url": url,
                 "title": title,
                 "pages": md.get("pages") or "",
@@ -457,6 +538,7 @@ class WeaviateAdapter:
                 {
                     "vector": vector,
                     "properties": properties,
+                    "uuid": _document_vector_uuid(embedding_model, file_hash, manifest_id, source_id),
                 }
             )
         # Use model-aware collection manager
@@ -561,8 +643,10 @@ class WeaviateAdapter:
         
         points: List[Dict[str, Any]] = []
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
+            content_hash = web_search_snippet_hash(text)
             points.append(
                 {
+                    "uuid": web_search_vector_uuid(embedding_model, thread_id, content_hash),
                     "vector": vector,
                     "properties": {
                         "thread_id": thread_id,
@@ -781,6 +865,8 @@ class WeaviateAdapter:
         file_hash: Optional[str] = None,
         file_hashes: Optional[List[str]] = None,
         query_text: Optional[str] = None,
+        pages: Optional[List[int]] = None,
+        filters: Optional[Mapping[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Search document chunks using vector or hybrid retrieval with file/model filters.
         
@@ -820,6 +906,60 @@ class WeaviateAdapter:
             base_filter = wvc.query.Filter.by_property("file_hash").equal(file_hash)
         elif file_hashes:
             base_filter = wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)
+        if pages:
+            page_filter = None
+            for page in sorted({int(value) for value in pages if int(value) > 0}):
+                current = (
+                    wvc.query.Filter.by_property("page_start").less_or_equal(page)
+                    & wvc.query.Filter.by_property("page_end").greater_or_equal(page)
+                )
+                page_filter = current if page_filter is None else page_filter | current
+            if page_filter is not None:
+                base_filter = base_filter & page_filter
+        filter_values = dict(filters or {})
+        source_types = [str(value) for value in filter_values.get("source_types") or [] if str(value)]
+        if source_types:
+            source_filter = None
+            for source_type in source_types:
+                current = wvc.query.Filter.by_property("source_kind").equal(source_type)
+                source_filter = current if source_filter is None else source_filter | current
+            if source_filter is not None:
+                base_filter = base_filter & source_filter
+        section_id = str(filter_values.get("section_id") or "")
+        if section_id:
+            base_filter = base_filter & wvc.query.Filter.by_property("section_id").equal(section_id)
+        section_ids = [str(value) for value in filter_values.get("section_ids") or [] if str(value)]
+        if section_ids:
+            section_filter = None
+            for section_value in section_ids:
+                current = wvc.query.Filter.by_property("section_id").equal(section_value)
+                section_filter = current if section_filter is None else section_filter | current
+            if section_filter is not None:
+                base_filter = base_filter & section_filter
+        generations = [str(value) for value in filter_values.get("generations") or [] if str(value)]
+        if generations:
+            generation_filter = None
+            for generation in generations:
+                current = wvc.query.Filter.by_property("generation").equal(generation)
+                generation_filter = current if generation_filter is None else generation_filter | current
+            if generation_filter is not None:
+                base_filter = base_filter & generation_filter
+        manifest_ids = [str(value) for value in filter_values.get("manifest_ids") or [] if str(value)]
+        if manifest_ids:
+            manifest_filter = None
+            for manifest_id in manifest_ids:
+                current = wvc.query.Filter.by_property("manifest_id").equal(manifest_id)
+                manifest_filter = current if manifest_filter is None else manifest_filter | current
+            if manifest_filter is not None:
+                base_filter = base_filter & manifest_filter
+        requested_tags = [str(value) for value in filter_values.get("tags") or [] if str(value)]
+        if requested_tags:
+            tag_filter = None
+            for tag in requested_tags:
+                current = wvc.query.Filter.by_property("tags").contains_any([tag])
+                tag_filter = current if tag_filter is None else tag_filter | current
+            if tag_filter is not None:
+                base_filter = base_filter & tag_filter
         kwargs = {
             "filters": base_filter,
             "limit": limit,
@@ -848,11 +988,29 @@ class WeaviateAdapter:
         results: List[Dict[str, Any]] = []
         for obj in response.objects:
             p = obj.properties
+            source_id = str(p.get("source_id") or "").strip()
+            manifest_id = str(p.get("manifest_id") or "").strip()
+            generation = str(p.get("generation") or "").strip()
+            if not source_id or not manifest_id or not generation:
+                raise VectorDBQueryError("document vector metadata is incomplete")
             metadata = _parse_metadata(p.get("metadata_json"))
+            source_kind = p.get("source_kind", "pdf")
+            if source_kind == FileSourceType.PDF.value and (
+                not str(metadata.get("extraction_fingerprint") or "").strip()
+                or not str(metadata.get("chunking_fingerprint") or "").strip()
+                or "source_element_ids" not in metadata
+            ):
+                raise VectorDBQueryError("document vector metadata provenance is incomplete")
             result = {
                 "text": p.get("text", ""),
                 "file_hash": p.get("file_hash"),
                 "chunk_id": p.get("chunk_id"),
+                "chunk_identity": p.get("chunk_identity"),
+                "source_id": source_id,
+                "manifest_id": manifest_id,
+                "generation": generation,
+                "section_id": p.get("section_id") or metadata.get("section_id"),
+                "table_id": p.get("table_id") or metadata.get("table_id"),
                 "type": p.get("type", "knowledge_source"),
                 "source_kind": p.get("source_kind", "pdf"),
                 "url": p.get("url"),
@@ -952,6 +1110,389 @@ class WeaviateAdapter:
         out.sort(key=lambda x: x.get("chunk_id", 0))
         logger.debug(f"Retrieved {len(out)} chunks")
         return out
+
+    def _document_chunk_record(self, obj: Any) -> Dict[str, Any]:
+        """Normalize one Weaviate document object for inspection or retrieval."""
+        p = obj.properties
+        metadata = _parse_metadata(p.get("metadata_json"))
+        result: Dict[str, Any] = {
+            "text": p.get("text", ""),
+            "file_hash": p.get("file_hash"),
+            "chunk_id": p.get("chunk_id"),
+            "chunk_identity": p.get("chunk_identity"),
+            "source_id": p.get("source_id") or metadata.get("source_id"),
+            "manifest_id": p.get("manifest_id") or metadata.get("manifest_id"),
+            "generation": p.get("generation") or metadata.get("generation"),
+            "section_id": p.get("section_id") or metadata.get("section_id"),
+            "table_id": p.get("table_id") or metadata.get("table_id"),
+            "type": p.get("type", "knowledge_source"),
+            "source_kind": p.get("source_kind", "pdf"),
+            "url": p.get("url"),
+            "title": p.get("title"),
+            "tags": list(p.get("tags") or []),
+            "metadata": metadata,
+        }
+        for field in (
+            "page_start",
+            "page_end",
+            "pages",
+        ):
+            value = p.get(field)
+            if value in (None, ""):
+                value = metadata.get(field)
+            if value not in (None, ""):
+                result[field] = value
+        return result
+
+    async def get_document_chunks_for_file(
+        self,
+        file_hash: str,
+        embedding_model: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Fetch indexed document chunks for inspection (read-only, no query vector).
+
+        Returns a page of chunks sorted by chunk_id plus total_count for the file.
+        """
+        _validate_not_empty(file_hash, "file_hash")
+        _validate_not_empty(embedding_model, "embedding_model")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
+        filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
+
+        try:
+            total_response = await asyncio.to_thread(col.aggregate.over_all, filters=filt)
+            total_count = int(getattr(total_response, "total_count", 0) or 0)
+            response = await asyncio.to_thread(
+                col.query.fetch_objects,
+                filters=filt,
+                limit=limit,
+                offset=offset,
+            )
+        except WeaviateBaseError as e:
+            logger.error("Failed to fetch document chunks for file '%s': %s", file_hash, e)
+            raise VectorDBQueryError("Could not fetch document chunks") from e
+
+        chunks = [self._document_chunk_record(obj) for obj in response.objects]
+        chunks.sort(key=lambda item: item.get("chunk_id", 0))
+        return {
+            "file_hash": file_hash,
+            "embedding_model": embedding_model,
+            "total_count": total_count,
+            "limit": limit,
+            "offset": offset,
+            "chunks": chunks,
+        }
+
+    @staticmethod
+    def _extract_object_vector(obj: Any) -> List[float]:
+        raw = getattr(obj, "vector", None)
+        if raw is None:
+            return []
+        if isinstance(raw, dict):
+            if "default" in raw:
+                return [float(value) for value in raw["default"]]
+            first = next(iter(raw.values()), None)
+            if isinstance(first, list):
+                return [float(value) for value in first]
+            return []
+        if isinstance(raw, list):
+            return [float(value) for value in raw]
+        return []
+
+    async def get_thread_vector_points(
+        self,
+        embedding_model: str,
+        *,
+        file_hashes: List[str],
+        source_kind: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch document chunk vectors and metadata for embedding-space visualization."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if not file_hashes:
+            return []
+
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
+        filt = wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)
+        if source_kind:
+            filt = filt & wvc.query.Filter.by_property("source_kind").equal(source_kind)
+
+        try:
+            response = await asyncio.to_thread(
+                col.query.fetch_objects,
+                filters=filt,
+                limit=limit,
+                include_vector=True,
+            )
+        except WeaviateBaseError as exc:
+            logger.error("Failed to fetch thread vector points: %s", exc)
+            raise VectorDBQueryError("Could not fetch thread vector points") from exc
+
+        points: List[Dict[str, Any]] = []
+        for obj in response.objects:
+            record = self._document_chunk_record(obj)
+            vector = self._extract_object_vector(obj)
+            if not vector:
+                continue
+            point_id = str(
+                record.get("source_id")
+                or record.get("chunk_identity")
+                or f"{record.get('file_hash')}:{record.get('chunk_id')}"
+            )
+            points.append(
+                {
+                    "id": point_id,
+                    "vector": vector,
+                    "chunk_id": record.get("chunk_id"),
+                    "file_hash": record.get("file_hash"),
+                    "text": record.get("text", ""),
+                    "page_start": record.get("page_start"),
+                    "page_end": record.get("page_end"),
+                    "pages": record.get("pages"),
+                    "source_kind": record.get("source_kind"),
+                    "table_id": record.get("table_id"),
+                    "section_id": record.get("section_id"),
+                    "title": record.get("title"),
+                    "metadata": record.get("metadata") or {},
+                }
+            )
+
+        points.sort(
+            key=lambda item: (
+                str(item.get("file_hash") or ""),
+                int(item.get("chunk_id") or 0),
+            )
+        )
+        return points
+
+    async def get_thread_chat_vector_points(
+        self,
+        embedding_model: str,
+        *,
+        thread_id: str,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch chat-memory chunk vectors for embedding-space visualization."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        _validate_not_empty(thread_id, "thread_id")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        objects = await self._fetch_projection_objects(
+            CollectionNames.CHAT_MEMORY,
+            embedding_model,
+            filters=wvc.query.Filter.by_property("thread_id").equal(thread_id),
+            limit=limit,
+            description="chat vector points",
+        )
+        points: List[Dict[str, Any]] = []
+        for obj in objects:
+            props = obj.get("properties") or {}
+            vector = obj.get("vector") or []
+            if not vector:
+                continue
+            message_id = str(props.get("message_id") or "")
+            chunk_id = props.get("chunk_id")
+            question = str(props.get("question") or "").strip()
+            text = str(props.get("text") or "")
+            points.append(
+                {
+                    "id": obj.get("id") or f"chat:{message_id}:{chunk_id}",
+                    "vector": vector,
+                    "chunk_id": chunk_id,
+                    "file_hash": f"chat:{message_id}" if message_id else "chat",
+                    "file_name": self._projection_label(question or text, fallback="Chat"),
+                    "text": text,
+                    "page_start": None,
+                    "page_end": None,
+                    "pages": None,
+                    "source_kind": "chat",
+                    "table_id": None,
+                    "section_id": None,
+                    "title": question,
+                    "metadata": {},
+                }
+            )
+        points.sort(
+            key=lambda item: (
+                str(item.get("file_hash") or ""),
+                int(item.get("chunk_id") or 0),
+            )
+        )
+        return points
+
+    async def get_thread_web_search_vector_points(
+        self,
+        embedding_model: str,
+        *,
+        thread_id: str,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch web-search chunk vectors for embedding-space visualization."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        _validate_not_empty(thread_id, "thread_id")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+
+        objects = await self._fetch_projection_objects(
+            CollectionNames.WEB_SEARCH,
+            embedding_model,
+            filters=wvc.query.Filter.by_property("thread_id").equal(thread_id),
+            limit=limit,
+            description="web search vector points",
+        )
+        points: List[Dict[str, Any]] = []
+        for obj in objects:
+            props = obj.get("properties") or {}
+            vector = obj.get("vector") or []
+            if not vector:
+                continue
+            query = str(props.get("search_query") or "").strip()
+            title = str(props.get("title") or "").strip()
+            url = str(props.get("url") or "").strip()
+            chunk_id = props.get("chunk_id")
+            text = str(props.get("text") or "")
+            group_key = query or url or title or "web"
+            points.append(
+                {
+                    "id": obj.get("id") or f"web:{thread_id}:{group_key}:{chunk_id}",
+                    "vector": vector,
+                    "chunk_id": chunk_id,
+                    "file_hash": f"web:{group_key}",
+                    "file_name": self._projection_label(title or query or url, fallback="Web search"),
+                    "text": text,
+                    "page_start": None,
+                    "page_end": None,
+                    "pages": None,
+                    "source_kind": "web_search",
+                    "table_id": None,
+                    "section_id": None,
+                    "title": title or query,
+                    "metadata": {"url": url, "search_query": query} if (url or query) else {},
+                }
+            )
+        points.sort(
+            key=lambda item: (
+                str(item.get("file_hash") or ""),
+                int(item.get("chunk_id") or 0),
+            )
+        )
+        return points
+
+    async def get_thread_memory_vector_points(
+        self,
+        embedding_model: str,
+        *,
+        scope_filters: List[Dict[str, str]],
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Fetch durable-memory vectors in the thread's readable scopes."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if not scope_filters:
+            return []
+
+        scope_filter = None
+        for scope in scope_filters:
+            current = (
+                wvc.query.Filter.by_property("scope_type").equal(str(scope.get("scope_type") or ""))
+                & wvc.query.Filter.by_property("scope_id").equal(str(scope.get("scope_id") or ""))
+            )
+            scope_filter = current if scope_filter is None else scope_filter | current
+
+        objects = await self._fetch_projection_objects(
+            CollectionNames.MEMORY,
+            embedding_model,
+            filters=scope_filter,
+            limit=limit,
+            description="memory vector points",
+        )
+        points: List[Dict[str, Any]] = []
+        for obj in objects:
+            props = obj.get("properties") or {}
+            vector = obj.get("vector") or []
+            if not vector:
+                continue
+            memory_id = str(props.get("memory_id") or "")
+            content = str(props.get("content") or "")
+            scope_type = str(props.get("scope_type") or "memory")
+            points.append(
+                {
+                    "id": obj.get("id") or f"memory:{memory_id}",
+                    "vector": vector,
+                    "chunk_id": 0,
+                    "file_hash": f"memory:{memory_id}" if memory_id else "memory",
+                    "file_name": self._projection_label(content, fallback=f"Memory ({scope_type})"),
+                    "text": content,
+                    "page_start": None,
+                    "page_end": None,
+                    "pages": None,
+                    "source_kind": "memory",
+                    "table_id": None,
+                    "section_id": None,
+                    "title": scope_type,
+                    "metadata": {
+                        "scope_type": scope_type,
+                        "scope_id": str(props.get("scope_id") or ""),
+                    },
+                }
+            )
+        points.sort(key=lambda item: str(item.get("file_hash") or ""))
+        return points
+
+    async def _fetch_projection_objects(
+        self,
+        collection_name: str,
+        embedding_model: str,
+        *,
+        filters: Any,
+        limit: int,
+        description: str,
+    ) -> List[Dict[str, Any]]:
+        col = await self.collection_manager.get_collection(collection_name, embedding_model)
+        try:
+            response = await asyncio.to_thread(
+                col.query.fetch_objects,
+                filters=filters,
+                limit=limit,
+                include_vector=True,
+            )
+        except WeaviateBaseError as exc:
+            logger.error("Failed to fetch %s: %s", description, exc)
+            raise VectorDBQueryError(f"Could not fetch {description}") from exc
+
+        objects: List[Dict[str, Any]] = []
+        for obj in getattr(response, "objects", None) or []:
+            vector = self._extract_object_vector(obj)
+            if not vector:
+                continue
+            objects.append(
+                {
+                    "id": str(getattr(obj, "uuid", "") or ""),
+                    "properties": getattr(obj, "properties", None) or {},
+                    "vector": vector,
+                }
+            )
+        return objects
+
+    @staticmethod
+    def _projection_label(text: str, *, fallback: str, limit: int = 48) -> str:
+        compact = " ".join((text or "").split())
+        if not compact:
+            return fallback
+        if len(compact) <= limit:
+            return compact
+        return f"{compact[: limit - 3]}..."
 
     async def search_chat_memory(
         self,
@@ -1124,16 +1665,14 @@ class WeaviateAdapter:
         _validate_not_empty(message_id, "message_id")
         _validate_not_empty(embedding_model, "embedding_model")
         
-        # Use model-aware collection
-        col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model)
-        
         filt = (
             wvc.query.Filter.by_property("thread_id").equal(thread_id)
             & wvc.query.Filter.by_property("message_id").equal(message_id)
         )
         
-        return await self._delete_many_from_collection(
-            col,
+        return await self._delete_many_from_existing_collections(
+            CollectionNames.CHAT_MEMORY,
+            embedding_model,
             filt,
             description=f"chat memory for message '{message_id}' in thread '{thread_id}'",
         )
@@ -1154,15 +1693,13 @@ class WeaviateAdapter:
         if not urls:
             return 0
         
-        # Use model-aware collection
-        col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model)
-        
         filt = (
             wvc.query.Filter.by_property("thread_id").equal(thread_id)
             & wvc.query.Filter.by_property("url").contains_any(urls)
         )
-        deleted = await self._delete_many_from_collection(
-            col,
+        deleted = await self._delete_many_from_existing_collections(
+            CollectionNames.WEB_SEARCH,
+            embedding_model,
             filt,
             description=f"web chunks for {len(urls)} URLs in thread '{thread_id}'",
         )
@@ -1181,14 +1718,24 @@ class WeaviateAdapter:
         _validate_not_empty(file_hash, "file_hash")
         _validate_not_empty(embedding_model, "embedding_model")
         
-        # Use model-aware collection - no need for embedding_model filter
-        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
-        
         filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
-        return await self._delete_many_from_collection(
-            col,
+        return await self._delete_many_from_existing_collections(
+            CollectionNames.DOCUMENT,
+            embedding_model,
             filt,
             description=f"document vectors for file '{file_hash}', model '{embedding_model}'",
+        )
+
+    async def delete_document_vectors_by_manifest(self, manifest_id: str, embedding_model: str) -> bool:
+        """Delete only staged vectors belonging to one materialization attempt."""
+        _validate_not_empty(manifest_id, "manifest_id")
+        _validate_not_empty(embedding_model, "embedding_model")
+        filt = wvc.query.Filter.by_property("manifest_id").equal(manifest_id)
+        return await self._delete_many_from_existing_collections(
+            CollectionNames.DOCUMENT,
+            embedding_model,
+            filt,
+            description=f"document vectors for manifest '{manifest_id}'",
         )
 
     async def has_file_indexed(self, thread_id: str, file_hash: str, embedding_model: str) -> bool:
@@ -1224,6 +1771,71 @@ class WeaviateAdapter:
         except Exception as e:
             logger.error(f"Failed to check if file indexed: {e}")
             raise VectorDBQueryError("Could not check if file is indexed") from e
+
+    async def has_file_indexed_chunks(
+        self,
+        file_hash: str,
+        embedding_model: str,
+        expected_chunk_ids: List[str],
+        manifest_id: str,
+    ) -> bool:
+        """Verify the exact deterministic chunk identity set is materialized."""
+        _validate_not_empty(file_hash, "file_hash")
+        _validate_not_empty(embedding_model, "embedding_model")
+        _validate_not_empty(manifest_id, "manifest_id")
+        expected = {str(value) for value in expected_chunk_ids}
+        if not expected:
+            return False
+        try:
+            col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
+            scope_filter = (
+                wvc.query.Filter.by_property("file_hash").equal(file_hash)
+                & wvc.query.Filter.by_property("manifest_id").equal(manifest_id)
+            )
+            count_response = await asyncio.to_thread(col.aggregate.over_all, filters=scope_filter)
+            if int(getattr(count_response, "total_count", 0) or 0) != len(expected):
+                return False
+            object_ids = [
+                _document_vector_uuid(embedding_model, file_hash, manifest_id, source_id)
+                for source_id in expected
+            ]
+
+            def _all_expected_objects_exist() -> bool:
+                workers = min(_DOCUMENT_IDENTITY_VERIFY_WORKERS, max(1, len(object_ids)))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    return all(pool.map(col.data.exists, object_ids))
+
+            return await asyncio.to_thread(_all_expected_objects_exist)
+        except Exception as e:
+            logger.error("Failed to verify indexed chunk identities: %s", e)
+            raise VectorDBQueryError("Could not verify indexed chunk identities") from e
+
+    async def existing_web_search_object_ids(
+        self,
+        embedding_model: str,
+        object_ids: List[str],
+    ) -> set[str]:
+        """Return the subset of web-search object ids that already exist."""
+        _validate_not_empty(embedding_model, "embedding_model")
+        ids = [str(item) for item in object_ids if str(item or "").strip()]
+        if not ids:
+            return set()
+        try:
+            col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model)
+
+            def _existing() -> set[str]:
+                workers = min(_DOCUMENT_IDENTITY_VERIFY_WORKERS, max(1, len(ids)))
+                found: set[str] = set()
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    for object_id, exists in zip(ids, pool.map(col.data.exists, ids)):
+                        if exists:
+                            found.add(object_id)
+                return found
+
+            return await asyncio.to_thread(_existing)
+        except Exception as e:
+            logger.error("Failed to check existing web search objects: %s", e)
+            raise VectorDBQueryError("Could not check existing web search objects") from e
 
     async def has_chat_memory_indexed(self, thread_id: str, message_id: str) -> bool:
         """Return whether at least one chat-memory chunk exists for a message in a thread.

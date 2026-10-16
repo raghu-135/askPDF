@@ -29,7 +29,7 @@ from app.rag.retrieval import (
     rerank_document_chunks,
 )
 from app.time_utils import maybe_iso_utc_z
-from app.agent_workflows.execution_contracts import DEFAULT_PREFETCH_MODE, PREFETCH_MODE_EVIDENCE
+from app.product_orchestration.execution_contracts import DEFAULT_PREFETCH_MODE, PREFETCH_MODE_EVIDENCE
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ async def prefetch_context(
     use_web_search: bool,
     use_reranker: bool,
     prefetch_mode: str = DEFAULT_PREFETCH_MODE,
+    context_budget: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
     Gather all retrieval context in parallel BEFORE any LLM call.
@@ -67,7 +68,8 @@ async def prefetch_context(
     from app.db.vector import get_vector_db
     from app.models.retry import invoke_with_retry
 
-    budget = compute_prefetch_budget(context_window)
+    overrides = context_budget if isinstance(context_budget, dict) else None
+    budget = compute_prefetch_budget(context_window, overrides)
 
     # Embed the raw question ONCE and share the vector across parallel tasks
     embedding_client = get_embedding_model(embedding_model)
@@ -196,6 +198,16 @@ async def prefetch_context(
             logger.warning(f"Prefetch document evidence failed: {exc}")
             return "", []
 
+    async def _fetch_current_canvases() -> list[dict[str, Any]]:
+        try:
+            from app.services.canvas_service import CanvasService
+
+            rows = await CanvasService().list_for_thread(thread_id, current_only=True)
+            return [{"id": row["id"], "title": row.get("title") or "Research canvas"} for row in rows]
+        except Exception as exc:
+            logger.warning("Prefetch current canvases failed: %s", exc)
+            return []
+
     async def _fetch_durable_memory() -> Dict[str, Any]:
         try:
             from app.services.memory_service import search_thread_memory
@@ -223,6 +235,7 @@ async def prefetch_context(
         _fetch_semantic(),
         _fetch_documents(),
         _fetch_durable_memory(),
+        _fetch_current_canvases(),
         return_exceptions=True,
     )
 
@@ -232,6 +245,7 @@ async def prefetch_context(
     semantic_result = results[2] if not isinstance(results[2], Exception) else ("", [])
     document_result = results[3] if not isinstance(results[3], Exception) else ("", [])
     durable_result = results[4] if not isinstance(results[4], Exception) and isinstance(results[4], dict) else {}
+    canvas_result = results[5] if not isinstance(results[5], Exception) and isinstance(results[5], list) else []
     web_result = ("", [])
 
     if isinstance(semantic_result, tuple) and len(semantic_result) >= 3:
@@ -284,5 +298,6 @@ async def prefetch_context(
         "document_sources":      document_sources,
         "web_sources":           web_sources,
         "used_chat_ids":         used_chat_ids,
+        "current_canvases":      canvas_result,
         "budget":                budget,
     }

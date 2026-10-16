@@ -1,85 +1,88 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
-import os
+import logging
 import uuid
-from typing import Any, Dict, Literal, Optional
+from types import SimpleNamespace
+from typing import Any, Dict, Literal, Mapping, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tool_registry import tool_contracts_by_id
-from app.agent_workflows.node_catalog import get_node_catalog
-from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
-from app.agent_workflows.route_registry import get_route_function_registry
-from app.agent_workflows.service import AgentRunService
-from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
-from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.agent_workflows.parallel_contracts import parallel_policy_catalog
-from app.agent_workflows.corrective_contracts import corrective_policy_catalog
-from app.agent_workflows.workflow_requirements import (
-    workflow_node_tool_requirements,
-    workflow_required_tool_ids,
+from app.product_orchestration.repository import (
+    AgentWorkflowRepository,
+    AgentRunInterruptError,
+    BUILDER_TEST_RUN_KIND,
 )
-from app.agent_workflows.workflow_runtime import (
-    ALLOWED_WORKFLOW_CONFIG_KEYS,
+from app.product_orchestration.service import AgentRunService
+from app.product_orchestration.execution_stream import AgentExecutionEventSink, retain_background_task
+from app.product_orchestration.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
+from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
-    with_default_runtime,
+    workflow_is_chat_eligible,
     workflow_supports_replans,
 )
-from app.agent_workflows.chat_cancellation import (
+from app.product_orchestration.chat_cancellation import (
     CHAT_CANCEL_AWAITING_HUMAN,
     CHAT_CANCEL_UNSUPPORTED,
+    ChatRunCancelResult,
 )
-from app.agent_workflows.trace_details import detail_manifest
-BUILDER_TEST_RUN_KIND = "builder_test"
-
-
-async def delete_agent_checkpoints(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.checkpointing import delete_agent_checkpoints as implementation
-    return await implementation(*args, **kwargs)
-
-
-from contextlib import asynccontextmanager
-
-
-@asynccontextmanager
-async def open_agent_checkpointer():
-    from app.runtime.langgraph.checkpointing import open_agent_checkpointer as implementation
-    async with implementation() as checkpointer:
-        yield checkpointer
+from app.product_orchestration.trace_details import detail_manifest
+from app.product_orchestration.debug_trace import build_debug_payload_from_journal
+from app.product_orchestration.trace_payloads import is_current_debug_payload
+from app.product_orchestration.canonical_trace import build_parallel_groups_safely
+from runtime_protocol.contracts import AgentRuntimeEvent, AgentRuntimeRequest
+logger = logging.getLogger(__name__)
 
 
 async def latest_builder_test(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import latest_builder_test as implementation
-    return await implementation(*args, **kwargs)
+    return await AgentWorkflowRepository().latest_builder_test(*args, **kwargs)
 
 
 async def request_builder_test_cancel(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import request_builder_test_cancel as implementation
-    return await implementation(*args, **kwargs)
+    return await AgentWorkflowRepository().request_builder_test_cancel(*args, **kwargs)
 
 
 def spec_fingerprint(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import spec_fingerprint as implementation
-    return implementation(*args, **kwargs)
+    spec = args[0] if args else kwargs["spec"]
+    encoded = json.dumps(spec, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:20]
 
 
-async def stream_builder_test(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import stream_builder_test as implementation
-    async for event in implementation(*args, **kwargs):
-        yield event
+def _normalized_visit_index(value: Any) -> Optional[int]:
+    """Return a safe positive visit index from retained runtime data."""
 
-
-async def delete_previous_builder_tests(*args: Any, **kwargs: Any):
-    from app.runtime.langgraph.studio_runtime import delete_previous_builder_tests as implementation
-    return await implementation(*args, **kwargs)
-from app.runtime.catalog import catalog_payload
+    if value is None:
+        return 1
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized >= 1 else None
+from app.runtime.catalog import catalog_payload, definition_from_run, definition_from_workflow
 from app.runtime.builder_registry import BuilderSelectionError, builder_for_definition
-from app.runtime.builder import UnsupportedRequestOverrideError
-from app.runtime.contracts import AgentDefinition
+from app.runtime.builder import BuilderTestContext, UnsupportedRequestOverrideError
+from runtime_protocol.contracts import AgentDefinition, RuntimeOperationId, RuntimeValidationResult
+from app.runtime.capability_resolver import (
+    capability_envelope,
+    capability_discovery_error,
+    deployment_id,
+    resolve_deployment_capability_resolution,
+    resolve_definition_capability_resolution,
+    resolve_run_capability_resolution,
+)
+from runtime_protocol.errors import RuntimeError
+from app.runtime.registry import RuntimeSelectionError, get_runtime_registry
+from app.runtime.operational_limits import required_positive_float
+from app.runtime.operational_limits import validate_bounded_json
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 from app.models.requests import ThreadChatRequest
@@ -88,7 +91,8 @@ from app.services.embedding_model_service import (
     EmbeddingModelUnavailableError,
     require_thread_embedding_ready,
 )
-from app.time_utils import iso_utc_z
+from app.services.agent_task_repository import get_task
+from app.time_utils import iso_utc_z, maybe_iso_utc_z
 
 
 router = APIRouter(tags=["agent-workflows"])
@@ -97,7 +101,14 @@ router = APIRouter(tags=["agent-workflows"])
 async def request_chat_run_cancel(run_id: str, *, thread_id: str):
     """Compatibility seam for API callers; cancellation routes through the adapter registry."""
 
-    return await AgentRunService().cancel_agent_run(run_id, thread_id=thread_id)
+    result = await AgentRunService().cancel_agent_run(run_id, thread_id=thread_id)
+    if isinstance(result, Mapping):
+        return ChatRunCancelResult(
+            status=str(result["status"]),
+            run_id=result.get("run_id"),
+            run_status=result.get("run_status"),
+        )
+    return result
 
 
 async def _require_ready_thread(thread_id: str):
@@ -114,8 +125,8 @@ async def _require_ready_thread(thread_id: str):
 
 class WorkflowValidationRequest(BaseModel):
     spec: Dict[str, Any] = Field(default_factory=dict)
-    framework: str = "langgraph"
-    builder_id: str = "langgraph_graph"
+    framework: str = Field(..., min_length=1)
+    builder_id: str = Field(..., min_length=1)
 
 
 class ThreadAgentConfigValidationRequest(BaseModel):
@@ -127,8 +138,8 @@ class InternalAgentWorkflowSaveRequest(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = ""
     spec_json: Dict[str, Any] = Field(default_factory=dict)
-    framework: Optional[str] = None
-    builder_id: Optional[str] = None
+    framework: str = Field(..., min_length=1)
+    builder_id: str = Field(..., min_length=1)
 
 
 class AgentRunResumeRequest(BaseModel):
@@ -140,11 +151,23 @@ class AgentRunResumeRequest(BaseModel):
     resume_token: Optional[str] = None
     resume_version: Optional[int] = None
     thread_id: str = Field(..., min_length=1)
+    approval_scope: Optional[Literal["once", "session", "always"]] = None
+    approval_feedback: Optional[str] = None
+    approval_modifications: Optional[Dict[str, Any]] = None
 
 
 class AgentRunCancelRequest(BaseModel):
     thread_id: str = Field(..., min_length=1)
 
+
+class AgentRunInputOperationRequest(BaseModel):
+    thread_id: str = Field(..., min_length=1)
+    input: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("input")
+    @classmethod
+    def bounded_input(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return validate_bounded_json(value, field_name="input")
 
 class BuilderTransientMessage(BaseModel):
     role: Literal["user", "assistant"]
@@ -177,17 +200,9 @@ class BuilderTestRunResumeRequest(AgentRunResumeRequest):
 
 def _workflow_payload(workflow) -> Dict[str, Any]:
     spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
-    metadata = workflow.metadata_json if isinstance(workflow.metadata_json, dict) else {}
     known_builtin_keys = set(builtin_workflow_keys())
-    builtin_key = None
-    if workflow.is_builtin:
-        metadata_key = str(metadata.get("builtin_key") or "").strip()
-        spec_key = str(spec.get("workflow_id") or "").strip()
-        row_key = str(workflow.id or "").strip()
-        builtin_key = next(
-            (key for key in (metadata_key, spec_key, row_key) if key in known_builtin_keys),
-            None,
-        )
+    row_key = str(workflow.id or "").strip()
+    builtin_key = row_key if workflow.is_builtin and row_key in known_builtin_keys else None
     return {
         "id": workflow.id,
         "workflow_id": workflow.id,
@@ -208,23 +223,23 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
 
 
 def _definition_for_workflow(workflow) -> AgentDefinition:
-    return AgentDefinition(
-        definition_id=str(workflow.id),
-        framework=str(getattr(workflow, "framework", None) or "langgraph"),
-        builder_id=str(getattr(workflow, "builder_id", None) or "langgraph_graph"),
-        category=getattr(workflow, "category", None),
-        display_name=getattr(workflow, "name", None),
-        definition_version=str(getattr(workflow, "version", "")) or None,
-    )
+    return definition_from_workflow(workflow)
 
 
 def _provider_for_workflow(workflow):
     return builder_for_definition(_definition_for_workflow(workflow))
 
 
-def _provider_validation_report(provider, spec: Dict[str, Any]) -> Dict[str, Any]:
-    report = provider.report(spec) if hasattr(provider, "report") else {}
-    return dict(report) if isinstance(report, dict) else {}
+def _validation_payload(validation: RuntimeValidationResult) -> Dict[str, Any]:
+    payload = dict(validation.diagnostics)
+    payload.update({
+        "valid": validation.valid,
+        "issues": [issue.to_dict() for issue in validation.issues],
+        "errors": [issue.code for issue in validation.issues],
+        "normalized_spec": validation.normalized_spec,
+        "runtime_metadata": dict(validation.runtime_metadata),
+    })
+    return payload
 
 
 def _workflow_spec_payload(workflow) -> Dict[str, Any]:
@@ -244,8 +259,8 @@ def _workflow_spec_payload(workflow) -> Dict[str, Any]:
     return {
         "id": str((workflow.metadata_json or {}).get("version_id") or f"{workflow.id}:v{workflow.version}"),
         "workflow_id": workflow.id,
-        "framework": getattr(workflow, "framework", "langgraph"),
-        "builder_id": getattr(workflow, "builder_id", "langgraph_graph"),
+        "framework": getattr(workflow, "framework", None),
+        "builder_id": getattr(workflow, "builder_id", None),
         "category": getattr(workflow, "category", None),
         "version": workflow.version,
         "schema_version": workflow.schema_version,
@@ -258,7 +273,7 @@ def _workflow_spec_payload(workflow) -> Dict[str, Any]:
 
 
 def _is_valid_workflow_for_service(workflow) -> bool:
-    if not workflow or workflow.schema_version != 2 or not isinstance(workflow.spec_json, dict):
+    if not workflow or workflow.schema_version != 1 or not isinstance(workflow.spec_json, dict):
         return False
     validation = workflow.validation_result_json if isinstance(workflow.validation_result_json, dict) else {}
     return bool(validation.get("valid", True))
@@ -266,28 +281,53 @@ def _is_valid_workflow_for_service(workflow) -> bool:
 
 def _debug_payload_for_response(run) -> Dict[str, Any] | None:
     debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else None
-    if not debug or debug.get("version") != 1:
+    if not debug:
+        return None
+    if not is_current_debug_payload(debug):
+        logger.error(
+            "Invalid retained debug trace contract | correlation_id=trace:%s version=%r",
+            run.id,
+            debug.get("version"),
+        )
         return None
     trace = debug.get("trace") if isinstance(debug.get("trace"), dict) else None
     summary = debug.get("summary") if isinstance(debug.get("summary"), dict) else None
     if trace is None or summary is None:
+        logger.error("Malformed retained debug trace | run_id=%s", run.id)
         return None
-    compact_debug = {key: value for key, value in debug.items() if key != "details"}
-    summary = dict(summary)
-    summary.setdefault("operations", list(summary.get("nodes") or []))
-    graph = compact_debug.get("graph") if isinstance(compact_debug.get("graph"), dict) else {}
-    topology_available = bool(graph.get("nodes") or graph.get("edges"))
+    compact_debug = {key: value for key, value in debug.items() if key != "graph"}
+    visualizations = compact_debug.get("visualizations") if isinstance(compact_debug.get("visualizations"), dict) else {}
+    topology_kind = next(
+        (
+            str(key)
+            for key, value in visualizations.items()
+            if isinstance(value, Mapping) and ("nodes" in value or "edges" in value)
+        ),
+        None,
+    )
+    topology_available = topology_kind is not None
     return {
         **compact_debug,
         "trace": trace,
-        "summary": summary,
+        "summary": dict(summary),
         "detail_manifest": detail_manifest(debug.get("details")),
         "topology": {
             "available": topology_available,
-            "kind": "graph" if topology_available else None,
+            "kind": topology_kind,
             "operation_refs": topology_available,
         },
     }
+
+
+def _debug_trace_failure_for_response(run) -> Dict[str, Any] | None:
+    debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else None
+    if not debug:
+        return None
+    if not is_current_debug_payload(debug):
+        return {"code": "debug_trace_contract_invalid", "retryable": False, "run_id": str(run.id)}
+    if not isinstance(debug.get("trace"), dict) or not isinstance(debug.get("summary"), dict):
+        return {"code": "debug_trace_shape_invalid", "retryable": False, "run_id": str(run.id)}
+    return None
 
 
 def _turn_summary_payload(turn) -> Dict[str, Any]:
@@ -312,8 +352,8 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "thread_id": run.thread_id,
         "user_id": run.user_id,
         "workflow_id": run.workflow_id,
-        "framework": getattr(run, "framework", "langgraph"),
-        "builder_id": getattr(run, "builder_id", "langgraph_graph"),
+        "framework": getattr(run, "framework", None),
+        "builder_id": getattr(run, "builder_id", None),
         "definition_category": getattr(run, "definition_category", None),
         "task_id": run.task_id,
         "parent_run_id": run.parent_run_id,
@@ -321,8 +361,6 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "turns": [_turn_summary_payload(turn) for turn in turns],
         "resolved_spec_json": run.resolved_spec_json,
         "status": run.status,
-        "checkpoint_thread_id": run.checkpoint_thread_id,
-        "runtime_binding_version": getattr(run, "runtime_binding_version", 1),
         "runtime_binding_status": getattr(run, "runtime_binding_status", "active"),
         "pending_interrupt": _pending_interrupt_payload(run),
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
@@ -334,17 +372,45 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "retrieval_quality_report": (run.metrics_json or {}).get("retrieval_quality_report") if isinstance(run.metrics_json, dict) else None,
         "grounding_report": (run.metrics_json or {}).get("grounding_report") if isinstance(run.metrics_json, dict) else None,
         "debug": _debug_payload_for_response(run),
+        "debug_trace_failure": _debug_trace_failure_for_response(run),
         "run_kind": (run.run_metadata_json or {}).get("run_kind"),
         "builder_session_id": (run.run_metadata_json or {}).get("builder_session_id"),
         "final_output": (run.debug_trace_json or {}).get("final_output") if isinstance(run.debug_trace_json, dict) else None,
         "observability": {
-            "event_projection_version": 1,
+            "event_projection_version": 2,
             "topology_available": bool(
                 isinstance(run.debug_trace_json, dict)
-                and isinstance(run.debug_trace_json.get("graph"), dict)
-                and (run.debug_trace_json["graph"].get("nodes") or run.debug_trace_json["graph"].get("edges"))
+                and isinstance(run.debug_trace_json.get("visualizations"), dict)
+                and any(
+                    isinstance(value, Mapping) and ("nodes" in value or "edges" in value)
+                    for value in run.debug_trace_json["visualizations"].values()
+                )
             ),
         },
+    }
+    return payload
+
+
+async def _run_payload_for_read(run, turns=None) -> Dict[str, Any]:
+    """Return a run payload, projecting debug from the event journal when needed."""
+
+    payload = _run_payload(run, turns)
+    if payload.get("debug") is not None:
+        return payload
+    projected = build_debug_payload_from_journal(run, await AgentWorkflowRepository().list_run_events(run.id))
+    if not projected:
+        return payload
+    debug_holder = SimpleNamespace(id=run.id, debug_trace_json=projected)
+    payload["debug"] = _debug_payload_for_response(debug_holder)
+    payload["debug_trace_failure"] = _debug_trace_failure_for_response(debug_holder)
+    payload["final_output"] = projected.get("final_output")
+    visualizations = projected.get("visualizations") if isinstance(projected.get("visualizations"), dict) else {}
+    payload["observability"] = {
+        "event_projection_version": 2,
+        "topology_available": any(
+            isinstance(value, Mapping) and ("nodes" in value or "edges" in value)
+            for value in visualizations.values()
+        ),
     }
     return payload
 
@@ -353,6 +419,38 @@ def _sse(event: Dict[str, Any], sequence: int) -> str:
     name = str(event.get("event") or "message")
     payload = {"id": sequence, "event": name, "data": event.get("data") or {}}
     return f"id: {sequence}\nevent: {name}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
+class _BuilderProviderEventSink:
+    def __init__(self) -> None:
+        self.queue: asyncio.Queue[Dict[str, Any] | None] = asyncio.Queue()
+
+    async def emit(self, event: Mapping[str, Any]) -> None:
+        await self.queue.put(dict(event))
+
+
+async def _stream_builder_provider_call(call: Any):
+    sink = _BuilderProviderEventSink()
+
+    async def execute() -> None:
+        try:
+            await call(sink)
+        finally:
+            await sink.queue.put(None)
+
+    task = asyncio.create_task(execute())
+    sequence = 0
+    try:
+        while True:
+            event = await sink.queue.get()
+            if event is None:
+                break
+            sequence += 1
+            yield _sse(event, sequence)
+        await task
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 def _run_summary_payload(run) -> Dict[str, Any]:
@@ -398,8 +496,8 @@ def _capabilities_for_workflow(spec_json: Dict[str, Any]) -> Dict[str, Any]:
     features = runtime.get("features") if isinstance(runtime.get("features"), dict) else {}
     config = spec_json.get("config") if isinstance(spec_json.get("config"), dict) else {}
     return {
-        "required_tool_ids": sorted(workflow_required_tool_ids(spec_json)),
-        "node_tool_requirements": dict(sorted(workflow_node_tool_requirements(spec_json).items())),
+        "required_tool_ids": sorted({str(value) for value in config.get("allowed_tool_ids") or [] if value}),
+        "node_tool_requirements": {},
         "supports_parallel_dispatch": bool(features.get("supports_parallel_dispatch")),
         "supports_corrective_retrieval": bool(features.get("supports_corrective_retrieval")),
         "parallel_policy": config.get("parallel_policy") if isinstance(config.get("parallel_policy"), dict) else None,
@@ -467,7 +565,8 @@ async def list_agent_workflows():
     valid_workflows = []
     for workflow in workflows:
         try:
-            if getattr(workflow, "framework", "langgraph") == "hermes" and os.getenv("HERMES_RUNTIME_ENABLED", "false").lower() not in {"1", "true", "yes", "on"}:
+            spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
+            if not workflow_is_chat_eligible(spec):
                 continue
             if _is_valid_workflow_for_service(workflow):
                 valid_workflows.append(workflow)
@@ -476,29 +575,366 @@ async def list_agent_workflows():
     return {"agent_workflows": [_workflow_payload(workflow) for workflow in valid_workflows]}
 
 
+@router.get("/agent-runtimes")
+async def list_agent_runtimes(response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    registry = get_runtime_registry()
+    adapters = registry.adapters()
+
+    async def resolve(adapter: Any) -> dict[str, Any]:
+        runtime_id = deployment_id(adapter)
+        try:
+            resolution = await resolve_deployment_capability_resolution(adapter)
+            error = resolution.error
+            capabilities = resolution.capabilities
+        except Exception as exc:
+            logger.exception("Runtime deployment discovery failed | runtime_id=%s", runtime_id)
+            error = capability_discovery_error(exc, adapter)
+            capabilities = None
+        return capability_envelope(
+            capabilities=capabilities,
+            resource="deployment",
+            runtime_id=runtime_id,
+            framework=adapter.framework,
+            builder_id=adapter.builder_id,
+            error=error,
+        )
+
+    deployments = await asyncio.gather(*(resolve(adapter) for adapter in adapters))
+    return {"agent_runtimes": deployments}
+
+
+@router.get("/agent-runtimes/{runtime_id}/capabilities")
+async def get_agent_runtime_capabilities(runtime_id: str, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    registry = get_runtime_registry()
+    adapter = registry.get_deployment(runtime_id)
+    if adapter is None:
+        raise HTTPException(status_code=404, detail="Agent runtime deployment not found")
+    resolution = await resolve_deployment_capability_resolution(adapter)
+    return capability_envelope(
+        capabilities=resolution.capabilities,
+        resource="deployment",
+        runtime_id=runtime_id,
+        framework=adapter.framework,
+        builder_id=adapter.builder_id,
+        error=resolution.error,
+    )
+
+
+@router.get("/agent-workflows/{workflow_id}/capabilities")
+async def get_agent_workflow_capabilities(workflow_id: str, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    repo = AgentWorkflowRepository()
+    await repo.seed_builtin_workflows()
+    include_custom = workflow_id not in builtin_workflow_keys()
+    workflow = await repo.get_workflow(workflow_id, include_custom=include_custom)
+    if (
+        not workflow
+        or not workflow_is_chat_eligible(workflow.spec_json)
+        or not _is_valid_workflow_for_service(workflow)
+    ):
+        raise HTTPException(status_code=404, detail="Agent workflow not found")
+
+    definition = definition_from_workflow(workflow)
+    registry = get_runtime_registry()
+    try:
+        adapter = registry.get(definition)
+    except RuntimeSelectionError as exc:
+        return capability_envelope(
+            capabilities=None,
+            resource="definition",
+            runtime_id=f"{definition.framework}:{definition.builder_id}",
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            definition_id=definition.definition_id,
+            error=RuntimeError(
+                "runtime_selection_failed",
+                "No compatible runtime deployment is available",
+                details={"framework": definition.framework, "builder_id": definition.builder_id},
+            ).to_dict(),
+        )
+    resolution = await resolve_definition_capability_resolution(definition, registry=registry)
+    return capability_envelope(
+        capabilities=resolution.capabilities,
+        resource="definition",
+        runtime_id=deployment_id(adapter),
+        framework=definition.framework,
+        builder_id=definition.builder_id,
+        definition_id=definition.definition_id,
+        error=resolution.error,
+    )
+
+
+@router.get("/agent-runs/{run_id}/events")
+async def stream_agent_run_events(
+    run_id: str,
+    request: Request,
+    thread_id: str = Query(..., min_length=1),
+    after_sequence: int = Query(default=0, ge=0),
+):
+    run = await _owned_run_for_operation(run_id, thread_id)
+    repository = AgentWorkflowRepository()
+
+    async def events():
+        sequence = after_sequence
+        poll_interval = required_positive_float("AGENT_EVENT_POLL_INTERVAL_SECONDS")
+        heartbeat_interval = required_positive_float("AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS")
+        idle_seconds = 0.0
+        canonical_events: list[AgentRuntimeEvent] = []
+        public_event_ids: dict[str, str] = {}
+
+        def canonical_event(row: Any, event_id: str) -> AgentRuntimeEvent:
+            return AgentRuntimeEvent(
+                event_id=event_id,
+                run_id=str(getattr(row, "agent_run_id", run.id)),
+                sequence=int(getattr(row, "sequence", 0) or 0),
+                attempt=int(getattr(row, "attempt", 1) or 1),
+                kind=str(getattr(row, "kind", "runtime.event")),
+                payload=dict(getattr(row, "payload_json", None) or {}),
+                occurred_at=maybe_iso_utc_z(getattr(row, "occurred_at", None)),
+                terminal=bool(getattr(row, "terminal", False)),
+                source_metadata=dict(getattr(row, "source_metadata_json", None) or {}),
+            )
+
+        while True:
+            if await request.is_disconnected():
+                return
+            all_rows = await repository.list_run_events(run.id)
+            event_id_counts: dict[str, int] = {}
+            for row in all_rows:
+                raw_event_id = str(getattr(row, "event_id", "") or "")
+                event_id_counts[raw_event_id] = event_id_counts.get(raw_event_id, 0) + 1
+            for row in all_rows:
+                raw_event_id = str(getattr(row, "event_id", "") or "")
+                row_id = str(getattr(row, "id", "") or getattr(row, "sequence", ""))
+                public_event_ids.setdefault(
+                    row_id,
+                    raw_event_id
+                    if event_id_counts[raw_event_id] == 1
+                    else f"{raw_event_id}:journal:{row_id}",
+                )
+            if not canonical_events and sequence > 0:
+                canonical_events.extend(
+                    canonical_event(row, public_event_ids[str(getattr(row, "id", "") or getattr(row, "sequence", ""))])
+                    for row in all_rows
+                    if int(getattr(row, "sequence", 0) or 0) <= sequence
+                )
+            rows = [row for row in all_rows if int(getattr(row, "sequence", 0) or 0) > sequence]
+            if rows:
+                idle_seconds = 0.0
+                for row in rows:
+                    if await request.is_disconnected():
+                        return
+                    sequence = int(getattr(row, "sequence", sequence) or sequence)
+                    row_key = str(getattr(row, "id", "") or getattr(row, "sequence", ""))
+                    event_id = public_event_ids[row_key]
+                    canonical_events.append(canonical_event(row, event_id))
+                    payload = dict(getattr(row, "payload_json", None) or {})
+                    terminal = bool(payload.get("terminal")) or str(getattr(row, "kind", "")) in {
+                        "run.completed", "run.failed", "run.cancelled", "run.clarification",
+                    }
+                    value = {
+                        "id": getattr(row, "id", None),
+                        "event_id": event_id,
+                        "run_id": run.id,
+                        "sequence": sequence,
+                        "attempt": getattr(row, "attempt", 1),
+                        "kind": getattr(row, "kind", "runtime.event"),
+                        "payload": payload,
+                        "occurred_at": maybe_iso_utc_z(getattr(row, "occurred_at", None)),
+                        "created_at": maybe_iso_utc_z(getattr(row, "created_at", None)),
+                        "terminal": terminal,
+                        "parallel_groups": build_parallel_groups_safely(canonical_events),
+                    }
+                    yield f"id: {sequence}\nevent: run_event\ndata: {json.dumps(value, separators=(',', ':'))}\n\n"
+                    if terminal:
+                        return
+            else:
+                idle_seconds += poll_interval
+                if idle_seconds >= heartbeat_interval:
+                    if await request.is_disconnected():
+                        return
+                    yield f": heartbeat {sequence}\n\n"
+                    idle_seconds = 0.0
+            await asyncio.sleep(poll_interval)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/agent-runs/{run_id}/capabilities")
+async def get_agent_run_capabilities(
+    run_id: str,
+    response: Response,
+    thread_id: str = Query(..., min_length=1),
+):
+    response.headers["Cache-Control"] = "no-store"
+    if not await get_thread(thread_id):
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    repo = AgentWorkflowRepository()
+    run = await repo.get_run(run_id)
+    if run is None or run.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
+    definition = definition_from_run(run)
+    registry = get_runtime_registry()
+    task = await get_task(run.task_id, thread_id=thread_id) if getattr(run, "task_id", None) else None
+    try:
+        adapter = registry.get(definition)
+    except RuntimeSelectionError as exc:
+        adapter = None
+        error = RuntimeError(
+            "runtime_selection_failed",
+            "No compatible runtime deployment is available",
+            details={"framework": definition.framework, "builder_id": definition.builder_id},
+        ).to_dict()
+        resolution = None
+    else:
+        resolution = await resolve_run_capability_resolution(
+            definition, registry=registry, run=run, task=task
+        )
+    return capability_envelope(
+        capabilities=resolution.capabilities if resolution is not None else None,
+        resource="run",
+        runtime_id=deployment_id(adapter) if adapter is not None else f"{definition.framework}:{definition.builder_id}",
+        framework=definition.framework,
+        builder_id=definition.builder_id,
+        definition_id=definition.definition_id,
+        run_id=run.id,
+        run_status=run.status,
+        error=resolution.error if resolution is not None else error,
+    )
+
+
+@router.get("/agent-runs/{run_id}/state")
+async def get_agent_run_state(
+    run_id: str,
+    thread_id: str = Query(..., min_length=1),
+):
+    run = await _owned_run_for_operation(run_id, thread_id)
+    try:
+        state = await AgentRunService().inspect_agent_run(run)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    return {"run_id": run.id, "state": state}
+
+
+async def _owned_run_for_operation(run_id: str, thread_id: str):
+    if not await get_thread(thread_id):
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    run = await AgentWorkflowRepository().get_run(run_id)
+    if run is None or run.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return run
+
+
+async def _execute_run_operation(
+    run_id: str,
+    operation: RuntimeOperationId,
+    *,
+    thread_id: str,
+    input: Optional[Dict[str, Any]] = None,
+    idempotency_key: str,
+) -> Dict[str, Any]:
+    if operation in {
+        RuntimeOperationId.RUN_SEND_FOLLOWUP,
+        RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT,
+        RuntimeOperationId.RUN_STEER_LIVE,
+    } and not str((input or {}).get("text") or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_runtime_input",
+                "safe_message": "Input text must be a non-empty string",
+                "retryable": False,
+            },
+        )
+    run = await _owned_run_for_operation(run_id, thread_id)
+    try:
+        result = await AgentRunService().operate_agent_run(
+            run,
+            operation,
+            input=input,
+            idempotency_key=idempotency_key,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    return {"run_id": run.id, "operation": operation.value, "result": result}
+
+
+@router.post("/agent-runs/{run_id}/followups")
+async def send_agent_run_followup(
+    run_id: str,
+    req: AgentRunInputOperationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    return await _execute_run_operation(
+        run_id,
+        RuntimeOperationId.RUN_SEND_FOLLOWUP,
+        thread_id=req.thread_id,
+        input=req.input,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post("/agent-runs/{run_id}/interrupt-with-input")
+async def interrupt_agent_run_with_input(
+    run_id: str,
+    req: AgentRunInputOperationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    return await _execute_run_operation(
+        run_id,
+        RuntimeOperationId.RUN_INTERRUPT_WITH_INPUT,
+        thread_id=req.thread_id,
+        input=req.input,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post("/agent-runs/{run_id}/steer-live")
+async def steer_agent_run_live(
+    run_id: str,
+    req: AgentRunInputOperationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    return await _execute_run_operation(
+        run_id,
+        RuntimeOperationId.RUN_STEER_LIVE,
+        thread_id=req.thread_id,
+        input=req.input,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post("/agent-runs/{run_id}/state")
+async def update_agent_run_state(
+    run_id: str,
+    req: AgentRunInputOperationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+):
+    return await _execute_run_operation(
+        run_id,
+        RuntimeOperationId.RUN_UPDATE_STATE,
+        thread_id=req.thread_id,
+        input=req.input,
+        idempotency_key=idempotency_key,
+    )
+
+
 @router.get("/agent-workflows/builtins/{builtin_key}/source")
 async def get_builtin_agent_workflow_source(builtin_key: str):
     """Return the immutable-on-disk definition used to seed a built-in workflow."""
-    requested_key = builtin_key
     workflow = next(
         (item for item in load_builtin_workflows() if item.get("builtin_key") == builtin_key),
         None,
     )
     if workflow is None:
-        stored_workflow = await AgentWorkflowRepository().get_workflow(requested_key)
-        if stored_workflow is not None:
-            canonical_key = _workflow_payload(stored_workflow).get("builtin_key")
-            workflow = next(
-                (item for item in load_builtin_workflows() if item.get("builtin_key") == canonical_key),
-                None,
-            )
-            builtin_key = canonical_key or requested_key
-    if workflow is None:
         raise HTTPException(status_code=404, detail="Built-in agent workflow source not found")
     definition = AgentDefinition(
         definition_id=builtin_key,
-        framework=str(workflow.get("framework") or "langgraph"),
-        builder_id=str(workflow.get("builder_id") or "langgraph_graph"),
+        framework=str(workflow.get("framework") or "").strip(),
+        builder_id=str(workflow.get("builder_id") or "").strip(),
     )
     try:
         return dict(await builder_for_definition(definition).source(builtin_key))
@@ -515,10 +951,10 @@ async def validate_agent_workflow(req: WorkflowValidationRequest):
     )
     try:
         provider = builder_for_definition(definition)
-        result = await provider.validate(definition, req.spec)
+        validation = await provider.validate(definition, req.spec)
     except BuilderSelectionError as exc:
         raise HTTPException(status_code=400, detail={"code": "builder_unavailable", "message": str(exc)}) from exc
-    report = _provider_validation_report(provider, req.spec)
+    report = _validation_payload(validation)
     report.setdefault("framework", req.framework)
     report.setdefault("builder_id", req.builder_id)
     return report
@@ -531,8 +967,6 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
     workflow = await AgentWorkflowRepository().get_workflow(req.base_workflow_id, include_custom=True)
     if workflow is None:
         raise HTTPException(status_code=404, detail="Base agent workflow not found")
-    if getattr(workflow, "framework", "langgraph") != "langgraph":
-        raise HTTPException(status_code=409, detail={"code": "runtime_capability_unsupported", "message": "Builder tests are not enabled for this runtime"})
     if req.use_web_search and not req.allow_external_tools:
         raise HTTPException(
             status_code=409,
@@ -542,6 +976,12 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
         candidate = dict(req.spec)
         provider = _provider_for_workflow(workflow)
         definition = _definition_for_workflow(workflow)
+        builder_capabilities = await provider.capabilities(definition)
+        if not builder_capabilities.transient_tests:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "runtime_capability_unsupported", "message": "Builder tests are not enabled for this definition"},
+            )
         resolved = dict(await provider.resolve(
             definition,
             candidate,
@@ -565,38 +1005,26 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
     )
 
     async def events():
-        sequence = 0
-        async with open_agent_checkpointer() as checkpointer:
-            previous_checkpoint_ids = await delete_previous_builder_tests(req.builder_session_id, keep_run_id=run.id)
-            if previous_checkpoint_ids:
-                try:
-                    await delete_agent_checkpoints(previous_checkpoint_ids, checkpointer=checkpointer)
-                except Exception:
-                    pass
-            try:
-                async for event in stream_builder_test(
-                    run=run,
-                    request=req,
-                    embedding_model=embedding_context.embedding_model,
-                    checkpointer=checkpointer,
-                ):
-                    sequence += 1
-                    yield _sse(event, sequence)
-            finally:
-                stored_run = await AgentWorkflowRepository().get_run(run.id)
-                if stored_run is not None and stored_run.status != AgentRunStatus.AWAITING_HUMAN.value:
-                    try:
-                        await delete_agent_checkpoints([str(stored_run.checkpoint_thread_id or stored_run.id)], checkpointer=checkpointer)
-                    except Exception:
-                        pass
-                latest = await latest_builder_test(req.builder_session_id)
-                if latest is not None and latest.id != run.id:
-                    stale_checkpoint_ids = await delete_previous_builder_tests(req.builder_session_id, keep_run_id=latest.id)
-                    if stale_checkpoint_ids:
-                        try:
-                            await delete_agent_checkpoints(stale_checkpoint_ids, checkpointer=checkpointer)
-                        except Exception:
-                            pass
+        runtime_request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            input={"question": req.question},
+        )
+        context = BuilderTestContext(
+            run=run,
+            test_request=req,
+            embedding_model=embedding_context.embedding_model,
+            builder_session_id=req.builder_session_id,
+        )
+
+        async def call(sink: Any) -> None:
+            await provider.transient_test(runtime_request, context=context, event_sink=sink)
+
+        async for event in _stream_builder_provider_call(call):
+            yield event
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -610,8 +1038,12 @@ async def get_latest_internal_agent_workflow_test(
     if run is None:
         raise HTTPException(status_code=404, detail="Builder test run not found")
     turns = await AgentWorkflowRepository().list_chat_turns_for_run(run.id)
-    payload = _run_payload(run, turns)
-    payload["runtime_inspection"] = await AgentRunService().inspect_agent_run(run)
+    payload = await _run_payload_for_read(run, turns)
+    try:
+        payload["runtime_inspection"] = await AgentRunService().inspect_agent_run(run)
+    except RuntimeError as exc:
+        if exc.code not in {"runtime_capability_unsupported", "runtime_capability_unavailable"}:
+            raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     return {"agent_run": payload}
 
 
@@ -631,6 +1063,17 @@ async def resume_internal_agent_workflow_test(run_id: str, req: BuilderTestRunRe
     run = await repo.get_run(run_id)
     if run is None or run.thread_id != req.thread_id or (run.run_metadata_json or {}).get("run_kind") != BUILDER_TEST_RUN_KIND:
         raise HTTPException(status_code=404, detail="Builder test run not found")
+    definition = definition_from_run(run)
+    try:
+        provider = builder_for_definition(definition)
+        builder_capabilities = await provider.capabilities(definition)
+    except BuilderSelectionError as exc:
+        raise HTTPException(status_code=400, detail={"code": "builder_unavailable", "message": str(exc)}) from exc
+    if not builder_capabilities.transient_tests:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "runtime_capability_unsupported", "message": "Builder tests are not enabled for this definition"},
+        )
     try:
         resolution = await repo.resolve_pending_interrupt(
             run_id,
@@ -652,25 +1095,27 @@ async def resume_internal_agent_workflow_test(run_id: str, req: BuilderTestRunRe
         raise HTTPException(status_code=409, detail="Builder test interrupt cannot be resumed")
 
     async def events():
-        sequence = 0
-        async with open_agent_checkpointer() as checkpointer:
-            try:
-                async for event in stream_builder_test(
-                    run=resolution.run,
-                    request=req,
-                    embedding_model=embedding_context.embedding_model,
-                    checkpointer=checkpointer,
-                    resume_decision=decision,
-                ):
-                    sequence += 1
-                    yield _sse(event, sequence)
-            finally:
-                stored_run = await AgentWorkflowRepository().get_run(run_id)
-                if stored_run is not None and stored_run.status != AgentRunStatus.AWAITING_HUMAN.value:
-                    try:
-                        await delete_agent_checkpoints([str(stored_run.checkpoint_thread_id or stored_run.id)], checkpointer=checkpointer)
-                    except Exception:
-                        pass
+        runtime_request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=run.thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            input={"decision": decision},
+        )
+        context = BuilderTestContext(
+            run=resolution.run,
+            test_request=req,
+            embedding_model=embedding_context.embedding_model,
+            builder_session_id=str((run.run_metadata_json or {}).get("builder_session_id") or ""),
+            resume_decision=decision,
+        )
+
+        async def call(sink: Any) -> None:
+            await provider.resume_transient_test(runtime_request, context=context, event_sink=sink)
+
+        async for event in _stream_builder_provider_call(call):
+            yield event
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -681,7 +1126,11 @@ async def get_agent_workflow(workflow_id: str):
     await repo.seed_builtin_workflows()
     include_custom = workflow_id not in builtin_workflow_keys()
     workflow = await repo.get_workflow(workflow_id, include_custom=include_custom)
-    if not workflow or not _is_valid_workflow_for_service(workflow):
+    if (
+        not workflow
+        or not workflow_is_chat_eligible(workflow.spec_json)
+        or not _is_valid_workflow_for_service(workflow)
+    ):
         raise HTTPException(status_code=404, detail="Agent workflow not found")
     spec_payload = _workflow_spec_payload(workflow)
     return {
@@ -699,7 +1148,7 @@ async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
         workflow_id = (req.workflow_id or "").strip() or None
         if workflow_id is None:
             workflow_id = f"custom_workflow_{uuid.uuid4().hex[:12]}"
-        spec_json = with_default_runtime(dict(req.spec_json))
+        spec_json = dict(req.spec_json)
         spec_json["workflow_id"] = workflow_id
         workflow, version = await repo.save_internal_workflow_version(
             workflow_id=workflow_id,
@@ -708,7 +1157,6 @@ async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
             spec_json=spec_json,
             framework=req.framework,
             builder_id=req.builder_id,
-            increment_version=False,
         )
     except (BuilderSelectionError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -737,8 +1185,8 @@ async def delete_internal_agent_workflow(workflow_id: str):
 
 @router.get("/internal/agent-workflows/catalog")
 async def get_internal_agent_workflow_catalog(
-    framework: str = Query("langgraph"),
-    builder_id: str = Query("langgraph_graph"),
+    framework: str = Query(..., min_length=1),
+    builder_id: str = Query(..., min_length=1),
 ):
     definition = AgentDefinition(
         definition_id="catalog",
@@ -786,6 +1234,23 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     if not workflow:
         raise HTTPException(status_code=404, detail="Agent workflow not found")
 
+    if not workflow_is_chat_eligible(workflow.spec_json or {}):
+        return {
+            "valid": False,
+            "workflow_id": workflow.id,
+            "workflow_version": workflow.version,
+            "validation": {
+                "valid": False,
+                "errors": ["long_running_workflow_requires_agent_task"],
+                "issues": [{
+                    "code": "long_running_workflow_requires_agent_task",
+                    "severity": "error",
+                    "message": "This workflow is available only through the Deep Research task workspace.",
+                }],
+            },
+            "resolved_spec_json": {},
+        }
+
     provider = _provider_for_workflow(workflow)
     definition = _definition_for_workflow(workflow)
     try:
@@ -825,14 +1290,12 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
         candidate = dict(workflow.spec_json or {})
         candidate_config = dict(candidate.get("config") or {})
         for source in (thread_settings or {}, req.overrides or {}):
-            for key in ALLOWED_WORKFLOW_CONFIG_KEYS:
-                value = source.get(key) if isinstance(source, dict) else None
-                if value is not None:
-                    candidate_config[key] = value
+            if isinstance(source, dict):
+                candidate_config.update({key: value for key, value in source.items() if value is not None})
         candidate["config"] = candidate_config
-        report = _provider_validation_report(provider, candidate)
+        validation = await provider.validate(definition, candidate)
+        report = _validation_payload(validation)
         report["errors"] = report.get("errors") or [str(exc)]
-        report["errors"] = report["errors"] or [str(exc)]
         return {
             "valid": False,
             "workflow_id": workflow.id,
@@ -846,7 +1309,7 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
         "valid": validation.valid,
         "workflow_id": workflow.id,
         "workflow_version": workflow.version,
-        "validation": _provider_validation_report(provider, resolved_spec),
+        "validation": _validation_payload(validation),
         "resolved_spec_json": resolved_spec,
     }
 
@@ -885,31 +1348,7 @@ async def get_agent_run(
     if not run or run.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Agent run not found")
     turns = await repo.list_chat_turns_for_run(run.id)
-    return {"agent_run": _run_payload(run, turns)}
-
-
-@router.get("/agent-runs/{run_id}/details")
-async def get_agent_run_node_details(
-    run_id: str,
-    node_id: str = Query(..., min_length=1),
-    visit_index: int = Query(..., ge=1),
-    thread_id: str = Query(..., min_length=1),
-):
-    run = await AgentWorkflowRepository().get_run(run_id)
-    if run is None or run.thread_id != thread_id or not await get_thread(thread_id):
-        raise HTTPException(status_code=404, detail="Agent run not found")
-    debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else {}
-    details = debug.get("details") if isinstance(debug.get("details"), list) else []
-    for detail in details:
-        if not isinstance(detail, dict):
-            continue
-        try:
-            detail_visit = max(1, int(detail.get("visit_index") or 1))
-        except (TypeError, ValueError):
-            detail_visit = 1
-        if str(detail.get("node_id") or "") == node_id and detail_visit == visit_index:
-            return {"run_id": run.id, "detail": detail}
-    raise HTTPException(status_code=404, detail="Node visit details are unavailable")
+    return {"agent_run": await _run_payload_for_read(run, turns)}
 
 
 @router.get("/agent-runs/{run_id}/operations/{operation_id}/details")
@@ -927,17 +1366,22 @@ async def get_agent_run_operation_details(
     for detail in debug.get("details") if isinstance(debug.get("details"), list) else []:
         if not isinstance(detail, dict):
             continue
-        if str(detail.get("operation_id") or detail.get("node_id") or "") == operation_id and max(1, int(detail.get("visit_index") or 1)) == visit_index:
+        detail_visit_index = _normalized_visit_index(detail.get("visit_index"))
+        if detail_visit_index is None:
+            continue
+        if str(detail.get("operation_id") or "") == operation_id and detail_visit_index == visit_index:
             return {"run_id": run.id, "detail": detail}
     for event in reversed(await repo.list_run_events(run_id)):
         payload = event.payload_json if isinstance(event.payload_json, dict) else {}
-        if str(payload.get("operation_id") or "") == operation_id and max(1, int(payload.get("visit_index") or 1)) == visit_index:
+        event_visit_index = _normalized_visit_index(payload.get("visit_index"))
+        if event_visit_index is None:
+            continue
+        if str(payload.get("operation_id") or "") == operation_id and event_visit_index == visit_index:
             return {
                 "run_id": run.id,
                 "detail": {
                     "operation_id": operation_id,
-                    "node_id": operation_id,
-                    "node_type": payload.get("operation_type"),
+                    "operation_type": payload.get("operation_type"),
                     "visit_index": visit_index,
                     "status": str(event.kind).split(".")[-1],
                     "event": payload,
@@ -954,7 +1398,10 @@ async def cancel_chat_agent_run(
 ):
     if not await get_thread(req.thread_id):
         raise HTTPException(status_code=404, detail="Agent run not found")
-    result = await request_chat_run_cancel(run_id, thread_id=req.thread_id)
+    try:
+        result = await request_chat_run_cancel(run_id, thread_id=req.thread_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
     if result.status == "missing":
@@ -976,7 +1423,8 @@ async def resume_agent_run(
     req: AgentRunResumeRequest,
     accept: Optional[str] = Header(default=None),
 ):
-    await _require_ready_thread(req.thread_id)
+    if await get_thread(req.thread_id) is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
 
     service = AgentRunService()
 
@@ -992,6 +1440,9 @@ async def resume_agent_run(
             resume_version=req.resume_version,
             expected_thread_id=req.thread_id,
             execution_event_sink=event_sink,
+            approval_scope=req.approval_scope,
+            approval_feedback=req.approval_feedback,
+            approval_modifications=req.approval_modifications,
         )
 
     if "text/event-stream" in str(accept or "").lower():
@@ -1010,9 +1461,21 @@ async def resume_agent_run(
                     "status": result.run.status,
                     "pending_interrupt": _pending_interrupt_payload(result.run),
                 }
+                # Resume clients consume the same envelope as the non-stream
+                # endpoint.  The runtime terminal event may carry its raw
+                # execution result, but the final resume result must expose
+                # the product-level `agent_run` object so clients do not read
+                # `response.agent_run.status` from an incompatible payload.
+                resume_response = {
+                    "agent_run": compact_run,
+                    "interrupt": result.interrupt,
+                    "outcome": result.outcome,
+                    "duplicate": result.duplicate,
+                }
                 await sink.queue.put({
                     "event": "__result__",
                     "data": {
+                        "response": resume_response,
                         "agent_run": compact_run,
                         "interrupt": result.interrupt,
                         "outcome": result.outcome,
@@ -1021,6 +1484,8 @@ async def resume_agent_run(
                 })
             except AgentRunInterruptError as exc:
                 await sink.queue.put({"event": "__error__", "data": {"error": {"code": exc.code, "raw_message": str(exc), "retryable": False}}})
+            except RuntimeError as exc:
+                await sink.queue.put({"event": "__error__", "data": {"error": exc.to_dict()}})
             except Exception as exc:
                 await sink.queue.put({"event": "__error__", "data": {"error": {"code": "agent_run_resume_failed", "raw_message": str(exc), "retryable": True}}})
 
@@ -1031,7 +1496,10 @@ async def resume_agent_run(
             try:
                 while True:
                     try:
-                        item = await asyncio.wait_for(sink.queue.get(), timeout=12)
+                        item = await asyncio.wait_for(
+                            sink.queue.get(),
+                            timeout=required_positive_float("AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS"),
+                        )
                     except asyncio.TimeoutError:
                         sequence += 1
                         yield _sse({"event": "heartbeat", "data": {"run_id": run_id}}, sequence)
@@ -1040,22 +1508,43 @@ async def resume_agent_run(
                     data = item.get("data") or {}
                     if event == "__missing__":
                         sequence += 1
-                        yield _sse({"event": "run.failed", "data": {"run_id": run_id, "error": {"code": "agent_run_not_found", "raw_message": "Agent run not found", "retryable": False}}}, sequence)
+                        yield _sse({"event": "stream.error", "data": {"run_id": run_id, "error": {"code": "agent_run_not_found", "raw_message": "Agent run not found", "retryable": False}}}, sequence)
                         break
                     if event == "__error__":
                         sequence += 1
-                        yield _sse({"event": "run.failed", "data": {"run_id": run_id, **data}}, sequence)
+                        yield _sse({"event": "stream.error", "data": {"run_id": run_id, **data}}, sequence)
                         break
                     if event == "__result__":
-                        status = str((data.get("agent_run") or {}).get("status") or "completed")
-                        terminal_event = "interrupt.created" if status == AgentRunStatus.AWAITING_HUMAN.value else "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
+                        # `run_resume` publishes the result separately from the
+                        # runtime event stream.  A provider may return a result
+                        # without emitting its own terminal event (notably after
+                        # a checkpoint resume), so closing here would leave the
+                        # client with a successful HTTP response but no result.
+                        # The chat client treats that as a failed resume and
+                        # retries the approval, which can make one decision look
+                        # like repeated approvals.
+                        result_status = str((data.get("agent_run") or {}).get("status") or "")
+                        terminal_event = (
+                            "interrupt.requested"
+                            if result_status == AgentRunStatus.AWAITING_HUMAN.value
+                            else "run.failed"
+                            if result_status == AgentRunStatus.FAILED.value
+                            else "run.cancelled"
+                            if result_status == AgentRunStatus.CANCELLED.value
+                            else "run.completed"
+                        )
                         sequence += 1
-                        yield _sse({"event": terminal_event, "data": {"run_id": run_id, "status": status, "response": data}}, sequence)
+                        yield _sse({"event": terminal_event, "data": data}, sequence)
                         break
                     sequence += 1
                     yield _sse(item, sequence)
+                    # A resume can emit its terminal runtime event before the
+                    # service publishes __result__. Keep consuming until the
+                    # product-level envelope arrives; otherwise the client
+                    # receives the raw runtime result and treats the resume as
+                    # missing, leaving the approval panel stuck.
             finally:
-                sink.close()
+                sink.detach_delivery()
 
         return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -1066,12 +1555,14 @@ async def resume_agent_run(
             status_code=exc.http_status,
             detail={"code": exc.code, "message": str(exc)},
         ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
     repo = AgentWorkflowRepository()
     turns = await repo.list_chat_turns_for_run(result.run.id)
     return {
-        "agent_run": _run_payload(result.run, turns),
+        "agent_run": await _run_payload_for_read(result.run, turns),
         "interrupt": result.interrupt,
         "outcome": result.outcome,
         "duplicate": result.duplicate,

@@ -25,6 +25,7 @@ class ToolInvocationContext:
     route: str | None = None
     embedding_model: str | None = None
     context_window: int | None = None
+    context_budget: dict[str, Any] | None = None
     use_web_search: bool = False
     use_reranker: bool = True
     web_search_index: bool = True
@@ -66,6 +67,7 @@ class ToolInvocationContext:
             route=data.get("route"),
             embedding_model=data.get("embedding_model"),
             context_window=data.get("context_window"),
+            context_budget=dict(data.get("context_budget") or {}) if isinstance(data.get("context_budget"), Mapping) else None,
             use_web_search=bool(data.get("use_web_search", False)),
             use_reranker=bool(data.get("use_reranker", True)),
             web_search_index=bool(data.get("web_search_index", True)),
@@ -99,6 +101,7 @@ class ToolInvocationContext:
             "route": self.route,
             "embedding_model": self.embedding_model,
             "context_window": self.context_window,
+            "context_budget": self.context_budget,
             "use_web_search": self.use_web_search,
             "use_reranker": self.use_reranker,
             "web_search_index": self.web_search_index,

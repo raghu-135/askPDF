@@ -1,3 +1,10 @@
+x-env-secrets-entrypoint: &env-secrets-entrypoint
+  ["/bin/sh", "/opt/askpdf/docker_load_env_secrets.sh"]
+
+x-env-secret-mounts: &env-secret-mounts
+  - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+  - env_secrets:/secrets:ro
+
 services:
   frontend:
     build:
@@ -5,17 +12,24 @@ services:
       dockerfile: Dockerfile
       target: runtime
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_API_URL: /api/backend
+        NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS: ${NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS:?NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS must be set in .env}
+        NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS: ${NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS:?NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS must be set in .env}
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=/api/backend
+      - ASKPDF_BACKEND_URL=http://rag-service:8000
+      - ASKPDF_ADMIN_TOKEN=${ASKPDF_ADMIN_TOKEN:?ASKPDF_ADMIN_TOKEN must be set in .env}
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
+    entrypoint: *env-secrets-entrypoint
+    command: ["node", "server.js"]
+    volumes: *env-secret-mounts
     depends_on:
+      env-secrets:
+        condition: service_completed_successfully
       rag-service:
         condition: service_healthy
     healthcheck:
@@ -27,39 +41,62 @@ services:
 
   rag-service:
     build:
-      context: ./rag_service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: rag_service/Dockerfile
     ports:
-      - "8000:8000"
+      # Keep the control plane private; the frontend and runtime containers
+      # reach it over the Compose network. Expose it on localhost only for
+      # local development and authenticated reverse-proxy deployments.
+      - "127.0.0.1:8000:8000"
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
       - TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/test_askpdf
       - POSTGRES_POOL_SIZE=10
       - POSTGRES_MAX_OVERFLOW=20
-      - ASKPDF_AGENT_CHECKPOINTER=postgres
-      - AGENT_RUNTIME_MODE=${AGENT_RUNTIME_MODE:-external}
-      - LANGGRAPH_RUNTIME_URL=http://langgraph-runtime:8100
-      - HERMES_RUNTIME_ENABLED=${HERMES_RUNTIME_ENABLED:-false}
-      - HERMES_RUNTIME_URL=http://hermes-runtime:8200
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
-      - MCP_TRANSPORT=${MCP_TRANSPORT:-in_process}
-      - MCP_LOOPBACK_URL=${MCP_LOOPBACK_URL:-http://127.0.0.1:8000/internal/mcp/}
+      # Checkpoint and execution-store settings belong exclusively to the
+      # langgraph-runtime container. Explicitly blank the shared .env values
+      # so they cannot leak into the control-plane process.
+      - ASKPDF_AGENT_CHECKPOINTER=
+      - ASKPDF_AGENT_CHECKPOINTER_SETUP=
+      - AGENT_CHECKPOINT_DATABASE_URL=
+      - AGENT_RUNTIME_EXECUTION_DATABASE_URL=
+      - LANGGRAPH_RUNTIME_BINDING_SECRET=
+      - HERMES_API_TOKEN=
+      - ASKPDF_CLEAR_ENV=LANGGRAPH_RUNTIME_BINDING_SECRET,HERMES_API_TOKEN
+      - CONTEXT_USABLE_RATIO=${CONTEXT_USABLE_RATIO:?CONTEXT_USABLE_RATIO must be set}
+      - CONTEXT_RECENT_RATIO=${CONTEXT_RECENT_RATIO:?CONTEXT_RECENT_RATIO must be set}
+      - CONTEXT_SEMANTIC_RATIO=${CONTEXT_SEMANTIC_RATIO:?CONTEXT_SEMANTIC_RATIO must be set}
+      - CONTEXT_DURABLE_MEMORY_RATIO=${CONTEXT_DURABLE_MEMORY_RATIO:?CONTEXT_DURABLE_MEMORY_RATIO must be set}
+      - CONTEXT_DOCUMENT_RATIO=${CONTEXT_DOCUMENT_RATIO:?CONTEXT_DOCUMENT_RATIO must be set}
+      - CONTEXT_MEMORY_EXPANDED_RATIO=${CONTEXT_MEMORY_EXPANDED_RATIO:?CONTEXT_MEMORY_EXPANDED_RATIO must be set}
+      - CONTEXT_EVIDENCE_RATIO=${CONTEXT_EVIDENCE_RATIO:?CONTEXT_EVIDENCE_RATIO must be set}
+      - CONTEXT_DRAFT_RATIO=${CONTEXT_DRAFT_RATIO:?CONTEXT_DRAFT_RATIO must be set}
+      - CONTEXT_PLAN_SECTION_RATIO=${CONTEXT_PLAN_SECTION_RATIO:?CONTEXT_PLAN_SECTION_RATIO must be set}
+      - CONTEXT_PLAN_TOTAL_RATIO=${CONTEXT_PLAN_TOTAL_RATIO:?CONTEXT_PLAN_TOTAL_RATIO must be set}
+      - CONTEXT_PLAN_MEMORY_RATIO=${CONTEXT_PLAN_MEMORY_RATIO:?CONTEXT_PLAN_MEMORY_RATIO must be set}
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
+    entrypoint: *env-secrets-entrypoint
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
+      env-secrets:
+        condition: service_completed_successfully
       postgresql:
         condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
       weaviate:
         condition: service_healthy
+      langgraph-runtime:
+        condition: service_healthy
     volumes:
+      - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+      - env_secrets:/secrets:ro
       - ./rag_service:/app
       - ./data:/data
       - pdf_data:/static
@@ -67,88 +104,274 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: [ "CMD", "sh", "-c", "curl -f http://localhost:8000/health && curl -f http://weaviate:8080/v1/.well-known/ready" ]
+      test: [ "CMD", "sh", "-c", "curl -f http://localhost:8000/ready && curl -f http://weaviate:8080/v1/.well-known/ready" ]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
   langgraph-runtime:
+    image: askpdf-langgraph-runtime
     build:
-      context: ./rag_service
-      dockerfile: runtime_service/Dockerfile
+      context: .
+      dockerfile: langgraph_runtime/Dockerfile
+    env_file: []
     environment:
       - LOG_LEVEL=INFO
-      - ASKPDF_AGENT_CHECKPOINTER=postgres
-      - AGENT_CHECKPOINT_DATABASE_URL=postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      - AGENT_RUNTIME_EXECUTION_DATABASE_URL=postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      - ASKPDF_AGENT_CHECKPOINTER_SETUP=true
-      - ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=false
-      - WEAVIATE_URL=http://weaviate:8080
-      - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - MCP_TRANSPORT=loopback_http
       - MCP_LOOPBACK_URL=http://rag-service:8000/internal/mcp/
-      - AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS=${AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS:-5}
-      - AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS=${AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS:-10}
-      - AGENT_RUNTIME_READ_TIMEOUT_SECONDS=${AGENT_RUNTIME_READ_TIMEOUT_SECONDS:-30}
-      - AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS=${AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS:-3600}
-      - AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS=${AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS:-30}
-      - AGENT_RUNTIME_MCP_READY_TIMEOUT_SECONDS=${AGENT_RUNTIME_MCP_READY_TIMEOUT_SECONDS:-5}
-      - AGENT_RUNTIME_PROVIDER_READY_TIMEOUT_SECONDS=${AGENT_RUNTIME_PROVIDER_READY_TIMEOUT_SECONDS:-10}
-      - AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS=${AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS:-30}
-      - AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS=${AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS:-5}
-      - AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS=${AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS:-90}
-      - AGENT_RUNTIME_LEGACY_STRICT_READINESS=${AGENT_RUNTIME_LEGACY_STRICT_READINESS:-false}
-      - RUNTIME_PROVIDER_VERSION=${RUNTIME_PROVIDER_VERSION:-langgraph-inprocess-1}
-    env_file:
-      - path: .env.example
-        required: true
-      - path: .env
-        required: false
+      - MCP_REQUEST_TIMEOUT_SECONDS=${MCP_REQUEST_TIMEOUT_SECONDS:?MCP_REQUEST_TIMEOUT_SECONDS must be set}
+      - MCP_OTEL_ENABLED=${MCP_OTEL_ENABLED:?MCP_OTEL_ENABLED must be set}
+      - LANGGRAPH_RUNTIME_TOKEN=${LANGGRAPH_RUNTIME_TOKEN:?LANGGRAPH_RUNTIME_TOKEN must be set}
+      - LANGGRAPH_RUNTIME_BINDING_SECRET=${LANGGRAPH_RUNTIME_BINDING_SECRET:?LANGGRAPH_RUNTIME_BINDING_SECRET must be set}
+      - ASKPDF_AGENT_CHECKPOINTER=${ASKPDF_AGENT_CHECKPOINTER:?ASKPDF_AGENT_CHECKPOINTER must be set}
+      - ASKPDF_AGENT_CHECKPOINTER_SETUP=${ASKPDF_AGENT_CHECKPOINTER_SETUP:?ASKPDF_AGENT_CHECKPOINTER_SETUP must be set}
+      - AGENT_CHECKPOINT_DATABASE_URL=${AGENT_CHECKPOINT_DATABASE_URL:?AGENT_CHECKPOINT_DATABASE_URL must be set}
+      - AGENT_RUNTIME_EXECUTION_DATABASE_URL=${AGENT_RUNTIME_EXECUTION_DATABASE_URL:?AGENT_RUNTIME_EXECUTION_DATABASE_URL must be set}
+      - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set}
+      - OPENAI_API_KEY=${OPENAI_API_KEY-}
+      - DEFAULT_TOKEN_BUDGET=${DEFAULT_TOKEN_BUDGET:?DEFAULT_TOKEN_BUDGET must be set}
+      - REPLANS_LIMIT=${REPLANS_LIMIT:?REPLANS_LIMIT must be set}
+      - MAX_CUSTOM_INSTRUCTIONS_CHARS=${MAX_CUSTOM_INSTRUCTIONS_CHARS:?MAX_CUSTOM_INSTRUCTIONS_CHARS must be set}
+      - MAX_SYSTEM_ROLE_CHARS=${MAX_SYSTEM_ROLE_CHARS:?MAX_SYSTEM_ROLE_CHARS must be set}
+      - CONTEXT_USABLE_RATIO=${CONTEXT_USABLE_RATIO:?CONTEXT_USABLE_RATIO must be set}
+      - CONTEXT_RECENT_RATIO=${CONTEXT_RECENT_RATIO:?CONTEXT_RECENT_RATIO must be set}
+      - CONTEXT_SEMANTIC_RATIO=${CONTEXT_SEMANTIC_RATIO:?CONTEXT_SEMANTIC_RATIO must be set}
+      - CONTEXT_DURABLE_MEMORY_RATIO=${CONTEXT_DURABLE_MEMORY_RATIO:?CONTEXT_DURABLE_MEMORY_RATIO must be set}
+      - CONTEXT_DOCUMENT_RATIO=${CONTEXT_DOCUMENT_RATIO:?CONTEXT_DOCUMENT_RATIO must be set}
+      - CONTEXT_MEMORY_EXPANDED_RATIO=${CONTEXT_MEMORY_EXPANDED_RATIO:?CONTEXT_MEMORY_EXPANDED_RATIO must be set}
+      - CONTEXT_EVIDENCE_RATIO=${CONTEXT_EVIDENCE_RATIO:?CONTEXT_EVIDENCE_RATIO must be set}
+      - CONTEXT_DRAFT_RATIO=${CONTEXT_DRAFT_RATIO:?CONTEXT_DRAFT_RATIO must be set}
+      - CONTEXT_PLAN_SECTION_RATIO=${CONTEXT_PLAN_SECTION_RATIO:?CONTEXT_PLAN_SECTION_RATIO must be set}
+      - CONTEXT_PLAN_TOTAL_RATIO=${CONTEXT_PLAN_TOTAL_RATIO:?CONTEXT_PLAN_TOTAL_RATIO must be set}
+      - CONTEXT_PLAN_MEMORY_RATIO=${CONTEXT_PLAN_MEMORY_RATIO:?CONTEXT_PLAN_MEMORY_RATIO must be set}
+      - AGENT_RUNTIME_LEASE_SECONDS=${AGENT_RUNTIME_LEASE_SECONDS:?AGENT_RUNTIME_LEASE_SECONDS must be set}
+      - AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS=${AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS:?AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS must be set}
+      - AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS=${AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS:?AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS must be set}
+      - AGENT_RUNTIME_READ_TIMEOUT_SECONDS=${AGENT_RUNTIME_READ_TIMEOUT_SECONDS:?AGENT_RUNTIME_READ_TIMEOUT_SECONDS must be set}
+      - AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS=${AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS:?AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS must be set}
+      - AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS=${AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS:?AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS must be set}
+      - AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS=${AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS:?AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS must be set}
+      - AGENT_EVENT_POLL_INTERVAL_SECONDS=${AGENT_EVENT_POLL_INTERVAL_SECONDS:?AGENT_EVENT_POLL_INTERVAL_SECONDS must be set}
+      - AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS=${AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS:?AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS must be set}
+      - AGENT_CANCELLATION_POLL_INTERVAL_SECONDS=${AGENT_CANCELLATION_POLL_INTERVAL_SECONDS:?AGENT_CANCELLATION_POLL_INTERVAL_SECONDS must be set}
+      - AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS=${AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS:?AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS must be set}
+      - AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS=${AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS:?AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS must be set}
+      - AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS=${AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS:?AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS must be set}
+      - AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO=${AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO:?AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO must be set}
+      - AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS=${AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS:?AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS must be set}
+      - AGENT_RUNTIME_RECOVERY_BATCH_SIZE=${AGENT_RUNTIME_RECOVERY_BATCH_SIZE:?AGENT_RUNTIME_RECOVERY_BATCH_SIZE must be set}
+      - AGENT_RUNTIME_RECOVERY_LOOP_ENABLED=${AGENT_RUNTIME_RECOVERY_LOOP_ENABLED:?AGENT_RUNTIME_RECOVERY_LOOP_ENABLED must be set}
+      - AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS=${AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS:?AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS must be set}
+      - AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS=${AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS:?AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS must be set}
+      - AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS=${AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS:?AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS must be set}
+      - AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS=${AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS:?AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS must be set}
+      - AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES=${AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES:?AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES must be set}
+      - NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS=${NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS:?NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS must be set}
+      - NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS=${NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS:?NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS must be set}
+      - DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS=${DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS:?DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS must be set}
+      - DEEP_AGENT_LANGGRAPH_MAX_MODEL_TOKENS=${DEEP_AGENT_LANGGRAPH_MAX_MODEL_TOKENS:?DEEP_AGENT_LANGGRAPH_MAX_MODEL_TOKENS must be set}
+      - DEEP_AGENT_LANGGRAPH_MAX_TOOL_CALLS=${DEEP_AGENT_LANGGRAPH_MAX_TOOL_CALLS:?DEEP_AGENT_LANGGRAPH_MAX_TOOL_CALLS must be set}
+      - DEEP_AGENT_LANGGRAPH_MAX_ACTIVE_RUNTIME_MS=${DEEP_AGENT_LANGGRAPH_MAX_ACTIVE_RUNTIME_MS:?DEEP_AGENT_LANGGRAPH_MAX_ACTIVE_RUNTIME_MS must be set}
+      - DEEP_AGENT_LANGGRAPH_MAX_DURATION_MS=${DEEP_AGENT_LANGGRAPH_MAX_DURATION_MS:?DEEP_AGENT_LANGGRAPH_MAX_DURATION_MS must be set}
+      - DEEP_AGENT_LANGGRAPH_MAX_OUTPUT_CHARS=${DEEP_AGENT_LANGGRAPH_MAX_OUTPUT_CHARS:?DEEP_AGENT_LANGGRAPH_MAX_OUTPUT_CHARS must be set}
+      - DEEP_AGENT_LANGGRAPH_MAX_EVENT_COUNT=${DEEP_AGENT_LANGGRAPH_MAX_EVENT_COUNT:?DEEP_AGENT_LANGGRAPH_MAX_EVENT_COUNT must be set}
+      - DEEP_AGENT_LANGGRAPH_MAX_PLAN_ATTEMPTS=${DEEP_AGENT_LANGGRAPH_MAX_PLAN_ATTEMPTS:?DEEP_AGENT_LANGGRAPH_MAX_PLAN_ATTEMPTS must be set}
+      - DEEP_AGENT_LANGGRAPH_MAX_PLAN_VALIDATION_ERRORS=${DEEP_AGENT_LANGGRAPH_MAX_PLAN_VALIDATION_ERRORS:?DEEP_AGENT_LANGGRAPH_MAX_PLAN_VALIDATION_ERRORS must be set}
+      - DEEP_AGENT_LANGGRAPH_SUBAGENT_TIMEOUT_MS=${DEEP_AGENT_LANGGRAPH_SUBAGENT_TIMEOUT_MS:?DEEP_AGENT_LANGGRAPH_SUBAGENT_TIMEOUT_MS must be set}
+      - DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS=${DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS:?DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS must be set}
+      - DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS=${DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS:?DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS must be set}
+      - DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS=${DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS:?DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS must be set}
+    entrypoint: *env-secrets-entrypoint
+    command: ["uvicorn", "langgraph_runtime.main:app", "--host", "0.0.0.0", "--port", "8100"]
+    volumes: *env-secret-mounts
     depends_on:
+      env-secrets:
+        condition: service_completed_successfully
       runtime-checkpoint-db-init:
         condition: service_completed_successfully
       runtime-db-migrate:
         condition: service_completed_successfully
-      rag-service:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8100/readyz"]
+      test: ["CMD", "curl", "-f", "http://localhost:8100/startupz"]
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 30s
+
+  hermes-config-init:
+    profiles: ["hermes"]
+    build:
+      context: .
+      dockerfile: hermes_runtime/Dockerfile
+    command: ["python", "-m", "hermes_runtime.profile_manager"]
+    environment:
+      - HERMES_DATA_ROOT=/opt/data
+      - HERMES_CONFIG_TEMPLATE_ROOT=/app/hermes_runtime
+      - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
+      - HERMES_PROFILE_ROOT=${HERMES_PROFILE_ROOT:?HERMES_PROFILE_ROOT must be set in .env}
+      - HERMES_PROFILE_UID=${HERMES_PROFILE_UID:?HERMES_PROFILE_UID must be set in .env}
+      - HERMES_PROFILE_GID=${HERMES_PROFILE_GID:?HERMES_PROFILE_GID must be set in .env}
+      - HERMES_API_TOKEN=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
+      - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    env_file: []
+    entrypoint: *env-secrets-entrypoint
+    depends_on:
+      env-secrets:
+        condition: service_completed_successfully
+    volumes:
+      - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+      - env_secrets:/secrets:ro
+      - hermes_data:/opt/data
+
+  hermes:
+    profiles: ["hermes"]
+    build:
+      # Keep this pinned revision visible for consistency checks; the actual
+      # build context is always supplied by HERMES_UPSTREAM_REVISION in .env.
+      # Pinned revision: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+    environment:
+      - API_SERVER_ENABLED=true
+      - API_SERVER_HOST=0.0.0.0
+      - API_SERVER_PORT=8642
+      - GATEWAY_MULTIPLEX_PROFILES=true
+      - ASKPDF_HERMES_COMPAT_ENABLED=1
+      - PYTHONPATH=/opt/askpdf-hermes-pinned-patch
+      - API_SERVER_KEY=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
+      - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
+      - OPENAI_BASE_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    env_file: []
+    entrypoint:
+      - /bin/sh
+      - /opt/askpdf/docker_load_env_secrets.sh
+      - /opt/hermes/docker/entrypoint-dispatch.sh
+    command: ["gateway"]
+    depends_on:
+      env-secrets:
+        condition: service_completed_successfully
+      hermes-config-init:
+        condition: service_completed_successfully
+      rag-service:
+        condition: service_started
+    volumes:
+      - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+      - env_secrets:/secrets:ro
+      - hermes_data:/opt/data
+      - ./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
   hermes-runtime:
-    profiles: ["second-runtime-proof"]
+    profiles: ["hermes"]
     build:
       context: .
       dockerfile: hermes_runtime/Dockerfile
     environment:
       - LOG_LEVEL=INFO
-      - HERMES_API_URL=${HERMES_API_URL:-}
-      - ASKPDF_MCP_URL=${ASKPDF_MCP_URL:-http://rag-service:8000/internal/mcp/}
-      - ASKPDF_MCP_HEALTH_URL=${ASKPDF_MCP_HEALTH_URL:-}
-      - ASKPDF_MCP_REQUIRED=${ASKPDF_MCP_REQUIRED:-true}
-      - HERMES_MCP_ALLOWED_TOOLS=${HERMES_MCP_ALLOWED_TOOLS:-document_evidence,thread_conversation_history,clarify_intent}
-      - HERMES_API_TOKEN=${HERMES_API_TOKEN:-}
-      - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:-hermes-gateway-1}
-      - HERMES_MODEL=${HERMES_MODEL:-}
-      - HERMES_RUNTIME_READ_TIMEOUT_SECONDS=${HERMES_RUNTIME_READ_TIMEOUT_SECONDS:-30}
-      - HERMES_RUNTIME_STATE_PATH=/var/lib/hermes/runtime-state.json
-    env_file:
-      - path: .env.example
-        required: true
-      - path: .env
-        required: false
+      - HERMES_API_URL=http://hermes:8642
+      - ASKPDF_MCP_URL=http://rag-service:8000/internal/mcp/
+      - ASKPDF_MCP_HEALTH_URL=http://rag-service:8000/health
+      - HERMES_RUNTIME_TOKEN=${HERMES_RUNTIME_TOKEN:?HERMES_RUNTIME_TOKEN must be set in .env}
+      - HERMES_API_TOKEN=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
+      - ASKPDF_MCP_REQUIRED=${ASKPDF_MCP_REQUIRED:?ASKPDF_MCP_REQUIRED must be set in .env}
+      - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+      - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
+      - HERMES_RUNTIME_VERSION=${HERMES_RUNTIME_VERSION:?HERMES_RUNTIME_VERSION must be set in .env}
+      - HERMES_RUNTIME_WORKERS=${HERMES_RUNTIME_WORKERS:?HERMES_RUNTIME_WORKERS must be set in .env}
+      - HERMES_RUNTIME_STATE_PATH=${HERMES_RUNTIME_STATE_PATH:?HERMES_RUNTIME_STATE_PATH must be set in .env}
+      - HERMES_RUNTIME_STORAGE_BACKEND=${HERMES_RUNTIME_STORAGE_BACKEND:?HERMES_RUNTIME_STORAGE_BACKEND must be set in .env}
+      - HERMES_RUN_PROFILE_MAX_AGE_SECONDS=${HERMES_RUN_PROFILE_MAX_AGE_SECONDS:?HERMES_RUN_PROFILE_MAX_AGE_SECONDS must be set in .env}
+      - HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS=${HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS:?HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS must be set in .env}
+      - HERMES_PROFILE_ROOT=${HERMES_PROFILE_ROOT:?HERMES_PROFILE_ROOT must be set in .env}
+      - HERMES_PROFILE_UID=${HERMES_PROFILE_UID:?HERMES_PROFILE_UID must be set in .env}
+      - HERMES_PROFILE_GID=${HERMES_PROFILE_GID:?HERMES_PROFILE_GID must be set in .env}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
+      - MCP_TRANSPORT=loopback_http
+      - MCP_LOOPBACK_URL=http://rag-service:8000/internal/mcp/
+      - MCP_REQUEST_TIMEOUT_SECONDS=${MCP_REQUEST_TIMEOUT_SECONDS:?MCP_REQUEST_TIMEOUT_SECONDS must be set in .env}
+      - MCP_OTEL_ENABLED=${MCP_OTEL_ENABLED:?MCP_OTEL_ENABLED must be set in .env}
+      - AGENT_RUNTIME_LEASE_SECONDS=${AGENT_RUNTIME_LEASE_SECONDS:?AGENT_RUNTIME_LEASE_SECONDS must be set in .env}
+      - AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS=${AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS:?AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS must be set in .env}
+      - AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS=${AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS:?AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS must be set in .env}
+      - AGENT_RUNTIME_READ_TIMEOUT_SECONDS=${AGENT_RUNTIME_READ_TIMEOUT_SECONDS:?AGENT_RUNTIME_READ_TIMEOUT_SECONDS must be set in .env}
+      - AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS=${AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS:?AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS must be set in .env}
+      - AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS=${AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS:?AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS must be set in .env}
+      - AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS=${AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS:?AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS must be set in .env}
+      - AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS=${AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS:?AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS must be set in .env}
+      - AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES=${AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES:?AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES must be set in .env}
+      - AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS=${AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS:?AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS must be set in .env}
+      - AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS=${AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS:?AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS must be set in .env}
+      - AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS=${AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS:?AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS must be set in .env}
+      - AGENT_EVENT_POLL_INTERVAL_SECONDS=${AGENT_EVENT_POLL_INTERVAL_SECONDS:?AGENT_EVENT_POLL_INTERVAL_SECONDS must be set in .env}
+      - AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS=${AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS:?AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS must be set in .env}
+      - AGENT_CANCELLATION_POLL_INTERVAL_SECONDS=${AGENT_CANCELLATION_POLL_INTERVAL_SECONDS:?AGENT_CANCELLATION_POLL_INTERVAL_SECONDS must be set in .env}
+      - AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS=${AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS:?AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS must be set in .env}
+      - AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS=${AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS:?AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS must be set in .env}
+      - AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS=${AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS:?AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS must be set in .env}
+      - AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO=${AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO:?AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO must be set in .env}
+      - AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS=${AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS:?AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS must be set in .env}
+      - AGENT_RUNTIME_RECOVERY_BATCH_SIZE=${AGENT_RUNTIME_RECOVERY_BATCH_SIZE:?AGENT_RUNTIME_RECOVERY_BATCH_SIZE must be set in .env}
+      - NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS=${NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS:?NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS must be set in .env}
+      - NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS=${NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS:?NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS must be set in .env}
+      - DEEP_AGENT_HERMES_MAX_MODEL_CALLS=${DEEP_AGENT_HERMES_MAX_MODEL_CALLS:?DEEP_AGENT_HERMES_MAX_MODEL_CALLS must be set in .env}
+      - DEEP_AGENT_HERMES_MAX_MODEL_TOKENS=${DEEP_AGENT_HERMES_MAX_MODEL_TOKENS:?DEEP_AGENT_HERMES_MAX_MODEL_TOKENS must be set in .env}
+      - DEEP_AGENT_HERMES_MAX_TOOL_CALLS=${DEEP_AGENT_HERMES_MAX_TOOL_CALLS:?DEEP_AGENT_HERMES_MAX_TOOL_CALLS must be set in .env}
+      - DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS=${DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS:?DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS must be set in .env}
+      - DEEP_AGENT_HERMES_MAX_DURATION_MS=${DEEP_AGENT_HERMES_MAX_DURATION_MS:?DEEP_AGENT_HERMES_MAX_DURATION_MS must be set in .env}
+      - DEEP_AGENT_HERMES_MAX_OUTPUT_CHARS=${DEEP_AGENT_HERMES_MAX_OUTPUT_CHARS:?DEEP_AGENT_HERMES_MAX_OUTPUT_CHARS must be set in .env}
+      - DEEP_AGENT_HERMES_MAX_EVENT_COUNT=${DEEP_AGENT_HERMES_MAX_EVENT_COUNT:?DEEP_AGENT_HERMES_MAX_EVENT_COUNT must be set in .env}
+    env_file: []
+    entrypoint: *env-secrets-entrypoint
+    command: ["uvicorn", "hermes_runtime.main:app", "--host", "0.0.0.0", "--port", "8200"]
     depends_on:
-      rag-service:
+      env-secrets:
+        condition: service_completed_successfully
+      hermes:
         condition: service_healthy
+      rag-service:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8200/readyz"]
       interval: 10s
       timeout: 5s
       retries: 12
     volumes:
+      - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
+      - env_secrets:/secrets:ro
       - hermes_runtime_state:/var/lib/hermes
+      - hermes_data:/opt/data
+
+  env-secrets:
+    image: python:3.11-slim
+    working_dir: /work
+    environment:
+      - LANGGRAPH_RUNTIME_TOKEN=${LANGGRAPH_RUNTIME_TOKEN:-}
+      - LANGGRAPH_RUNTIME_BINDING_SECRET=${LANGGRAPH_RUNTIME_BINDING_SECRET:-}
+      - MCP_EXECUTION_CONTEXT_SECRET=${MCP_EXECUTION_CONTEXT_SECRET:-}
+      - ASKPDF_ADMIN_TOKEN=${ASKPDF_ADMIN_TOKEN:-}
+      - HERMES_RUNTIME_TOKEN=${HERMES_RUNTIME_TOKEN:-}
+      - HERMES_API_TOKEN=${HERMES_API_TOKEN:-}
+    volumes:
+      - .:/work
+      - env_secrets:/secrets
+    command:
+      - python
+      - /work/scripts/fill_env_secrets.py
+      - --env
+      - /work/.env
+      - --example
+      - /work/.env.example
+      - --export
+      - /secrets/runtime.env
+      - --ready
+      - /secrets/ready
 
   runtime-checkpoint-db-init:
     image: postgres:16-alpine
@@ -169,10 +392,11 @@ services:
         fi
 
   runtime-db-migrate:
+    image: askpdf-langgraph-runtime
     build:
-      context: ./rag_service
-      dockerfile: Dockerfile
-    command: ["python", "-m", "app.db.migrate_runtime"]
+      context: .
+      dockerfile: langgraph_runtime/Dockerfile
+    command: ["python", "-m", "langgraph_runtime.migrate"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
@@ -183,13 +407,10 @@ services:
     depends_on:
       runtime-checkpoint-db-init:
         condition: service_completed_successfully
-    volumes:
-      - ./rag_service:/app
-
   db-migrate:
     build:
-      context: ./rag_service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: rag_service/Dockerfile
     command: ["python", "-m", "app.db.migrate"]
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
@@ -200,12 +421,9 @@ services:
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA:-0.7}
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
-      - MCP_TRANSPORT=${MCP_TRANSPORT:-in_process}
     env_file:
-      - path: .env.example
-        required: true
       - path: .env
-        required: false
+        required: true
     depends_on:
       postgresql:
         condition: service_healthy
@@ -290,3 +508,5 @@ volumes:
   postgres_data:
   browser_captures:
   hermes_runtime_state:
+  hermes_data:
+  env_secrets:

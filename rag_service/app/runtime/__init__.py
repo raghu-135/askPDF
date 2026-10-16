@@ -1,19 +1,30 @@
 """Framework-neutral runtime contracts and catalog projections."""
 
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
     ContinuationBinding,
     RuntimeCapabilities,
+    RuntimeFeatureDescriptor,
+    RuntimeFeatureId,
+    RuntimeCapabilitySemantics,
+    RuntimeCancellationMode,
+    RuntimeConfirmationMode,
+    RuntimeTerminalState,
+    RuntimeOperationDescriptor,
+    RuntimeOperationId,
+    RuntimeSupportLevel,
+    RuntimeApprovalResponse,
+    RuntimeSteeringInput,
     RuntimeValidationIssue,
     RuntimeValidationResult,
     RuntimeArtifact,
     RuntimeTaskContext,
 )
-from app.runtime.adapter import AgentRuntimeEventSink
-from app.runtime.errors import RuntimeError
+from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink
+from runtime_protocol.errors import RuntimeError
 from app.runtime.builder import AgentBuilderProvider, BuilderCapabilities, BuilderCatalog
 from app.runtime.builder_registry import BuilderRegistry, BuilderSelectionError, builder_for_definition
 
@@ -24,11 +35,23 @@ __all__ = [
     "AgentRuntimeResult",
     "ContinuationBinding",
     "RuntimeCapabilities",
+    "RuntimeFeatureDescriptor",
+    "RuntimeFeatureId",
+    "RuntimeCapabilitySemantics",
+    "RuntimeCancellationMode",
+    "RuntimeConfirmationMode",
+    "RuntimeTerminalState",
+    "RuntimeOperationDescriptor",
+    "RuntimeOperationId",
+    "RuntimeSupportLevel",
+    "RuntimeApprovalResponse",
+    "RuntimeSteeringInput",
     "RuntimeValidationIssue",
     "RuntimeValidationResult",
     "RuntimeArtifact",
     "RuntimeTaskContext",
     "AgentRuntimeEventSink",
+    "AgentRuntimeAdapter",
     "RuntimeError",
     "AgentBuilderProvider",
     "BuilderCapabilities",

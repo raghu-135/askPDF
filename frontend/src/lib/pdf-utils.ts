@@ -78,6 +78,26 @@ export function handleTabCloseUtil(
   setPlayRequestId(null);
 }
 
+export function closeDocumentTabUtil(
+  tabId: string,
+  pdfTabs: PdfTab[],
+  activeDocumentId: string | null,
+  setPdfTabs: (tabs: PdfTab[]) => void,
+  setActiveDocumentId: (id: string | null) => void,
+  setCurrentPdfId: (id: number | null) => void,
+  setPlayRequestId: (id: number | null) => void,
+) {
+  const newTabs = pdfTabs.filter((tab) => tab.id !== tabId);
+  if (activeDocumentId === tabId) {
+    const closingIndex = pdfTabs.findIndex((tab) => tab.id === tabId);
+    const newIndex = Math.max(0, closingIndex - 1);
+    setActiveDocumentId(newTabs[newIndex]?.id || null);
+    setCurrentPdfId(null);
+    setPlayRequestId(null);
+  }
+  setPdfTabs(newTabs);
+}
+
 /**
  * Returns the active tab from the list by its ID.
  *

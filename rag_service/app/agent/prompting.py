@@ -10,20 +10,16 @@ from app.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
 CORE_TOOL_NAMES = [
     "get_thread_shape",
-    "search_documents",
-    "search_document_by_id",
+    "search_knowledge",
+    "inspect_document",
+    "read_context",
     "search_thread_conversation_history",
     "search_durable_memory",
     "search_thread_events",
     "search_web",
+    "publish_canvas",
     "ask_for_clarification",
 ]
-
-LEGACY_TOOL_INSTRUCTION_IDS = {
-    "deep_memory": "thread_conversation_history",
-    "memory_recall": "durable_memory",
-    "thread_timeline": "thread_events",
-}
 
 
 def format_runtime_datetime_context(
@@ -179,13 +175,11 @@ def normalize_tool_instructions(
         for tool_id, value in raw.items()
         if tool_id in normalized
     }
-    legacy_values = {
-        LEGACY_TOOL_INSTRUCTION_IDS[tool_id]: value
-        for tool_id, value in raw.items()
-        if tool_id in LEGACY_TOOL_INSTRUCTION_IDS
-        and LEGACY_TOOL_INSTRUCTION_IDS[tool_id] not in canonical_values
-    }
-    for tool_id, value in {**legacy_values, **canonical_values}.items():
+    known_ids = {item["id"] for item in TOOL_FRIENDLY_CONFIG.values()} | set(normalized)
+    unknown = set(raw) - known_ids
+    if unknown:
+        raise ValueError(f"Unknown tool instruction identifiers: {sorted(unknown)}")
+    for tool_id, value in canonical_values.items():
         if tool_id not in normalized:
             continue
         text = _sanitize_lines_with_blocklist(str(value or ""), blocked, max_chars_per_tool)

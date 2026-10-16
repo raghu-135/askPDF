@@ -27,6 +27,12 @@ from app.db.models_sqlmodel import (
     AgentRun,
     AgentRunEvent,
     AgentTask,
+    DocumentProcessingJob,
+    CanonicalDocument,
+    DocumentSection,
+    DocumentElement,
+    DocumentChunkManifest,
+    DocumentChunk,
 )
 
 # this is the Alembic Config object

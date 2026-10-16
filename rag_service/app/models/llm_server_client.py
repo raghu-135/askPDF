@@ -4,20 +4,21 @@ load_dotenv()
 import httpx
 import asyncio
 import logging
-import time
 import math
 from contextlib import asynccontextmanager
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, List, Optional, Sequence
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import BaseModel as OpenAIBaseModel
 
-from app.agent_workflows.workflow_runtime import default_agent_workflow_key
+from app.product_orchestration.workflow_runtime import default_agent_workflow_key
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
 from app.services.memory_policy import (
     DEFAULT_THREAD_MEMORY_SETTINGS,
     normalize_thread_memory_settings,
 )
+from app.services.embedding_tokenizer_registry import is_registered_embedding_model
+from runtime_protocol.llm_provider import llm_provider_configuration, openai_sdk_default_headers
 
 try:
     from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -34,6 +35,12 @@ async def _managed_http_client(name: str):
     from app.http_clients import get_http_client
 
     yield get_http_client(name)
+
+
+def llm_provider_auth() -> tuple[str, Dict[str, str]]:
+    """Return the shared LLM server SDK key and request headers."""
+    provider = llm_provider_configuration()
+    return provider.sdk_api_key, dict(provider.request_headers)
 
 _REASONING_RESPONSE_FIELDS = (
     "reasoning",
@@ -76,25 +83,30 @@ class ReasoningChatOpenAI(ChatOpenAI):
 
         return result
 
-# Cache for model readiness checks
-_model_ready_cache: Dict[str, Tuple[bool, float]] = {}
-CACHE_TTL = 300  # 5 minutes for successful checks
-CACHE_TTL_FAIL = 15  # 15 seconds for failed checks
+# Process-lifetime probe results. Live completions run only on a miss.
+_model_ready_cache: Dict[str, bool] = {}
+_model_ready_locks: Dict[str, asyncio.Lock] = {}
+
 
 def _check_model_ready_cache(cache_key: str) -> bool | None:
-    """Returns the cached readiness status if valid, otherwise None."""
-    cached = _model_ready_cache.get(cache_key)
-    if cached:
-        is_ready, timestamp = cached
-        ttl = CACHE_TTL if is_ready else CACHE_TTL_FAIL
-        if time.time() - timestamp < ttl:
-            return is_ready
-    return None
+    """Return a cached probe result, or None when that id has never been probed."""
+    if cache_key not in _model_ready_cache:
+        return None
+    return _model_ready_cache[cache_key]
+
 
 def _update_model_ready_cache(cache_key: str, is_ready: bool) -> bool:
-    """Updates the cache and returns the readiness status."""
-    _model_ready_cache[cache_key] = (is_ready, time.time())
+    """Store a probe result until process restart and return it."""
+    _model_ready_cache[cache_key] = is_ready
     return is_ready
+
+
+def _lock_for_model_probe(cache_key: str) -> asyncio.Lock:
+    lock = _model_ready_locks.get(cache_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _model_ready_locks[cache_key] = lock
+    return lock
 
 
 # Token budget configuration
@@ -156,43 +168,22 @@ RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window
 # Chars per token estimate
 CHARS_PER_TOKEN = 4
 
-# Pre-fetch budget allocation ratios
-# These four sum to 0.68; the remaining 0.32 is reserved for answer generation +
-# system prompt overhead (tool schemas, locked sections, etc.)
-RATIO_PREFETCH_RECENT = 0.22    # Recent verbatim conversation turns injected inline
-RATIO_PREFETCH_SEMANTIC = 0.12  # Semantic chat-memory recall from all past QA pairs
-RATIO_PREFETCH_DURABLE_MEMORY = 0.06  # Durable user/project/thread memory
-RATIO_PREFETCH_DOCUMENT = 0.28       # Document evidence (top-K chunks, raw question query)
-
-# Average char estimates used to derive item-count limits from char budgets
-AVG_CHUNK_CHARS = 500   # Typical PDF or chat-memory chunk
-AVG_TURN_CHARS = 600    # Typical combined user+assistant turn
+from runtime_protocol.context_budget import (
+    compute_prefetch_budget as _compute_prefetch_budget,
+    load_context_budget_settings,
+    resolve_context_budget,
+)
 
 
-def compute_prefetch_budget(context_window: int) -> dict:
+def compute_prefetch_budget(context_window: int, budget_overrides: dict | None = None) -> dict:
     """
     Compute character and item-count budgets for the parallel pre-fetch pass.
 
     Scales proportionally to any context window (4 K → 1 M tokens).
-    A 20 % overhead buffer is preserved for system prompt text + tool schemas
-    injected by the LangChain / LangGraph framework.
-
-    Returns a dict with both char budgets and derived item-count limits so
-    callers can use whichever unit is most convenient.
+    Ratios come from environment defaults and optional per-request overrides.
     """
-    usable = int(context_window * 0.80 * CHARS_PER_TOKEN)
-    return {
-        # Character budgets
-        "recent_history_chars":   int(usable * RATIO_PREFETCH_RECENT),
-        "semantic_history_chars": int(usable * RATIO_PREFETCH_SEMANTIC),
-        "durable_memory_chars":   max(800, min(8000, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))),
-        "document_context_chars":      int(usable * RATIO_PREFETCH_DOCUMENT),
-        # Derived item-count limits
-        "document_limit":              max(3, int(usable * RATIO_PREFETCH_DOCUMENT)      // AVG_CHUNK_CHARS),
-        "semantic_limit":         max(3, int(usable * RATIO_PREFETCH_SEMANTIC) // AVG_CHUNK_CHARS),
-        "durable_memory_limit":   max(5, min(20, math.ceil(max(800, min(8000, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))) / 400) * 2)),
-        "recent_turn_limit":      max(4, int(usable * RATIO_PREFETCH_RECENT)   // AVG_TURN_CHARS),
-    }
+    resolved = resolve_context_budget(budget_overrides) if budget_overrides else load_context_budget_settings()
+    return _compute_prefetch_budget(context_window, resolved)
 
 
 def default_thread_settings():
@@ -236,9 +227,39 @@ def merge_thread_settings(overrides=None):
 
 
 def _get_base_url() -> str:
-    """Get the LLM API base URL, ensuring it ends with /v1."""
-    base_url = os.getenv("LLM_API_URL")
-    return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
+    return llm_provider_configuration().base_url
+
+
+def _is_openrouter_url(url: str) -> bool:
+    return "openrouter.ai" in str(url or "").casefold()
+
+
+def _model_ids_from_payload(data: object) -> List[str]:
+    models = data.get("data", []) if isinstance(data, dict) else data
+    ids: List[str] = []
+    for item in models if isinstance(models, list) else []:
+        if isinstance(item, dict) and item.get("id") not in (None, ""):
+            ids.append(str(item["id"]))
+        elif isinstance(item, str) and item.strip():
+            ids.append(item.strip())
+    return ids
+
+
+async def _fetch_openrouter_embedding_ids(client, base_url: str, headers: Dict[str, str]) -> List[str]:
+    try:
+        resp = await client.get(f"{base_url}/embeddings/models", headers=headers or None)
+    except Exception:
+        logger.warning("OpenRouter embedding catalog request failed", exc_info=True)
+        return []
+    if resp.status_code != 200:
+        logger.warning("OpenRouter embedding catalog returned %s", resp.status_code)
+        return []
+    try:
+        return _model_ids_from_payload(resp.json())
+    except Exception:
+        logger.warning("OpenRouter embedding catalog payload was unreadable", exc_info=True)
+        return []
+
 
 async def fetch_available_models():
     """
@@ -257,17 +278,31 @@ async def fetch_available_models():
                 "not_embedding_models": [],
                 "not_llm_models": [],
             }
-        if not llm_api_url.endswith("/v1"):
-            llm_api_url = f"{llm_api_url}/v1"
+        llm_api_url = llm_provider_configuration(base_url=llm_api_url).base_url
 
         async with _managed_http_client("llm") as client:
-            resp = await client.get(f"{llm_api_url}/models")
+            _api_key, headers = llm_provider_auth()
+            resp = await client.get(f"{llm_api_url}/models", headers=headers or None)
             if resp.status_code == 200:
                 data = resp.json()
                 # OpenAI-compatible: models are in data['data']
-                models = data.get('data', []) if isinstance(data, dict) else data
-                model_ids = [m['id'] if isinstance(m, dict) and 'id' in m else m for m in models]
-                remote_embedding_models = [m for m in model_ids if is_embedding_model_by_keyword(m) and m not in LOCAL_EMBEDDING_MODELS]
+                model_ids = _model_ids_from_payload(data)
+                provider_embedding_ids = {
+                    model_id
+                    for model_id in model_ids
+                    if is_embedding_model_by_keyword(model_id)
+                }
+                if _is_openrouter_url(llm_api_url):
+                    provider_embedding_ids.update(
+                        await _fetch_openrouter_embedding_ids(client, llm_api_url, headers)
+                    )
+
+                remote_embedding_models = [
+                    model_id
+                    for model_id in sorted(provider_embedding_ids)
+                    if model_id not in LOCAL_EMBEDDING_MODELS
+                    and is_registered_embedding_model(model_id)
+                ]
                 llm_models = [m for m in model_ids if is_llm_model_by_keyword(m)]
                 not_embedding_models = [m for m in model_ids if m not in remote_embedding_models and m not in LOCAL_EMBEDDING_MODELS]
                 not_llm_models = [m for m in model_ids if m not in llm_models]
@@ -341,11 +376,13 @@ def get_llm(
         if own_async_transport
         else get_http_client("llm")
     )
+    api_key, headers = llm_provider_auth()
     return ReasoningChatOpenAI(
         model=model_name,
         temperature=temperature,
         base_url=_get_base_url(),
-        api_key="sk-no-key-required",
+        api_key=api_key or "sk-no-key-required",
+        default_headers=openai_sdk_default_headers(headers),
         http_async_client=async_client,
     )
 
@@ -357,10 +394,12 @@ def get_embedding_model(model_name: str, *, own_async_transport: bool = False):
         return get_local_embedding_model(model_name)
 
     from app.http_clients import get_http_client, register_owned_client
+    api_key, headers = llm_provider_auth()
     return OpenAIEmbeddings(
         model=model_name,
         base_url=_get_base_url(),
-        api_key="sk-no-key-required",
+        api_key=api_key or "sk-no-key-required",
+        default_headers=openai_sdk_default_headers(headers),
         check_embedding_ctx_length=False,
         http_async_client=(
             register_owned_client(httpx.AsyncClient())
@@ -394,7 +433,9 @@ async def close_model_client(model: object) -> None:
 async def embed_query(model_name: str, text: str) -> List[float]:
     model = get_embedding_model(model_name, own_async_transport=True)
     try:
-        return await model.aembed_query(text)
+        from app.services.embedding_tokenizer import resolve_embedding_tokenizer
+        tokenizer_config, _ = resolve_embedding_tokenizer(model_name)
+        return await model.aembed_query(tokenizer_config.format_query_input(text))
     finally:
         await close_model_client(model)
 
@@ -416,16 +457,45 @@ class LocalEmbeddingWrapper:
         return await asyncio.to_thread(_encode)
 
 
+_LOCAL_RERANK_BATCH_SIZE = 32
+
+
 class LocalRerankerWrapper:
     def __init__(self, model: "CrossEncoder"):
         self.model = model
 
-    async def ascore(self, query: str, passages: List[str]) -> List[float]:
-        def _score():
-            pairs = [(query, p) for p in passages]
-            scores = self.model.predict(pairs)
-            return scores.tolist() if hasattr(scores, "tolist") else list(scores)
-        return await asyncio.to_thread(_score)
+    @staticmethod
+    async def _cancellation_requested(checker: Any) -> bool:
+        if checker is None:
+            return False
+        value = checker()
+        if hasattr(value, "__await__"):
+            value = await value
+        return bool(value)
+
+    async def ascore(
+        self,
+        query: str,
+        passages: List[str],
+        *,
+        cancellation_checker: Any = None,
+    ) -> List[float]:
+        if not passages:
+            return []
+        scores: List[float] = []
+        for start in range(0, len(passages), _LOCAL_RERANK_BATCH_SIZE):
+            if await self._cancellation_requested(cancellation_checker):
+                scores.extend([0.0] * (len(passages) - len(scores)))
+                return scores
+            batch = passages[start : start + _LOCAL_RERANK_BATCH_SIZE]
+
+            def _score(batch_pairs=batch):
+                pairs = [(query, p) for p in batch_pairs]
+                batch_scores = self.model.predict(pairs)
+                return batch_scores.tolist() if hasattr(batch_scores, "tolist") else list(batch_scores)
+
+            scores.extend(await asyncio.to_thread(_score))
+        return scores
 
 
 _local_embedder_cache: Dict[str, LocalEmbeddingWrapper] = {}
@@ -513,18 +583,41 @@ def get_system_prompt(context: str, use_history: bool = False, use_web: bool = F
         f"CONTEXT:\n{context}"
     )
 
-async def _check_model_exists(client: httpx.AsyncClient, base_url: str, model_name: str) -> bool:
-    """Helper to check if a model ID exists in the /models endpoint."""
-    try:
-        resp = await client.get(f"{base_url}/models", timeout=15.0)
+async def _check_model_exists(
+    client: httpx.AsyncClient,
+    base_url: str,
+    model_name: str,
+    extra_catalogs: Sequence[str] = (),
+) -> bool:
+    """Return whether the model id appears in one of the provider catalogs."""
+    catalogs = [f"{base_url}/models", *extra_catalogs]
+    _api_key, headers = llm_provider_auth()
+    for catalog_url in catalogs:
+        try:
+            resp = await client.get(catalog_url, headers=headers or None, timeout=15.0)
+        except Exception:
+            logger.warning("Model catalog request failed for %s", catalog_url, exc_info=True)
+            continue
         if resp.status_code != 200:
-            return False
-        data = resp.json()
-        models = data.get('data', []) if isinstance(data, dict) else data
-        model_ids = [m['id'] if isinstance(m, dict) and 'id' in m else m for m in models]
-        return model_name in model_ids
-    except Exception:
-        return False
+            continue
+        try:
+            model_ids = _model_ids_from_payload(resp.json())
+        except Exception:
+            logger.warning("Model catalog payload was unreadable for %s", catalog_url, exc_info=True)
+            continue
+        if model_name in model_ids:
+            return True
+    return False
+
+def _congested_provider_status(status_code: int) -> bool:
+    """Return whether a probe status means the provider saw the model, not that it is missing.
+
+    OpenRouter free models such as ``google/gemma-4-31b-it:free`` often 429 a
+    1-token readiness ping. 502/503 are the same class of upstream blip. Treat
+    those as ready so the composer is not locked as 'unavailable'.
+    """
+    return status_code in {429, 502, 503}
+
 
 async def _probe_with_retry(
     client: httpx.AsyncClient, 
@@ -538,10 +631,23 @@ async def _probe_with_retry(
     """Helper to probe an endpoint with retry logic and exponential backoff."""
     for attempt in range(max_retries):
         try:
-            resp = await client.post(url, json=payload, timeout=30.0)
+            _api_key, headers = llm_provider_auth()
+            resp = await client.post(url, json=payload, headers=headers or None, timeout=30.0)
             logger.info(f"{probe_type} probe response status for {model_name}: {resp.status_code}")
             
             if validator(resp):
+                return True
+            if _congested_provider_status(resp.status_code):
+                if resp.status_code != 429 and attempt < max_retries - 1:
+                    logger.warning(f"{probe_type} model {model_name} returned {resp.status_code}. Retrying...")
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                logger.warning(
+                    "%s probe for %s returned %s; treating the listed model as ready",
+                    probe_type,
+                    model_name,
+                    resp.status_code,
+                )
                 return True
 
             # If not 200, but also not a definitive client error (404, 401, 403), retry
@@ -563,6 +669,53 @@ async def _probe_with_retry(
     return False
 
 
+def _embedding_probe_accepted(requested_model: str, payload: object) -> bool:
+    """Return whether an OpenAI-compatible embeddings response proves the model is live.
+
+    Hosted routers often echo the Hugging Face id (``Qwen/Qwen3-Embedding-4B``)
+    instead of the provider id (``qwen/qwen3-embedding-4b``). A 200 with
+    embedding data is still a successful probe.
+    """
+    if not isinstance(payload, dict):
+        return False
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return False
+    resp_model = str(payload.get("model") or "")
+    requested = requested_model.lower()
+    resolved = resp_model.lower()
+    if resolved and requested not in resolved and resolved not in requested:
+        logger.warning("Embedding probe resolved model %s -> %s", requested_model, resp_model)
+    return True
+
+
+def _chat_probe_accepted(requested_model: str, payload: object) -> bool:
+    """Return whether an OpenAI-compatible chat completion proves the model is live.
+
+    Hosted routers resolve aliases (``~org/model-latest`` → a dated snapshot) and
+    often return ``content: null`` on a 1-token ping. That is still a successful
+    probe. Reject only a missing or malformed completion.
+    """
+    if not isinstance(payload, dict):
+        return False
+    resp_model = str(payload.get("model") or "")
+    if resp_model and requested_model not in resp_model and resp_model not in requested_model:
+        logger.warning("Chat probe resolved model %s -> %s", requested_model, resp_model)
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return False
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return False
+    if message.get("content") is not None:
+        return True
+    if message.get("tool_calls"):
+        return True
+    if any(message.get(field) for field in _REASONING_RESPONSE_FIELDS):
+        return True
+    return choices[0].get("finish_reason") in {"stop", "length", "max_tokens", "eos"}
+
+
 async def check_chat_model_ready(model_name: str) -> bool:
     """
     Check if the supplied model is a chat model and is ready in the LLM API/server.
@@ -574,6 +727,14 @@ async def check_chat_model_ready(model_name: str) -> bool:
     if cached_status is not None:
         return cached_status
 
+    async with _lock_for_model_probe(cache_key):
+        cached_status = _check_model_ready_cache(cache_key)
+        if cached_status is not None:
+            return cached_status
+        return await _probe_chat_model_ready(model_name, cache_key)
+
+
+async def _probe_chat_model_ready(model_name: str, cache_key: str) -> bool:
     base_url = _get_base_url()
     try:
         async with _managed_http_client("llm") as client:
@@ -584,16 +745,7 @@ async def check_chat_model_ready(model_name: str) -> bool:
                 if resp.status_code != 200:
                     return False
                 try:
-                    data = resp.json()
-                    
-                    # Verify integrity: if the model name in the response same as the requested model name?
-                    resp_model = data.get("model", "")
-                    if resp_model and model_name not in resp_model and resp_model not in model_name:
-                        logger.error(f"Chat model mismatch! Requested: {model_name}, Got: {resp_model}")
-                        return False
-                    # Verify it actually generated a message structure
-                    choices = data.get("choices", [])
-                    return bool(choices and choices[0].get("message", {}).get("content") is not None)
+                    return _chat_probe_accepted(model_name, resp.json())
                 except Exception:
                     return False
 
@@ -628,14 +780,22 @@ async def check_model_supports_tools(model_name: str) -> bool:
         False – the model explicitly reported it does not support tools (HTTP 400
                 "does not support tools"), or the model is unreachable / not found.
 
-    The result is cached for 60 s (success) or 15 s (failure) to avoid
-    hammering the server on every thread load.
+    The result is cached for the process lifetime so model changes do not
+    re-probe a known id.
     """
     cache_key = f"tools:{model_name}"
     cached_status = _check_model_ready_cache(cache_key)
     if cached_status is not None:
         return cached_status
 
+    async with _lock_for_model_probe(cache_key):
+        cached_status = _check_model_ready_cache(cache_key)
+        if cached_status is not None:
+            return cached_status
+        return await _probe_model_supports_tools(model_name, cache_key)
+
+
+async def _probe_model_supports_tools(model_name: str, cache_key: str) -> bool:
     base_url = _get_base_url()
     try:
         async with _managed_http_client("llm") as client:
@@ -685,9 +845,7 @@ async def check_model_supports_tools(model_name: str) -> bool:
                 "ToolSupport",
                 max_retries=2,
             )
-            # Use a shorter TTL for tool-support cache (60 s) so model swaps are detected quickly
-            _model_ready_cache[cache_key] = (result, time.time())
-            return result
+            return _update_model_ready_cache(cache_key, result)
 
     except Exception:
         logging.exception("Exception during tool-support check")
@@ -714,24 +872,36 @@ async def check_embedding_model_ready(model_name: str, use_cache: bool = True) -
         cached_status = _check_model_ready_cache(cache_key)
         if cached_status is not None:
             return cached_status
+        async with _lock_for_model_probe(cache_key):
+            cached_status = _check_model_ready_cache(cache_key)
+            if cached_status is not None:
+                return cached_status
+            return await _probe_embedding_model_ready(model_name, cache_key)
+    return await _probe_embedding_model_ready(model_name, cache_key)
 
+
+async def _probe_embedding_model_ready(model_name: str, cache_key: str) -> bool:
     base_url = _get_base_url()
     try:
         async with _managed_http_client("embeddings") as client:
-            if not await _check_model_exists(client, base_url, model_name):
+            extra_catalogs = (
+                (f"{base_url}/embeddings/models",)
+                if _is_openrouter_url(base_url)
+                else ()
+            )
+            if not await _check_model_exists(
+                client,
+                base_url,
+                model_name,
+                extra_catalogs=extra_catalogs,
+            ):
                 return _update_model_ready_cache(cache_key, False)
 
             def embed_validator(resp: httpx.Response) -> bool:
                 if resp.status_code != 200:
                     return False
                 try:
-                    data = resp.json()
-                    resp_model = data.get("model", "")
-                    # Verify integrity: if the model name in the response same as the requested model name?
-                    if resp_model and model_name not in resp_model and resp_model not in model_name:
-                        logger.error(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}")
-                        return False
-                    return True
+                    return _embedding_probe_accepted(model_name, resp.json())
                 except Exception:
                     return False
 

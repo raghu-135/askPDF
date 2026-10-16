@@ -1,19 +1,22 @@
-import React, { useId, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Box,
+  ClickAwayListener,
   IconButton,
-  FormControl,
-  InputLabel,
   List,
-  MenuItem,
   Paper,
-  Select,
   TextField,
   Tooltip,
   Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { SxProps, Theme } from '@mui/material/styles';
+import {
+  WorkbenchAutocomplete,
+  WorkbenchToolbar,
+} from '../workbench/WorkbenchToolbar';
+import { ContextBudgetMenu } from './ContextBudgetMenu';
+import type { ContextBudgetRatios } from '../../lib/context-budget';
 
 export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   header: React.ReactNode;
@@ -60,42 +63,43 @@ export function ConversationHeader({
   models,
   model,
   contextWindow,
+  contextBudget,
+  defaultContextBudget,
   disabled = false,
+  contextWindowDisabled = false,
+  contextBudgetDisabled = false,
   leading,
   beforeModelControls,
+  afterModelControls,
   trailingActions,
   sx,
   onModelChange,
   onContextWindowChange,
+  onContextBudgetChange,
 }: {
   models: string[];
   model: string;
   contextWindow: number;
+  contextBudget: ContextBudgetRatios | null;
+  defaultContextBudget: ContextBudgetRatios | null;
   disabled?: boolean;
+  contextWindowDisabled?: boolean;
+  contextBudgetDisabled?: boolean;
   leading?: React.ReactNode;
   beforeModelControls?: React.ReactNode;
+  afterModelControls?: React.ReactNode;
   trailingActions?: React.ReactNode;
   sx?: SxProps<Theme>;
   onModelChange: (model: string) => void;
   onContextWindowChange: (contextWindow: number) => void;
+  onContextBudgetChange: (budget: ContextBudgetRatios) => void;
 }) {
-  const labelId = useId();
   const [showContextHighlight, setShowContextHighlight] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
-  const selectOutlineSx = {
-    '& fieldset': {
-      borderColor: 'transparent',
-      borderWidth: '1px',
-    },
-    '&:hover fieldset': {
-      borderColor: 'primary.main',
-    },
-    '&.Mui-focused fieldset': {
-      borderColor: 'primary.main',
-    },
-  };
+  const ignoreNextClickAwayRef = useRef(false);
 
   const handleModelChange = (nextModel: string) => {
+    ignoreNextClickAwayRef.current = true;
     setShowContextHighlight(true);
     setTooltipOpen(true);
     onModelChange(nextModel);
@@ -107,103 +111,65 @@ export function ConversationHeader({
   };
 
   return (
-    <Box sx={{
-      mb: 0.5,
-      pt: 0.5,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      gap: 2,
-      flexWrap: 'nowrap',
-      flexShrink: 0,
-      minWidth: 0,
-      ...sx,
-    }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, overflow: 'hidden', flex: '1 1 auto' }}>
-        {leading}
-      </Box>
-      <Box sx={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        flex: '0 0 auto',
-        minWidth: 0,
-        gap: 1,
-        flexWrap: 'nowrap',
-      }}>
-        {beforeModelControls && (
-          <Box sx={{ minWidth: 0, overflow: 'hidden', flex: '1 1 auto' }}>
-            {beforeModelControls}
-          </Box>
-        )}
-        <Tooltip
-          title={
-            <Box sx={{ p: 0.5 }}>
-              <Typography variant="caption" sx={{ display: 'block' }}>
-                Set context window size for the LLM.
-              </Typography>
-              <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
-                Find the model context length at{' '}
-                <a
-                  href="https://llm-explorer.com/list/"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: '#90caf9', textDecoration: 'underline' }}
-                >
-                  llm-explorer.com
-                </a>
-                . Enter the numeric Context Len value, such as 8000 or 128000.
-                Larger windows allow more context but can increase latency and cost.
-              </Typography>
-            </Box>
+    <WorkbenchToolbar
+      sx={[{ mb: 0.5, pt: 0.5, flexShrink: 0 }, ...(Array.isArray(sx) ? sx : sx ? [sx] : [])]}
+    >
+      {leading}
+      {beforeModelControls}
+      <ClickAwayListener
+        onClickAway={() => {
+          if (ignoreNextClickAwayRef.current) {
+            ignoreNextClickAwayRef.current = false;
+            return;
           }
-          placement="top"
-          open={tooltipOpen}
-          onOpen={() => setTooltipOpen(true)}
-          onClose={() => {
-            if (!showContextHighlight) setTooltipOpen(false);
-          }}
-        >
-          <TextField
-            size="small"
-            label="Ctx size"
-            type="number"
-            value={contextWindow}
-            disabled={disabled}
-            onChange={(event) => onContextWindowChange(Number.parseInt(event.target.value, 10) || 0)}
-            onClick={dismissContextHelp}
-            onFocus={dismissContextHelp}
-            sx={{
-              width: 116,
-              flex: '0 0 116px',
-              '& .MuiOutlinedInput-root': {
-                transition: 'all 0.3s ease',
-                backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
-                ...selectOutlineSx,
-                '& fieldset': {
-                  borderColor: showContextHighlight ? 'primary.main' : 'transparent',
-                  borderWidth: showContextHighlight ? '2px' : '1px',
-                },
-              },
+          dismissContextHelp();
+        }}
+      >
+        <Box>
+          <Tooltip
+            title={
+              <Box sx={{ p: 0.5 }}>
+                <Typography variant="caption" sx={{ display: 'block' }}>
+                  AskPDF packing budget for this run: how much document text, thread history, and memory to load.
+                </Typography>
+                <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
+                  It does not change the model&apos;s context on OpenRouter, LM Studio, or other providers.
+                  Stay at or below the model&apos;s published context length so prompts do not overflow.
+                  Larger budgets retrieve more context but can increase latency and cost.
+                </Typography>
+              </Box>
+            }
+            placement="top"
+            slotProps={{ popper: { disablePortal: true } }}
+            open={tooltipOpen}
+            onOpen={() => setTooltipOpen(true)}
+            onClose={() => {
+              if (!showContextHighlight) setTooltipOpen(false);
             }}
-            slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
-          />
-        </Tooltip>
-        <FormControl size="small" disabled={disabled} sx={{ flex: '0 0 220px', minWidth: 220 }}>
-          <InputLabel id={labelId}>Select LLM</InputLabel>
-          <Select
-            labelId={labelId}
-            value={model}
-            label="Select LLM"
-            onChange={(event) => handleModelChange(String(event.target.value))}
-            sx={selectOutlineSx}
           >
-            {models.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}
-          </Select>
-        </FormControl>
-        {trailingActions}
-      </Box>
-    </Box>
+            <ContextBudgetMenu
+              contextWindow={contextWindow}
+              contextBudget={contextBudget}
+              defaultContextBudget={defaultContextBudget}
+              disabled={disabled || contextWindowDisabled || contextBudgetDisabled || !contextBudget || !defaultContextBudget}
+              highlight={showContextHighlight}
+              onContextWindowChange={onContextWindowChange}
+              onContextBudgetChange={onContextBudgetChange}
+              onDismissHelp={dismissContextHelp}
+            />
+          </Tooltip>
+        </Box>
+      </ClickAwayListener>
+      <WorkbenchAutocomplete
+        label="Select LLM"
+        value={model}
+        options={models}
+        disabled={disabled}
+        onChange={handleModelChange}
+      />
+      {afterModelControls}
+      {trailingActions}
+    </WorkbenchToolbar>
   );
 }
 

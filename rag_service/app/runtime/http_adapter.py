@@ -1,378 +1,279 @@
-"""Shared HTTP/SSE client for separately deployable runtimes.
-
-The transport is framework-neutral; concrete adapters override only identity,
-endpoint configuration, and framework-specific capability/result translation.
-"""
+"""LangGraph adapter for the separately deployable runtime service."""
 
 from __future__ import annotations
 
-import os
-import hashlib
-import json
-import inspect
-import asyncio
+from dataclasses import replace
 from typing import Any, Mapping
 
-import httpx
-
-from app.runtime.adapter import AgentRuntimeEventSink, RuntimeExecutionContext
-from app.runtime.contracts import (
+from app.runtime.adapter import AgentRuntimeAdapter, AgentRuntimeEventSink, RuntimeInvocationContext
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeEvent,
     AgentRuntimeRequest,
     AgentRuntimeResult,
-    ContinuationBinding,
+    RuntimeCleanupResult,
     RuntimeCapabilities,
+    RuntimeCourseCorrection,
+    RuntimeCourseCorrectionReceipt,
+    RuntimeOperationId,
     RuntimeValidationResult,
 )
-from app.runtime.errors import RuntimeError
-from app.runtime.transport import (
+from runtime_protocol.errors import RuntimeError
+from runtime_protocol.transport import (
     capabilities_from_dict,
+    course_correction_receipt_from_dict,
     event_from_dict,
-    result_from_dict,
-    sse_encode,
     validation_from_dict,
-    iter_sse,
 )
+from runtime_protocol.protocol import json_payload
+from app.runtime.http_transport import RuntimeTransportConnector, context_to_dict, safe_json
 
 
-def _safe_json(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, Mapping):
-        return {str(key): _safe_json(item) for key, item in value.items() if str(key) != "request"}
-    if isinstance(value, (list, tuple)):
-        return [_safe_json(item) for item in value]
-    if hasattr(value, "model_dump"):
-        return _safe_json(value.model_dump(mode="json"))
-    if hasattr(value, "__dict__"):
-        return _safe_json(vars(value))
-    return str(value)
+class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
+    """LangGraph adapter composed with the neutral HTTP transport."""
 
-
-def context_to_dict(context: RuntimeExecutionContext) -> dict[str, Any]:
-    """Serialize only execution inputs; repositories and writers never cross the wire."""
-
-    request_payload = _safe_json(context.request)
-    if isinstance(request_payload, Mapping):
-        request_payload = dict(request_payload)
-        # The external runtime must select its MCP-backed, persistence-free
-        # context loader. This is transport metadata, not product state.
-        request_payload.setdefault("runtime_execution_mode", True)
-
-    return {
-        "embedding_model": context.embedding_model,
-        # Task execution historically carried request-only fields (objective,
-        # limits, model selection, and tool policy) on the legacy request
-        # object. Preserve that input explicitly across the HTTP boundary;
-        # it is execution input, not a product repository or writer.
-        "request_payload": request_payload,
-        "resolved_spec": _safe_json(context.resolved_spec),
-        "agent_run_context": _safe_json(context.agent_run_context),
-        "task_id": context.task_id,
-        "task_worker_id": context.task_worker_id,
-    }
-
-
-def _structured_runtime_error(payload: Any) -> tuple[dict[str, Any], Mapping[str, Any]] | None:
-    """Extract a neutral runtime error from either supported HTTP shape."""
-    if not isinstance(payload, Mapping):
-        return None
-    error = payload.get("error")
-    if not isinstance(error, Mapping):
-        detail = payload.get("detail")
-        error = detail if isinstance(detail, Mapping) else None
-    if not isinstance(error, Mapping) or not error.get("code"):
-        return None
-    return dict(error), payload
-
-
-def _raise_structured_runtime_error(payload: Any) -> None:
-    decoded = _structured_runtime_error(payload)
-    if decoded is None:
-        return
-    error, envelope = decoded
-    raise RuntimeError(
-        code=str(error.get("code") or "runtime_failed"),
-        safe_message=str(error.get("safe_message") or error.get("message") or "Agent runtime failed"),
-        retryable=bool(error.get("retryable")),
-        details=dict(error.get("details") or {}),
-        runtime_metadata=dict(envelope.get("runtime_metadata") or {}),
-    )
-
-
-class HttpRuntimeAdapter:
+    # The external runtime exposes a durable pause request protocol backed by
+    # its execution store and LangGraph checkpointer.
     framework = "langgraph"
     builder_id = "langgraph_graph"
+    implemented_operations = frozenset({
+        RuntimeOperationId.RUN_START,
+        RuntimeOperationId.RUN_CANCEL,
+        RuntimeOperationId.RUN_RESUME,
+        RuntimeOperationId.RUN_INSPECT_STATE,
+        RuntimeOperationId.RUN_CLEANUP,
+        RuntimeOperationId.TASK_PAUSE,
+        RuntimeOperationId.TASK_COURSE_CORRECTION_SUBMIT,
+        RuntimeOperationId.TRACE_PROJECT,
+    })
 
-    def __init__(
-        self,
-        base_url: str | None = None,
-        *,
-        client: httpx.AsyncClient | None = None,
-        connect_timeout: float | None = None,
-        read_timeout: float | None = None,
-    ) -> None:
-        self.base_url = (base_url or os.getenv("LANGGRAPH_RUNTIME_URL", "http://langgraph-runtime:8100")).rstrip("/")
-        self._client = client
-        self._owns_client = client is None
-        self._timeout = httpx.Timeout(
-            read_timeout or float(os.getenv("AGENT_RUNTIME_READ_TIMEOUT_SECONDS", "30")),
-            connect=connect_timeout or float(os.getenv("AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS", "5")),
-            write=float(os.getenv("AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS", "10")),
+    def __init__(self, base_url: str | None = None, **kwargs: Any) -> None:
+        self.transport = RuntimeTransportConnector(
+            base_url=base_url,
+            framework=self.framework,
+            authorization_env="LANGGRAPH_RUNTIME_TOKEN",
+            visualization_id="langgraph.session",
+            **kwargs,
         )
-        self._execution_timeout = float(os.getenv("AGENT_RUNTIME_EXECUTION_TIMEOUT_SECONDS", "3600"))
 
-    async def _client_for_request(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self._timeout)
-        return self._client
+    async def prepare_request(
+        self,
+        request: AgentRuntimeRequest,
+        *,
+        context: RuntimeInvocationContext,
+    ) -> AgentRuntimeRequest:
+        from app.mcp.execution_context_token import execution_context_ttl_seconds, issue_execution_context_token
+        from app.mcp.registry import MCP_TOOL_DEFINITIONS
+        from app.tools.context import ToolInvocationContext
+
+        spec = dict(context.resolved_spec or {})
+        config = dict(spec.get("config") or {})
+        use_reranker = config.get("use_reranker")
+        if not isinstance(use_reranker, bool):
+            raise RuntimeError(
+                "runtime_configuration_invalid",
+                "Resolved workflow configuration must provide boolean use_reranker",
+                retryable=False,
+            )
+        configured_tool_ids = {
+            str(value) for value in config.get("allowed_tool_ids") or [] if value
+        }
+        # Workflow specs expose stable, framework-neutral contract IDs, while
+        # the MCP authorization boundary validates canonical MCP tool names.
+        # Expand the grant here, where the control plane owns both registries,
+        # instead of teaching the external runtime about product policy.
+        allowed_tools = sorted(
+            name
+            for name, definition in MCP_TOOL_DEFINITIONS.items()
+            if name in configured_tool_ids
+            or definition.registry_contract_id in configured_tool_ids
+        )
+        task_context = context.task_context
+        from app.services.tool_approval import invocation_policies
+        approval_task_id = str(request.task_id) if request.task_id else None
+        approval_policy = invocation_policies(
+            config,
+            permissions=task_context.permissions if task_context is not None else None,
+            task_id=approval_task_id,
+        )
+        token_task_id = approval_task_id or str(request.run_id)
+        limits = dict(task_context.limits or {}) if task_context is not None else {}
+        ttl_seconds = execution_context_ttl_seconds(limits)
+        from runtime_protocol.context_budget import resolve_context_budget
+
+        request_payload = dict(context.request_payload or {})
+        raw_budget = request_payload.get("context_budget")
+        budget_dict = resolve_context_budget(raw_budget if isinstance(raw_budget, dict) else None).to_dict()
+
+        token = issue_execution_context_token(
+            ToolInvocationContext(
+                thread_id=request.thread_id,
+                run_id=request.run_id,
+                embedding_model=context.embedding_model,
+                context_window=int(
+                    request_payload.get("context_window")
+                    or config.get("context_window")
+                    or 32_768
+                ),
+                context_budget=budget_dict,
+                use_web_search=bool(config.get("use_web_search")),
+                use_reranker=use_reranker,
+                extensions={
+                    "task_id": token_task_id,
+                    "approval_task_id": approval_task_id,
+                    "runtime": "langgraph",
+                    "llm_model": config.get("llm_model"),
+                    "tool_approval_policy": approval_policy,
+                },
+            ),
+            task_id=token_task_id,
+            allowed_tools=allowed_tools,
+            ttl_seconds=ttl_seconds,
+            runtime="langgraph",
+        )
+        return replace(
+            request,
+            input={
+                **dict(request.input),
+                "mcp_execution_context_token": token,
+                # Admission must check the canonical MCP grant, not every
+                # framework-neutral tool contract in the workflow. Some
+                # contracts (for example ``clarify_intent``) are implemented
+                # inside the graph and are intentionally absent from MCP.
+                "mcp_allowed_tool_ids": allowed_tools,
+            },
+        )
 
     async def aclose(self) -> None:
-        if self._owns_client and self._client is not None:
-            await self._client.aclose()
-            self._client = None
-
-    def _headers(self, request: AgentRuntimeRequest | None = None) -> dict[str, str]:
-        headers = {"accept": "application/json", "x-runtime-contract-version": str(request.contract_version if request else 1)}
-        if request is not None:
-            headers["x-agent-run-id"] = request.run_id
-            if request.trace_id:
-                headers["x-request-id"] = request.trace_id
-            traceparent = request.options.get("traceparent")
-            if traceparent:
-                headers["traceparent"] = str(traceparent)
-            tracestate = request.options.get("tracestate")
-            if tracestate:
-                headers["tracestate"] = str(tracestate)
-            if request.authentication.get("token"):
-                headers["authorization"] = str(request.authentication["token"])
-            if request.permissions:
-                headers["x-agent-permissions"] = json.dumps(dict(request.permissions), separators=(",", ":"))
-        token = os.getenv("LANGGRAPH_RUNTIME_TOKEN")
-        if token:
-            headers["authorization"] = f"Bearer {token}"
-        return headers
-
-    async def _json(self, method: str, path: str, *, request: AgentRuntimeRequest | None = None, **kwargs: Any) -> Any:
-        try:
-            response = await (await self._client_for_request()).request(method, self.base_url + path, headers=self._headers(request), **kwargs)
-        except httpx.TimeoutException as exc:
-            raise RuntimeError.from_exception(exc, code="runtime_timeout", retryable=True, safe_message="Agent runtime timed out") from exc
-        except httpx.HTTPError as exc:
-            raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            if response.status_code >= 400:
-                raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
-            raise RuntimeError("runtime_protocol_error", "Agent runtime returned invalid JSON") from exc
-        _raise_structured_runtime_error(payload)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise RuntimeError.from_exception(exc, code="runtime_transport_error", retryable=True, safe_message="Agent runtime is unavailable") from exc
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid response")
-        if int(payload.get("contract_version") or 1) != 1:
-            raise RuntimeError("runtime_contract_unsupported", "Agent runtime contract version is unsupported")
-        if payload.get("error"):
-            error = payload["error"]
-            raise RuntimeError(
-                code=str(error.get("code") or "runtime_failed"),
-                safe_message=str(error.get("safe_message") or "Agent runtime failed"),
-                retryable=bool(error.get("retryable")),
-                details=dict(error.get("details") or {}),
-                runtime_metadata=dict(payload.get("runtime_metadata") or {}),
-            )
-        return payload.get("result") if "result" in payload else payload
+        await self.transport.aclose()
 
     async def capabilities(self, definition: AgentDefinition) -> RuntimeCapabilities:
-        value = await self._json("GET", "/v1/capabilities")
-        return capabilities_from_dict(value.get("capabilities") or value)
+        value = await self.transport._json("POST", "/v1/capabilities", json=json_payload({"definition": definition.to_dict()}))
+        return capabilities_from_dict(value["capabilities"])
+
+    async def deployment_capabilities(self) -> RuntimeCapabilities:
+        value = await self.transport._json("GET", "/v1/capabilities")
+        return capabilities_from_dict(value["capabilities"])
+
+    async def readiness(self) -> Mapping[str, Any]:
+        return await self.transport._readiness()
+
+    async def startup_readiness(self) -> Mapping[str, Any]:
+        """Probe runtime process/core initialization without its CP callback.
+
+        The runtime's full ``/readyz`` also checks the control-plane MCP
+        callback.  Using it during control-plane startup would deadlock the
+        two services; request admission and the ongoing readiness loop still
+        use the full readiness endpoint.
+        """
+        return await self.transport._readiness("/startupz")
 
     async def validate(self, definition: AgentDefinition, spec: Mapping[str, Any], *, options: Mapping[str, Any] | None = None) -> RuntimeValidationResult:
-        value = await self._json("POST", "/v1/validate", json={"definition": definition.to_dict(), "spec": _safe_json(spec), "options": _safe_json(options or {})})
-        return validation_from_dict(value.get("validation") or value)
+        value = await self.transport._json("POST", "/v1/validate", json=json_payload({"definition": definition.to_dict(), "spec": safe_json(spec), "options": safe_json(options or {})}))
+        return validation_from_dict(value["validation"])
 
-    async def _stream(self, path: str, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, payload: Mapping[str, Any] | None, event_sink: AgentRuntimeEventSink | None) -> AgentRuntimeResult:
-        body = {"request": request.to_dict(), "context": context_to_dict(context), **dict(payload or {})}
-        seen: dict[str, str] = {}
-        terminal: AgentRuntimeResult | None = None
-        terminal_hash: str | None = None
-        terminal_event_id: str | None = None
-        last_sequence = 0
-        last_event_id: str | None = None
-
-        async def consume(method: str, stream_path: str, *, replay: bool = False) -> None:
-            nonlocal terminal, terminal_hash, terminal_event_id, last_sequence
-            nonlocal last_event_id
-            client = await self._client_for_request()
-            headers = {**self._headers(request), "accept": "text/event-stream"}
-            params: dict[str, Any] | None = None
-            if replay:
-                params = {"after_sequence": last_sequence}
-                if last_event_id:
-                    headers["last-event-id"] = last_event_id
-            kwargs: dict[str, Any] = {"headers": headers}
-            if method == "POST":
-                kwargs["json"] = body
-            if params:
-                kwargs["params"] = params
-            async with client.stream(method, self.base_url + stream_path, **kwargs) as response:
-                if response.status_code >= 400:
-                    try:
-                        failure = await response.aread()
-                        envelope = json.loads(failure)
-                    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-                        envelope = {}
-                    _raise_structured_runtime_error(envelope)
-                response.raise_for_status()
-                async for _name, item in iter_sse(response):
-                    envelope = item["data"]
-                    if not isinstance(envelope, Mapping):
-                        raise RuntimeError("runtime_protocol_error", "Agent runtime returned a malformed event envelope")
-                    event_payload = envelope.get("event") or envelope
-                    if not isinstance(event_payload, Mapping):
-                        raise RuntimeError("runtime_protocol_error", "Agent runtime returned a malformed event")
-                    event = event_from_dict(event_payload)
-                    if event.run_id != request.run_id:
-                        raise RuntimeError("runtime_protocol_error", "Agent runtime returned a mismatched run ID")
-                    if event.contract_version != request.contract_version:
-                        raise RuntimeError("runtime_contract_unsupported", "Agent runtime event contract version is unsupported")
-                    event_hash = hashlib.sha256(json.dumps(event.to_dict(), sort_keys=True, default=str).encode()).hexdigest()
-                    if event.event_id in seen:
-                        if seen[event.event_id] != event_hash:
-                            raise RuntimeError("runtime_protocol_error", "Agent runtime returned conflicting duplicate event IDs")
-                        continue
-                    seen[event.event_id] = event_hash
-                    if event.sequence <= last_sequence:
-                        raise RuntimeError("runtime_protocol_error", "Agent runtime event sequence is not monotonic")
-                    last_sequence = event.sequence
-                    last_event_id = event.event_id
-                    if event_sink is not None:
-                        emit = getattr(event_sink, "emit", None)
-                        if emit is not None:
-                            await self._emit_to_sink(emit, event)
-                        if event.continuation is not None:
-                            persist_binding = getattr(event_sink, "persist_runtime_binding", None)
-                            if persist_binding is not None:
-                                await persist_binding(request.run_id, event.continuation)
-                    if envelope.get("result") is not None:
-                        if not event.terminal:
-                            raise RuntimeError("runtime_protocol_error", "Agent runtime attached a result to a nonterminal event")
-                        if terminal_event_id is not None and event.event_id != terminal_event_id:
-                            raise RuntimeError("runtime_protocol_error", "Agent runtime returned more than one terminal result")
-                        candidate = result_from_dict(envelope["result"])
-                        candidate_hash = hashlib.sha256(json.dumps(candidate.to_dict(), sort_keys=True, default=str).encode()).hexdigest()
-                        if terminal_hash is not None and candidate_hash != terminal_hash:
-                            raise RuntimeError("runtime_protocol_error", "Agent runtime returned conflicting terminal results")
-                        terminal = candidate
-                        terminal_hash = candidate_hash
-                        terminal_event_id = event.event_id
-
-        reconnect_attempts = max(0, int(os.getenv("AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS", "5")))
-        reconnect_backoff = max(0.01, float(os.getenv("AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS", "0.25")))
-        reconnect_deadline = min(
-            self._execution_timeout,
-            max(1.0, float(os.getenv("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS", "30"))),
+    async def resolve_definition(
+        self,
+        definition: AgentDefinition,
+        spec: Mapping[str, Any],
+        *,
+        thread_settings: Mapping[str, Any],
+        request_overrides: Mapping[str, Any],
+        options: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
+        value = await self.transport._json(
+            "POST",
+            "/v1/resolve",
+            json=json_payload({
+                "definition": definition.to_dict(),
+                "spec": safe_json(spec),
+                "thread_settings": safe_json(thread_settings),
+                "request_overrides": safe_json(request_overrides),
+                "options": safe_json(options or {}),
+            }),
         )
-        reconnect_started = asyncio.get_running_loop().time()
-        reconnect_count = 0
-        try:
-            try:
-                await asyncio.wait_for(consume("POST", path), timeout=self._execution_timeout)
-            except httpx.HTTPError:
-                # The runtime may have committed the execution even though
-                # the subscriber connection failed. Fall through to durable
-                # replay before surfacing a transport error.
-                pass
-            while terminal is None:
-                if reconnect_count >= reconnect_attempts or asyncio.get_running_loop().time() - reconnect_started >= reconnect_deadline:
-                    raise RuntimeError("runtime_stream_error", "Agent runtime stream ended before a terminal result", retryable=True)
-                await asyncio.sleep(min(reconnect_backoff * (2 ** reconnect_count), 5.0))
-                reconnect_count += 1
-                try:
-                    await asyncio.wait_for(
-                        consume("GET", f"/v1/runs/{request.run_id}/events", replay=True),
-                        timeout=max(1.0, reconnect_deadline),
-                    )
-                except httpx.HTTPStatusError as exc:
-                    # The initial POST may have been lost before the runtime
-                    # committed its durable record. Retry the same idempotent
-                    # operation once the replay endpoint reports not-found.
-                    if exc.response.status_code == 404 and last_sequence == 0:
-                        await asyncio.wait_for(consume("POST", path), timeout=self._execution_timeout)
-                    else:
-                        raise
-        except RuntimeError:
-            raise
-        except asyncio.TimeoutError as exc:
-            raise RuntimeError("runtime_execution_timeout", "Agent runtime execution timed out", retryable=True) from exc
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("runtime_protocol_error", "Agent runtime returned malformed SSE data") from exc
-        except httpx.TimeoutException as exc:
-            raise RuntimeError.from_exception(exc, code="runtime_stream_timeout", retryable=True, safe_message="Agent runtime stream timed out") from exc
-        except httpx.HTTPError as exc:
-            raise RuntimeError.from_exception(exc, code="runtime_stream_error", retryable=True, safe_message="Agent runtime stream failed") from exc
-        if terminal is None:
-            raise RuntimeError("runtime_protocol_error", "Agent runtime stream ended without a terminal result")
-        return terminal
+        resolved = value.get("resolved_spec")
+        if not isinstance(resolved, Mapping):
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid resolved definition")
+        return dict(resolved)
 
-    @staticmethod
-    async def _emit_to_sink(emit: Any, event: AgentRuntimeEvent) -> None:
-        """Bridge neutral events to the existing legacy SSE sink when needed."""
+    async def builder_catalog(self, definition: AgentDefinition) -> Mapping[str, Any]:
+        value = await self.transport._json(
+            "POST", "/v1/catalog", json=json_payload({"definition": definition.to_dict()})
+        )
+        catalog = value.get("catalog")
+        if not isinstance(catalog, Mapping):
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid builder catalog")
+        return dict(catalog)
 
-        owner = getattr(emit, "__self__", None)
-        emit_runtime_event = getattr(owner, "emit_runtime_event", None)
-        if emit_runtime_event is not None:
-            await emit_runtime_event(event)
-            return
+    async def prompt_preview(self, definition: AgentDefinition, spec: Mapping[str, Any], options: Mapping[str, Any]) -> str:
+        value = await self.transport._json(
+            "POST", "/v1/prompt-preview",
+            json=json_payload({"definition": definition.to_dict(), "spec": safe_json(spec), "options": safe_json(options)}),
+        )
+        prompt = value.get("prompt")
+        if not isinstance(prompt, str):
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid prompt preview")
+        return prompt
 
-        try:
-            parameters = inspect.signature(emit).parameters.values()
-            positional = [
-                parameter
-                for parameter in parameters
-                if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-            ]
-            accepts_varargs = any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters)
-        except (TypeError, ValueError):
-            positional = []
-            accepts_varargs = False
+    async def start(self, request: AgentRuntimeRequest, *, context: RuntimeInvocationContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
+        return await self.transport._stream("/v1/runs/start", request, context=context, payload=None, event_sink=event_sink)
 
-        if accepts_varargs or len(positional) >= 2:
-            await emit(event.kind, dict(event.payload))
-        else:
-            await emit(event)
+    async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: RuntimeInvocationContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
+        return await self.transport._stream(f"/v1/runs/{request.run_id}/resume", request, context=context, payload={"interrupt": safe_json(interrupt)}, event_sink=event_sink)
 
-    async def start(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
-        return await self._stream("/v1/runs/start", request, context=context, payload=None, event_sink=event_sink)
-
-    async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult:
-        return await self._stream("/v1/runs/%s/resume" % request.run_id, request, context=context, payload={"interrupt": _safe_json(interrupt)}, event_sink=event_sink)
-
-    async def continue_run(self, request: AgentRuntimeRequest, *, context: RuntimeExecutionContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult | None:
-        result = await self._stream("/v1/runs/%s/continue" % request.run_id, request, context=context, payload=None, event_sink=event_sink)
-        if result.status == "no_continuation":
-            return None
-        return result
+    async def continue_run(self, request: AgentRuntimeRequest, *, context: RuntimeInvocationContext, event_sink: AgentRuntimeEventSink | None = None) -> AgentRuntimeResult | None:
+        result = await self.transport._stream(
+            f"/v1/runs/{request.run_id}/continue",
+            request,
+            context=context,
+            payload=None,
+            event_sink=event_sink,
+        )
+        return None if result.status == "no_continuation" else result
 
     async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        value = await self._json("POST", "/v1/runs/%s/cancel" % request.run_id, request=request, json={"request": request.to_dict()})
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/cancel", request=request, json=json_payload({"request": request.to_dict()}))
         return dict(value) if isinstance(value, Mapping) else {"result": value}
 
-    async def inspect(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        value = await self._json("POST", "/v1/runs/%s/inspect" % request.run_id, request=request, json={"request": request.to_dict()})
+    async def pause(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/pause", request=request, json=json_payload({"request": request.to_dict()}))
+        return dict(value) if isinstance(value, Mapping) else {"result": value}
+
+    async def submit_course_correction(
+        self,
+        request: AgentRuntimeRequest,
+        correction: RuntimeCourseCorrection,
+    ) -> RuntimeCourseCorrectionReceipt:
+        value = await self.transport._json(
+            "POST",
+            f"/v1/runs/{request.run_id}/course-corrections",
+            request=request,
+            json=json_payload({"request": request.to_dict(), "correction": correction.to_dict()}),
+        )
+        if not isinstance(value, Mapping):
+            raise RuntimeError("runtime_protocol_error", "Runtime returned an invalid correction receipt")
+        return course_correction_receipt_from_dict(value)
+
+    async def inspect_state(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
+        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/inspect", request=request, json=json_payload({"request": request.to_dict()}))
         return dict(value or {}) if isinstance(value, Mapping) else {}
 
-    async def delete_continuation(self, continuation: ContinuationBinding) -> Any:
-        binding_id = str(continuation.payload.get("binding_id") or continuation.payload.get("checkpoint_thread_id") or "")
-        return await self._json("DELETE", "/v1/continuations/%s" % binding_id, json={"continuation": continuation.to_dict()})
+    async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeInvocationContext | None = None) -> list[AgentRuntimeEvent]:
+        projected = []
+        for event in events:
+            value = dict(event)
+            source_metadata = dict(value.get("source_metadata") or {})
+            source_metadata.setdefault("framework", self.framework)
+            source_metadata.setdefault("source_event", str(value.get("kind") or "runtime.event"))
+            source_metadata.setdefault("visualization_id", "langgraph.session")
+            value["source_metadata"] = source_metadata
+            projected.append(event_from_dict(value))
+        return projected
 
-    async def project_trace(self, events: list[Mapping[str, Any]], *, run_id: str, context: RuntimeExecutionContext | None = None) -> list[AgentRuntimeEvent]:
-        return [event_from_dict(event) for event in events]
-
-
-# Compatibility name retained for existing LangGraph callers.
-HttpLangGraphRuntimeAdapter = HttpRuntimeAdapter
+    async def cleanup_run(self, run_id: str) -> Any:
+        value = await self.transport._json("DELETE", f"/v1/runs/{run_id}", json={})
+        try:
+            return RuntimeCleanupResult.from_mapping(value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("runtime_protocol_error", "Agent runtime returned an invalid cleanup result") from exc

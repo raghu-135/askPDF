@@ -30,15 +30,23 @@ from app.db.models_sqlmodel import (
     AgentTaskSubagentRun,
     AgentTaskArtifact,
     AgentTaskEvent,
+    AgentTaskRuntimeDelta,
     AgentTaskCommand,
+    AgentRuntimeOperation,
     Memory,
     MemoryEvent,
     MemoryOverride,
+    EmbeddingJob,
+    DocumentProcessingJob,
+    CanonicalDocument,
+    DocumentSection,
+    DocumentElement,
+    DocumentChunkManifest,
+    DocumentChunk,
     GlobalMemoryRepresentation,
     MemoryScopeActivity,
     MemoryReviewState,
     MemoryManagerIdempotency,
-    EmbeddingJob,
 )
 from app.db.enums import (
     EmbeddingReadinessStatus,
@@ -50,7 +58,6 @@ from app.db.enums import (
 
 # Connection management (SQLModel/PostgreSQL)
 from app.db.connection_sqlmodel import (
-    init_db,
     close_db,
     get_session,
     async_session_maker,
@@ -62,7 +69,7 @@ from app.db.connection_sqlmodel import (
 from app.db.status import get_scoped_indexing_status
 
 # Constants (from file_repo for backward compatibility)
-DEFAULT_SENTENCES_JSON = '{"version": "1.0", "sentences": []}'
+from app.db.repositories.file_repo_sqlmodel import DEFAULT_SENTENCES_JSON
 DEFAULT_FILE_STATUS = {
     "file_hash": "",
     "parsing": {"status": "unknown"},
@@ -131,7 +138,7 @@ def get_agent_workflow_repo():
     """Get the agent workflow repository instance."""
     global _agent_workflow_repo
     if _agent_workflow_repo is None:
-        from app.agent_workflows.repository import AgentWorkflowRepository
+        from app.product_orchestration.repository import AgentWorkflowRepository
         _agent_workflow_repo = AgentWorkflowRepository()
     return _agent_workflow_repo
 
@@ -617,8 +624,13 @@ __all__ = [
     "Memory",
     "MemoryEvent",
     "MemoryOverride",
-    # Config
-    "init_db",
+    "EmbeddingJob",
+    "DocumentProcessingJob",
+    "CanonicalDocument",
+    "DocumentSection",
+    "DocumentElement",
+    "DocumentChunkManifest",
+    "DocumentChunk",
     # Status
     "get_scoped_indexing_status",
     # Constants

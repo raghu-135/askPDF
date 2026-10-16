@@ -11,7 +11,7 @@ from hermes_runtime.execution_store import (
     HermesStoreLoadError,
     request_fingerprint,
 )
-from test_hermes_runtime_integration_pytest import _payload
+from hermes_test_helpers import runtime_payload
 
 
 def _gateway_frame(
@@ -28,7 +28,7 @@ def _gateway_frame(
         "run_id": run_id,
         "sequence": sequence,
         "kind": kind,
-        "payload": {},
+        "payload": {"delta": "chunk"} if kind == "output.delta" else {},
         "terminal": terminal,
     }
     if source_event_id is not None:
@@ -42,6 +42,22 @@ def _gateway_frame(
 def test_missing_hermes_store_is_a_valid_empty_store(tmp_path: Path) -> None:
     store = HermesExecutionStore(str(tmp_path / "missing.json"))
     assert store.records == {}
+
+
+@pytest.mark.parametrize("frame", [
+    "data: not-json\n\n",
+    'id: run:1\nevent: tool.started\ndata: {"event":{"event_id":"run:1","run_id":"run","sequence":1,"kind":"tool.started","payload":{},"terminal":false}}\n\n',
+    'id: wrong\nevent: run.started\ndata: {"event":{"event_id":"run:1","run_id":"run","sequence":1,"kind":"run.started","payload":{},"terminal":false}}\n\n',
+])
+def test_malformed_canonical_frame_never_mutates_journal(tmp_path, frame):
+    path = tmp_path / "events.json"
+    store = HermesExecutionStore(str(path))
+    store.create("run", runtime_payload("run"))
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        store.append("run", frame)
+    assert path.read_bytes() == before
+    assert store.records["run"]["events"] == []
 
 
 @pytest.mark.parametrize("content", ["{not-json", "[]", '{"run-1": "invalid"}'])
@@ -67,9 +83,9 @@ def test_existing_unreadable_hermes_store_fails_closed(tmp_path: Path, monkeypat
         HermesExecutionStore(str(path))
 
 
-def test_legacy_record_is_migrated_with_request_fingerprint(tmp_path: Path) -> None:
+def test_incomplete_record_is_rejected_without_rewriting_the_journal(tmp_path: Path) -> None:
     path = tmp_path / "hermes.json"
-    payload = _payload("legacy-run")
+    payload = runtime_payload("legacy-run")
     path.write_text(
         json.dumps(
             {
@@ -83,18 +99,19 @@ def test_legacy_record_is_migrated_with_request_fingerprint(tmp_path: Path) -> N
         )
     )
 
-    store = HermesExecutionStore(str(path))
-
-    assert store.records["legacy-run"]["request_fingerprint"] == request_fingerprint(payload)
-    persisted = json.loads(path.read_text())
-    assert persisted["legacy-run"]["request_fingerprint"] == request_fingerprint(payload)
+    before = path.read_bytes()
+    with pytest.raises(HermesStoreLoadError):
+        HermesExecutionStore(str(path))
+    assert path.read_bytes() == before
 
 
 def test_reloaded_store_replays_identical_start_and_rejects_conflict(tmp_path: Path) -> None:
     path = tmp_path / "hermes.json"
-    original = _payload("fingerprinted-run")
+    original = runtime_payload("fingerprinted-run")
     store = HermesExecutionStore(str(path))
     created = store.create("fingerprinted-run", original)
+    assert "store_schema_version" not in created
+    assert "event_schema_version" not in created
 
     reloaded = HermesExecutionStore(str(path))
     assert (
@@ -105,6 +122,40 @@ def test_reloaded_store_replays_identical_start_and_rejects_conflict(tmp_path: P
     conflicting["request"]["options"]["llm_model"] = "different-model"
     with pytest.raises(HermesExecutionConflictError):
         reloaded.create("fingerprinted-run", conflicting)
+
+
+def test_refreshed_mcp_grant_is_not_a_semantic_start_conflict(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    original = runtime_payload("grant-run")
+    original["request"]["input"]["mcp_execution_context_token"] = "first.signed-grant"
+    store = HermesExecutionStore(str(path))
+    created = store.create("grant-run", original)
+    refreshed = json.loads(json.dumps(original))
+    refreshed["request"]["input"]["mcp_execution_context_token"] = "second.signed-grant"
+    assert store.create("grant-run", refreshed)["request_fingerprint"] == created["request_fingerprint"]
+
+
+def test_execution_grants_are_not_written_to_the_journal(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    payload = runtime_payload("redacted-run")
+    payload["request"]["input"] = {
+        "question": "hello",
+        "mcp_execution_context_token": "secret.signed-grant",
+        "nested": {"_askpdf_context_token": "another.signed-grant"},
+    }
+    HermesExecutionStore(str(path)).create("redacted-run", payload)
+    raw = path.read_text()
+    assert "secret.signed-grant" not in raw
+    assert "another.signed-grant" not in raw
+    persisted = json.loads(raw)["redacted-run"]["payload"]
+    assert persisted["request"]["input"] == {"question": "hello", "nested": {}}
+
+
+def test_hermes_journal_is_owner_only(tmp_path: Path) -> None:
+    path = tmp_path / "hermes.json"
+    store = HermesExecutionStore(str(path))
+    store.create("protected-run", runtime_payload("protected-run"))
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_hermes_store_preserves_sequence_and_terminal_result_across_reload(tmp_path: Path) -> None:

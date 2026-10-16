@@ -1,0 +1,17 @@
+{
+  "hermes_revision": "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894",
+  "success": [
+    {"event": "message.delta", "delta": "deterministic "},
+    {"event": "tool.started", "tool": "document_evidence", "preview": "querying evidence"},
+    {"event": "tool.completed", "tool": "document_evidence", "duration": 0.01, "error": false},
+    {"event": "reasoning.available", "text": "evidence synthesized"},
+    {"event": "subagent.start", "subagent_id": "child-1", "goal": "verify evidence", "depth": 1},
+    {"event": "subagent.complete", "subagent_id": "child-1", "status": "completed", "summary": "verified", "duration_seconds": 0.02},
+    {"event": "run.completed", "output": "deterministic result from document_evidence", "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}}
+  ],
+  "failure": [{"event": "run.failed", "error": "deterministic upstream failure"}],
+  "cancelled": [{"event": "run.cancelled"}],
+  "approval": [{"event": "approval.request", "command": "safe deterministic command", "choices": ["once", "session", "always", "deny"]}, {"event": "run.completed", "output": "approved"}],
+  "steering": [{"event": "run.steered", "accepted": true}, {"event": "run.completed", "output": "steered"}],
+  "unknown": [{"event": "future.event", "value": "preserved"}, {"event": "run.completed", "output": "future-safe"}]
+}

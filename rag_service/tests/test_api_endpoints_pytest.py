@@ -12,6 +12,8 @@ from typing import Generator
 from unittest.mock import patch, AsyncMock, Mock
 
 import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.api import threads as threads_api
 from app.models.requests import (
@@ -50,7 +52,7 @@ class TestHealthEndpoint:
         assert data["agent_task_worker"] == "running"
         assert "version" in data
 
-    def test_health_check_reports_failed_integrated_worker(self, client):
+    def test_health_check_remains_live_when_integrated_worker_fails(self, client):
         from main import app
 
         app.state.agent_task_worker_status = "failed"
@@ -59,9 +61,37 @@ class TestHealthEndpoint:
         finally:
             app.state.agent_task_worker_status = "running"
 
-        assert response.status_code == 503
-        assert response.json()["status"] == "degraded"
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
         assert response.json()["agent_task_worker"] == "failed"
+
+    def test_product_readiness_requires_worker_and_fresh_runtime_probe(self, client):
+        from main import app
+
+        previous_worker = getattr(app.state, "agent_task_worker_status", None)
+        previous_readiness = getattr(app.state, "runtime_readiness", None)
+        app.state.runtime_readiness = {
+            "checked_at": __import__("time").time(),
+            "runtimes": {"langgraph:langgraph_graph": {"status": "ready"}},
+            "ready": True,
+        }
+        try:
+            app.state.agent_task_worker_status = "failed"
+            response = client.get("/ready")
+            assert response.status_code == 503
+            assert response.json()["agent_task_worker"] == "failed"
+
+            app.state.agent_task_worker_status = "running"
+            response = client.get("/ready")
+            assert response.status_code == 200
+
+            app.state.runtime_readiness["checked_at"] = 0
+            response = client.get("/ready")
+            assert response.status_code == 503
+            assert response.json()["runtime_readiness"]["fresh"] is False
+        finally:
+            app.state.agent_task_worker_status = previous_worker
+            app.state.runtime_readiness = previous_readiness
 
     @pytest.mark.asyncio
     async def test_integrated_worker_completion_marks_unexpected_failure(self):
@@ -453,6 +483,54 @@ class TestThreadEndpoints:
         get_vector_db.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_thread_index_status_repairs_stale_failed_pdf_job(self):
+        """A failed historical job is rechecked and repaired when its version is stale."""
+        thread = SimpleNamespace(id="thread-1", embedding_model="embed-1")
+        file_record = SimpleNamespace(file_hash="file-1", source_type="pdf")
+        db = SimpleNamespace(get_thread_stats=AsyncMock(return_value={"documents": {}}))
+        readiness = {"ready": False, "canonical_ready": True, "source_version": "current-version"}
+
+        with (
+            patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=True),
+            patch("app.services.embedding_tokenizer.resolve_embedding_tokenizer", return_value=(object(), object())),
+            patch("app.api.threads.is_file_accessible_to_thread", new_callable=AsyncMock, return_value=True),
+            patch("app.api.threads.get_file_status", new_callable=AsyncMock, return_value={"indexing_status": {}}),
+            patch("app.api.threads.get_file", new_callable=AsyncMock, return_value=file_record),
+            patch("app.api.threads.get_scoped_indexing_status", return_value={"status": "failed"}),
+            patch("app.services.document_projection_service.evaluate_retrieval_readiness", new_callable=AsyncMock, return_value=readiness),
+            patch("app.services.embedding_materialization_service.ensure_embedding_job", new_callable=AsyncMock) as ensure_job,
+            patch("app.api.threads.get_vector_db", return_value=db),
+        ):
+            data = await threads_api.get_thread_index_status_endpoint("thread-1", file_hash="file-1")
+
+        assert data["status"] == "not_ready"
+        ensure_job.assert_awaited_once_with(
+            resource_type="document",
+            resource_id="file-1",
+            scope_id="thread-1",
+            embedding_model="embed-1",
+            source_version="current-version",
+            requeue_completed=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_thread_index_status_rejects_unattached_file_hash(self):
+        thread = SimpleNamespace(id="thread-1", embedding_model="embed-1")
+        with (
+            patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=True),
+            patch("app.services.embedding_tokenizer.resolve_embedding_tokenizer", return_value=(object(), object())),
+            patch("app.api.threads.is_file_accessible_to_thread", new_callable=AsyncMock, return_value=False),
+            patch("app.services.embedding_materialization_service.ensure_embedding_job", new_callable=AsyncMock) as ensure_job,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await threads_api.get_thread_index_status_endpoint("thread-1", file_hash="foreign-file")
+
+        assert exc.value.status_code == 404
+        ensure_job.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_get_thread_uses_real_stats_when_embedding_model_ready(self):
         """Ready embeddings should keep the existing vector stats path."""
         thread = SimpleNamespace(
@@ -539,6 +617,7 @@ class TestThreadEndpoints:
         data = response.json()
         assert isinstance(data, dict)
         assert data["hitl_web_approval"] is False
+        assert data["hitl_canvas_publish"] is False
         assert data["use_reranker"] is False
 
     def test_get_thread_settings_clamps_legacy_replans(self, client, monkeypatch):
@@ -776,8 +855,15 @@ class TestThreadEndpoints:
         assert {"system_role", "tool_instructions", "custom_instructions"} <= set(data["defaults"])
         assert "reasoning_mode" not in data["defaults"]
 
-    def test_prompt_preview(self, client):
+    def test_prompt_preview(self, client, monkeypatch):
         """Test getting prompt preview."""
+        async def fake_prompt_preview(self, definition, spec, options):
+            return "# Router Node Prompt\n# Final Answer Prompt"
+
+        monkeypatch.setattr(
+            "app.runtime.http_adapter.HttpLangGraphRuntimeAdapter.prompt_preview",
+            fake_prompt_preview,
+        )
         response = client.post(
             "/api/threads/prompt-preview",
             json={
@@ -794,8 +880,15 @@ class TestThreadEndpoints:
         assert "# Router Node Prompt" in data["prompt"]
         assert "# Final Answer Prompt" in data["prompt"]
 
-    def test_prompt_preview_supports_plan_execute_pattern(self, client):
+    def test_prompt_preview_supports_plan_execute_pattern(self, client, monkeypatch):
         """Prompt preview should use selected agent workflow runtime prompts."""
+        async def fake_prompt_preview(self, definition, spec, options):
+            return "# Planner Node Prompt\nexecution_plan"
+
+        monkeypatch.setattr(
+            "app.runtime.http_adapter.HttpLangGraphRuntimeAdapter.prompt_preview",
+            fake_prompt_preview,
+        )
         response = client.post(
             "/api/threads/prompt-preview",
             json={
@@ -812,8 +905,8 @@ class TestThreadEndpoints:
         assert "# Planner Node Prompt" in prompt
         assert "execution_plan" in prompt
 
-    def test_prompt_preview_unknown_pattern_falls_back_to_router(self, client):
-        """Unknown preview pattern IDs should preserve Router default behavior."""
+    def test_prompt_preview_unknown_workflow_is_not_found(self, client):
+        """Unknown workflow IDs must not silently select a different workflow."""
         response = client.post(
             "/api/threads/prompt-preview",
             json={
@@ -822,10 +915,31 @@ class TestThreadEndpoints:
             },
         )
 
-        assert response.status_code == 200
-        prompt = response.json()["prompt"]
-        assert "# Router Node Prompt" in prompt
-        assert "# Planner Node Prompt" not in prompt
+        assert response.status_code == 404
+        assert response.json()["detail"] == {"code": "agent_workflow_not_found"}
+
+    def test_thread_chat_request_rejects_blank_question_and_tiny_context(self):
+        with pytest.raises(ValidationError):
+            ThreadChatRequest(
+                thread_id="thread-1",
+                question="   ",
+                llm_model="test-model",
+                context_window=8192,
+            )
+        with pytest.raises(ValidationError):
+            ThreadChatRequest(
+                thread_id="thread-1",
+                question="hello",
+                llm_model="",
+                context_window=8192,
+            )
+        with pytest.raises(ValidationError):
+            ThreadChatRequest(
+                thread_id="thread-1",
+                question="hello",
+                llm_model="test-model",
+                context_window=100,
+            )
 
     def test_reasoning_mode_removed_from_request_models(self):
         """Reasoning-mode compatibility should not be exposed by API schemas."""

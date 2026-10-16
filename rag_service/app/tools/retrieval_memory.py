@@ -14,7 +14,8 @@ async def search_durable_memory(request: DocumentSearchRequest, context: ToolInv
     try:
         if not context.thread_id:
             return make_tool_result(tool_name=tool_name, content="No thread context found.", context=context, started=started, warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT])
-        from app.models.memory_tools import MEMORY_READ_EFFECTIVE, MAX_MEMORY_CONTEXT_CHARS, MemorySearchInput
+        from app.models.memory_tools import MEMORY_READ_EFFECTIVE, MemorySearchInput
+        from app.services.memory_retrieval_policy import compute_memory_retrieval_budget
         from app.services.memory_tool_service import build_memory_tool_context, search_memory_tool
         memory_context, _thread, _project = await build_memory_tool_context(selected_scope_type="thread", selected_scope_id=context.thread_id, thread_id=context.thread_id, capabilities=[MEMORY_READ_EFFECTIVE])
         prefetched = context.prefetched_durable_memories
@@ -24,10 +25,11 @@ async def search_durable_memory(request: DocumentSearchRequest, context: ToolInv
         if reuse:
             result = {"memories": prefetched, "scopes": context.prefetched_durable_memory_scopes or [], "scope_policy": policy, "retrieval_debug": {**debug, "expanded_search": False, "reused_prefetch": True}}
         else:
-            char_budget = min(
-                int((context.context_window or 32000) * 4),
-                MAX_MEMORY_CONTEXT_CHARS,
-            )
+            char_budget = int(compute_memory_retrieval_budget(
+                context.context_window or 32000,
+                expanded=True,
+                budget=context.context_budget,
+            )["char_budget"])
             result = await search_memory_tool(
                 memory_context,
                 MemorySearchInput(

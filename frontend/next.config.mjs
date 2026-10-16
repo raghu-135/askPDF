@@ -10,13 +10,17 @@ if (!process.env.NEXT_PUBLIC_API_URL?.trim()) {
 const nextConfig = {
   output: 'standalone',
   devIndicators: false,
-  // Enable gzip compression for API responses
-  compress: true,
+  // Gzip buffering collapses live agent SSE into one payload at stream end.
+  compress: false,
   // Optimize package imports for better tree-shaking
   experimental: {
     optimizePackageImports: ['@mui/material', '@mui/icons-material', '@embedpdf/core'],
   },
   transpilePackages: [
+    'reagraph',
+    'three',
+    '@react-three/fiber',
+    '@react-three/drei',
     '@embedpdf/core',
     '@embedpdf/engines',
     '@embedpdf/models',

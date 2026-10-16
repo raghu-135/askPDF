@@ -23,6 +23,28 @@ test('SSE reader handles fragmented blocks and preserves event envelopes', async
   assert.equal(events[1].data.node_id, 'router');
 });
 
+test('SSE reader emits complete events before the stream ends', async () => {
+  const encoder = new TextEncoder();
+  let sendNext;
+  const gate = new Promise((resolve) => { sendNext = resolve; });
+  const events = [];
+  const response = new Response(new ReadableStream({
+    async start(controller) {
+      controller.enqueue(encoder.encode('data: {"id":1,"event":"operation.started","data":{"operation_id":"router","run_id":"run-1"}}\n\n'));
+      await gate;
+      controller.enqueue(encoder.encode('data: {"id":2,"event":"operation.completed","data":{"operation_id":"router","run_id":"run-1"}}\n\n'));
+      controller.close();
+    },
+  }), { status: 200 });
+
+  const done = consumeAgentExecutionStream(response, (event) => events.push(event.event));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(events, ['operation.started']);
+  sendNext();
+  await done;
+  assert.deepEqual(events, ['operation.started', 'operation.completed']);
+});
+
 test('SSE reader rejects unsuccessful responses without retrying', async () => {
   await assert.rejects(
     consumeAgentExecutionStream(new Response('unavailable', { status: 503 }), () => {}),

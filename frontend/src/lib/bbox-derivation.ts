@@ -93,7 +93,14 @@ export function deriveBBoxes(sentence: BackendSentence): BBox[] {
 /**
  * Transform backend sentences to frontend format by deriving bboxes from bbox
  */
-export function transformSentences(backendSentences: BackendSentence[]): Array<Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] }> {
+export function isParsedSentencePayload(sentences: unknown): sentences is BackendSentence[] {
+  return Array.isArray(sentences) && sentences.length > 0;
+}
+
+export function transformSentences(backendSentences: BackendSentence[] | null | undefined): Array<Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] }> {
+  if (!Array.isArray(backendSentences)) {
+    return [];
+  }
   return backendSentences.map(sentence => {
     const { bboxes: _originalBboxes, ...rest } = sentence;
     return {

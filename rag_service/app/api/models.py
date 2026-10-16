@@ -40,9 +40,19 @@ async def is_chat_model_ready_endpoint(model: str):
     try:
         ready = await check_chat_model_ready(model)
         if not ready:
-            return {"model": model, "chat_model_ready": False, "supports_tools": False}
+            return {
+                "model": model,
+                "chat_model_ready": False,
+                "supports_tools": False,
+                "can_invoke_tools": False,
+            }
         supports_tools = await check_model_supports_tools(model)
-        return {"model": model, "chat_model_ready": True, "supports_tools": supports_tools}
+        return {
+            "model": model,
+            "chat_model_ready": True,
+            "supports_tools": supports_tools,
+            "can_invoke_tools": supports_tools,
+        }
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

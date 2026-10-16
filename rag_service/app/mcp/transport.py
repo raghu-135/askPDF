@@ -120,7 +120,7 @@ class LoopbackHTTPMCPClient:
     """SDK streamable HTTP ClientSession for the internal endpoint."""
 
     def __init__(self, url: str | None = None, http_client: Any = None):
-        self.url = url or os.getenv("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
+        self.url = url or os.getenv("MCP_LOOPBACK_URL", "")
         self.http_client = http_client
 
     @property

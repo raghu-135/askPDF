@@ -6,8 +6,7 @@ from app.agent.tool_registry import (
     list_tool_contract_metadata,
     validate_tool_call_allowed,
 )
-from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.agent_workflows.validator import WorkflowValidator
+from app.product_orchestration.builtin_workflows import load_builtin_workflows
 
 
 def _builtin_spec(builtin_key: str):
@@ -15,6 +14,17 @@ def _builtin_spec(builtin_key: str):
         if workflow.get("builtin_key") == builtin_key:
             return workflow["spec_json"]
     raise AssertionError(f"Missing builtin workflow fixture: {builtin_key}")
+
+
+def test_search_and_read_context_prompts_expand_omitted_sources():
+    search = TOOL_FRIENDLY_CONFIG["search_knowledge"]["default_prompt"]
+    read = TOOL_FRIENDLY_CONFIG["read_context"]["default_prompt"]
+    assert "tool_response_truncated" in search
+    assert "read_context" in search
+    assert "omitted" in search
+    assert "Do not repeat a similar search_knowledge" in search
+    assert "omitted catalog ids" in read
+    assert "expansion=table" in read
 
 
 def test_tool_contract_metadata_covers_user_facing_tool_ids():
@@ -34,15 +44,15 @@ def test_router_rag_allowed_tool_ids_are_contract_ids():
 
 
 def test_tool_contract_metadata_exposes_graph_integration_fields():
-    document_contract = get_tool_contract_metadata("search_documents")
+    document_contract = get_tool_contract_metadata("search_knowledge")
     memory_contract = get_tool_contract_metadata("search_durable_memory")
     web_contract = get_tool_contract_metadata("search_web")
     records = list_tool_contract_metadata()
 
-    assert document_contract["id"] == "document_evidence"
+    assert document_contract["id"] == "document_search_knowledge"
     assert document_contract["category"] == "retrieval"
     assert document_contract["allowed_caller_nodes"] == ["retrieval_worker", "deep_research_subagent"]
-    assert document_contract["artifact_keys"] == ["document_sources", "web_sources"]
+    assert document_contract["artifact_keys"] == ["matches", "readiness", "continuation"]
     assert "missing_thread_context" in document_contract["warning_codes"]
 
     assert memory_contract["id"] == "durable_memory"
@@ -58,19 +68,8 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
     assert web_contract["allowed_caller_nodes"] == ["web_worker", "deep_research_subagent"]
     assert "web_search_disabled" in web_contract["warning_codes"]
 
-    assert any(record["tool_name"] == "search_documents" and record["display_name"] == "Document Evidence" for record in records)
+    assert any(record["tool_name"] == "search_knowledge" and record["display_name"] == "Search Knowledge" for record in records)
     assert records == sorted(records, key=lambda record: record["tool_name"])
-
-
-def test_workflow_validator_accepts_external_contract_ids():
-    spec = _builtin_spec("router_rag_agent")
-    spec["config"]["allowed_tool_ids"] = [
-        *spec["config"]["allowed_tool_ids"],
-        "wikipedia_reference",
-        "semantic_scholar_research",
-    ]
-
-    assert WorkflowValidator().validate(spec) == {"valid": True, "errors": []}
 
 
 def test_tool_contract_records_are_schema_like():
@@ -90,17 +89,35 @@ def test_tool_contract_records_are_schema_like():
 
 
 def test_tool_call_validation_enforces_allowed_caller_nodes():
-    validate_tool_call_allowed("search_documents", "retrieval_worker")
+    validate_tool_call_allowed("search_knowledge", "retrieval_worker")
     validate_tool_call_allowed("search_thread_conversation_history", "thread_conversation_history_worker")
     validate_tool_call_allowed("search_durable_memory", "durable_memory_worker")
     validate_tool_call_allowed("search_thread_events", "thread_events_worker")
     validate_tool_call_allowed("search_web", "web_worker")
-    validate_tool_call_allowed("search_documents", "deep_research_subagent")
+    validate_tool_call_allowed("search_knowledge", "deep_research_subagent")
+    validate_tool_call_allowed("publish_canvas", "synthesizer")
+    validate_tool_call_allowed("publish_canvas", "direct_answer")
+    validate_tool_call_allowed("publish_canvas", "answer_reviser")
+    validate_tool_call_allowed("publish_canvas", "deep_task_synthesizer")
 
     try:
-        validate_tool_call_allowed("search_documents", "thread_conversation_history_worker")
+        validate_tool_call_allowed("publish_canvas", "retrieval_worker")
     except ValueError as exc:
-        assert "search_documents is not allowed from caller node thread_conversation_history_worker" in str(exc)
+        assert "publish_canvas is not allowed from caller node retrieval_worker" in str(exc)
+    else:
+        raise AssertionError("Expected disallowed caller node to raise")
+
+    try:
+        validate_tool_call_allowed("publish_canvas", "deep_research_subagent")
+    except ValueError as exc:
+        assert "publish_canvas is not allowed from caller node deep_research_subagent" in str(exc)
+    else:
+        raise AssertionError("Expected disallowed caller node to raise")
+
+    try:
+        validate_tool_call_allowed("search_knowledge", "thread_conversation_history_worker")
+    except ValueError as exc:
+        assert "search_knowledge is not allowed from caller node thread_conversation_history_worker" in str(exc)
         assert "retrieval_worker" in str(exc)
     else:
         raise AssertionError("Expected disallowed caller node to raise")
@@ -120,11 +137,11 @@ def test_tool_contracts_endpoint(api_client):
     tools = response.json()["tools"]
     by_name = {tool["tool_name"]: tool for tool in tools}
 
-    assert by_name["search_documents"]["id"] == "document_evidence"
-    assert by_name["search_documents"]["display_name"] == "Document Evidence"
-    assert by_name["search_documents"]["allowed_caller_nodes"] == ["retrieval_worker", "deep_research_subagent"]
-    assert by_name["search_documents"]["artifact_keys"] == ["document_sources", "web_sources"]
-    assert "missing_thread_context" in by_name["search_documents"]["warning_codes"]
+    assert by_name["search_knowledge"]["id"] == "document_search_knowledge"
+    assert by_name["search_knowledge"]["display_name"] == "Search Knowledge"
+    assert by_name["search_knowledge"]["allowed_caller_nodes"] == ["retrieval_worker", "deep_research_subagent"]
+    assert by_name["search_knowledge"]["artifact_keys"] == ["matches", "readiness", "continuation"]
+    assert "missing_thread_context" in by_name["search_knowledge"]["warning_codes"]
     assert by_name["search_durable_memory"]["id"] == "durable_memory"
     assert by_name["search_durable_memory"]["allowed_caller_nodes"] == ["durable_memory_worker", "deep_research_subagent"]
     assert by_name["search_web"]["category"] == "web"

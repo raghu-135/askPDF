@@ -63,8 +63,12 @@ export function getChatComposerState(input: ChatComposerStateInput): ChatCompose
     return locked(ChatComposerStatus.EmbeddingChecking, 'Checking embedding model...', true);
   }
 
-  if (input.isEmbeddingModelValid === false || input.indexingStatus === ChatComposerIndexingStatus.Blocked) {
-    return locked(ChatComposerStatus.EmbeddingUnavailable, 'Blocked: this project’s embedding model is unavailable on the server.');
+  if (input.isEmbeddingModelValid === false) {
+    return locked(ChatComposerStatus.EmbeddingUnavailable, 'Blocked: this project’s embedding model is unavailable.');
+  }
+
+  if (input.indexingStatus === ChatComposerIndexingStatus.Blocked) {
+    return locked(ChatComposerStatus.EmbeddingUnavailable, 'Blocked: document indexing is not ready.');
   }
 
   if (input.indexingStatus === ChatComposerIndexingStatus.Error) {

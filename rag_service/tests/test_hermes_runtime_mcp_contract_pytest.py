@@ -1,16 +1,151 @@
 import os
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from hermes_runtime.api import create_app
+from fastapi import HTTPException
+
+from hermes_runtime.api import (
+    _error,
+    _failed_runtime_result,
+    _HermesEventBudget,
+    _runtime_usage_snapshot,
+    _terminal_error,
+    _upstream_timeout,
+    create_app,
+)
+
+
+@pytest.fixture(autouse=True)
+def hermes_runtime_configuration(monkeypatch):
+    """Give direct Hermes app tests the same strict config as the image."""
+
+    values = {
+        "HERMES_RUNTIME_TOKEN": "test-hermes-runtime-token-32-characters",
+        "HERMES_API_TOKEN": "test-hermes-api-token-32-characters",
+        "ASKPDF_MCP_URL": "http://rag-service:8000/internal/mcp/",
+        "ASKPDF_MCP_HEALTH_URL": "http://rag-service:8000/health",
+        "ASKPDF_MCP_REQUIRED": "false",
+        "HERMES_API_URL": "http://hermes.test",
+        "MCP_EXECUTION_CONTEXT_SECRET": "test-mcp-execution-context-secret-32-characters",
+        "HERMES_MODEL_CONTEXT_LENGTH": "64000",
+        "HERMES_RUNTIME_VERSION": "test",
+        "HERMES_RUN_PROFILE_MAX_AGE_SECONDS": "86400",
+        "HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS": "60",
+        "HERMES_UPSTREAM_REVISION": "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894",
+        "HERMES_RUNTIME_STATE_PATH": "/tmp/hermes-runtime-state.json",
+        "HERMES_RUNTIME_STORAGE_BACKEND": "file",
+        "HERMES_PROFILE_ROOT": "/tmp/hermes-profiles",
+        "HERMES_PROFILE_UID": "10000",
+        "HERMES_PROFILE_GID": "10000",
+        "HERMES_RUNTIME_WORKERS": "1",
+        "MCP_TRANSPORT": "loopback_http",
+        "MCP_LOOPBACK_URL": "http://rag-service:8000/internal/mcp/",
+        "LLM_API_URL": "http://127.0.0.1:1234/v1",
+        "MCP_REQUEST_TIMEOUT_SECONDS": "120",
+        "MCP_OTEL_ENABLED": "false",
+        "NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS": "2000",
+        "NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS": "2000",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    for name, value in {
+        "AGENT_RUNTIME_LEASE_SECONDS": "120",
+        "AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS": "30",
+        "AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS": "300",
+        "AGENT_RUNTIME_READ_TIMEOUT_SECONDS": "600",
+        "AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS": "10",
+        "AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS": "1",
+        "AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS": "600",
+        "AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS": "0.5",
+        "AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES": "8192",
+        "AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS": "120",
+        "AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS": "120",
+        "AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS": "120",
+        "AGENT_EVENT_POLL_INTERVAL_SECONDS": "1",
+        "AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS": "12",
+        "AGENT_CANCELLATION_POLL_INTERVAL_SECONDS": "0.5",
+        "AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS": "30",
+        "AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS": "60",
+        "AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS": "180",
+        "AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO": "0.1",
+        "AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS": "30",
+        "AGENT_RUNTIME_RECOVERY_BATCH_SIZE": "100",
+    }.items():
+        monkeypatch.setenv(name, value)
+    for suffix in (
+        "MAX_MODEL_CALLS", "MAX_MODEL_TOKENS", "MAX_TOOL_CALLS", "MAX_ACTIVE_RUNTIME_MS",
+        "MAX_DURATION_MS", "MAX_OUTPUT_CHARS", "MAX_EVENT_COUNT",
+    ):
+        monkeypatch.setenv(f"DEEP_AGENT_HERMES_{suffix}", "100")
+
+
+@pytest.mark.parametrize("authorization", [None, "", "raw-token", "Basic wrong", "bearer wrong", "Bearer wrong", "Bearer  wrong"])
+def test_hermes_runtime_rejects_noncanonical_or_wrong_service_credentials(authorization):
+    client = TestClient(create_app())
+    headers = {"authorization": authorization} if authorization is not None else {}
+    response = client.get("/v1/capabilities", headers=headers)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "runtime_unauthorized"
+
+
+def test_hermes_runtime_accepts_its_exact_service_credential():
+    client = TestClient(create_app())
+    response = client.get(
+        "/v1/capabilities",
+        headers={"authorization": "Bearer test-hermes-runtime-token-32-characters"},
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/v1/capabilities"),
+        ("POST", "/v1/validate"),
+        ("POST", "/v1/runs/start"),
+        ("GET", "/v1/runs/run-1/events"),
+        ("POST", "/v1/runs/run-1/inspect"),
+        ("POST", "/v1/runs/run-1/approval"),
+        ("POST", "/v1/runs/run-1/cancel"),
+    ],
+)
+def test_hermes_runtime_protects_every_operation_family(method, path):
+    response = TestClient(create_app()).request(method, path)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "runtime_unauthorized"
+
+
+@pytest.mark.parametrize(
+    "foreign_token",
+    [
+        "langgraph-runtime-boundary-token-012345678901234567",
+        "hermes-upstream-boundary-token-012345678901234567",
+        "mcp-execution-context-secret-012345678901234567",
+        "langgraph-binding-secret-0123456789012345678901",
+    ],
+)
+def test_hermes_runtime_rejects_every_foreign_boundary_credential(foreign_token):
+    response = TestClient(create_app()).get(
+        "/v1/capabilities",
+        headers={"authorization": f"Bearer {foreign_token}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "runtime_unauthorized"
+
+
+@pytest.mark.parametrize("path", ["/healthz", "/readyz"])
+def test_hermes_operational_health_does_not_require_authentication(path):
+    client = TestClient(create_app())
+    assert client.get(path).status_code != 401
 
 
 def _payload(allowed_tools):
     return {
         "definition": {"framework": "hermes", "builder_id": "hermes_agent"},
         "spec": {
-            "schema_version": 2,
+            "schema_version": 1,
             "config": {
                 "mcp_server": "askpdf",
                 "allowed_tool_ids": allowed_tools,
@@ -20,29 +155,116 @@ def _payload(allowed_tools):
     }
 
 
-def test_hermes_accepts_allowlisted_mcp_document_tool(monkeypatch):
+def test_hermes_reports_frozen_profile_tool_allowlist(monkeypatch):
     monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
-    monkeypatch.setenv("HERMES_MCP_ALLOWED_TOOLS", "document_evidence,clarify_intent")
-    with TestClient(create_app()) as client:
-        response = client.post("/v1/validate", json=_payload(["document_evidence"]))
+    with TestClient(create_app(require_auth=False)) as client:
+        response = client.post("/v1/validate", json=_payload(["search_documents", "get_thread_shape"]))
     assert response.status_code == 200
-    assert response.json()["result"]["validation"]["valid"] is True
-
-
-def test_hermes_rejects_tool_outside_allowlist(monkeypatch):
-    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
-    monkeypatch.setenv("HERMES_MCP_ALLOWED_TOOLS", "document_evidence")
-    with TestClient(create_app()) as client:
-        response = client.post("/v1/validate", json=_payload(["admin_delete_everything"]))
     validation = response.json()["result"]["validation"]
-    assert validation["valid"] is False
-    assert any(issue["code"] == "unsupported_tool_allowlist" for issue in validation["issues"])
+    assert validation["valid"] is True
+    assert validation["runtime_metadata"]["allowed_tool_ids"] == ["get_thread_shape", "search_documents"]
 
 
-def test_phase7_runner_enables_and_guards_every_integration_proof_command():
+def test_environment_cannot_override_frozen_profile_tool_allowlist(monkeypatch):
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_MCP_ALLOWED_TOOLS", "admin_delete_everything")
+    with TestClient(create_app(require_auth=False)) as client:
+        response = client.post("/v1/validate", json=_payload(["search_documents"]))
+    validation = response.json()["result"]["validation"]
+    assert validation["valid"] is True
+    assert validation["runtime_metadata"]["allowed_tool_ids"] == ["search_documents"]
+
+
+def test_stream_idle_timeout_is_independent_of_research_time_budget(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_READ_TIMEOUT_SECONDS", "30")
+
+    assert _upstream_timeout().read == 30
+
+
+def test_runtime_errors_preserve_safe_message_and_sanitized_details():
+    error = _error(
+        "hermes_upstream_timeout",
+        "Hermes did not produce an event before the task execution timeout",
+        retryable=True,
+        details={"phase": "event_stream", "error_type": "ReadTimeout"},
+    )
+
+    assert error["safe_message"]
+    assert error["details"] == {"phase": "event_stream", "error_type": "ReadTimeout"}
+
+
+def test_message_deltas_use_output_budget_not_lifecycle_event_budget():
+    budget = _HermesEventBudget(max_lifecycle_events=2, max_output_chars=1_000)
+
+    for _ in range(300):
+        budget.observe("output.delta", "abc")
+    budget.observe("tool.started")
+    budget.observe("run.completed")
+
+    assert budget.details() == {
+        "lifecycle_event_count": 2,
+        "output_char_count": 900,
+        "raw_frame_count": 302,
+    }
+
+
+def test_empty_delta_flood_still_consumes_lifecycle_budget():
+    budget = _HermesEventBudget(max_lifecycle_events=2, max_output_chars=100)
+
+    budget.observe("output.delta", "")
+    budget.observe("output.delta", "")
+    with pytest.raises(HTTPException, match="lifecycle"):
+        budget.observe("output.delta", "")
+
+
+def test_terminal_usage_counts_unique_tools_and_preserves_measurement_completeness():
+    usage = _runtime_usage_snapshot(
+        {"input_tokens": 12, "output_tokens": 8},
+        operation_id="operation-1",
+        started_tool_calls={"call-1", "call-2"},
+        active_runtime_ms=345,
+    )
+
+    assert usage == {
+        "operation_id": "operation-1",
+        "model_tokens": 20,
+        "model_calls": None,
+        "tool_calls": 2,
+        "active_runtime_ms": 345,
+        "measured_dimensions": ("tool_calls", "active_runtime_ms", "model_tokens"),
+        "cumulative": True,
+    }
+
+
+def test_hermes_runtime_runner_enables_and_guards_every_integration_proof_command():
     repository = Path(os.getenv("ASKPDF_REPO_DIR", "/workspace"))
     script = (repository / "run_tests.sh").read_text()
-    phase7 = script.split('if [ "${RUN_PHASE7:-0}" = "1" ]; then', 1)[1].split("\nfi", 1)[0]
+    hermes_runtime = script.split('if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then', 1)[1].split("\nfi", 1)[0]
 
-    assert phase7.count("-e PHASE7_HERMES_INTEGRATION=true") == 3
-    assert phase7.count("-e ASKPDF_FAIL_IF_ALL_SKIPPED=true") == 3
+    assert hermes_runtime.count("-e HERMES_RUNTIME_INTEGRATION=true") == 2
+    assert hermes_runtime.count("-e ASKPDF_FAIL_IF_ALL_SKIPPED=true") == 2
+    assert "hermes-fake" not in hermes_runtime
+    assert "test_real_hermes_container_smoke_pytest.py" in hermes_runtime
+    assert " hermes hermes-runtime" in hermes_runtime
+    assert "http://127.0.0.1:8000/health" in hermes_runtime
+    assert "http://127.0.0.1:8200/readyz" in hermes_runtime
+    assert "hermes hermes-runtime hermes-config-init" in (repository / "run_tests.sh").read_text()
+
+
+def test_failed_runtime_result_includes_task_orchestration_delta():
+    result = _failed_runtime_result(
+        {"code": "hermes_upstream_protocol_error", "message": "closed"},
+        None,
+        run_id="run-1",
+    )
+    assert result["status"] == "failed"
+    assert result["orchestration_delta"]["result"]["status"] == "failed"
+    assert result["orchestration_delta"]["pending_interrupt"] == {"operation": "clear"}
+
+
+def test_terminal_error_normalizes_upstream_strings():
+    assert _terminal_error(None) is None
+    structured = _terminal_error({"code": "already_structured", "safe_message": "kept"})
+    assert structured["code"] == "already_structured"
+    wrapped = _terminal_error("deterministic upstream failure")
+    assert wrapped == _error("hermes_upstream_error", "deterministic upstream failure")

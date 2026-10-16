@@ -389,6 +389,8 @@ class TestCollectionNamingEdgeCases:
             ("model\nwith\nnewlines", "model_with_newlines"),
             ("model\twith\ttabs", "model_with_tabs"),
             ("model\rwith\rcarriage", "model_with_carriage"),
+            ("BAAI/bge-m3", "baai_bge_m3"),
+            ("baai/bge-m3", "baai_bge_m3"),
         ]
         
         for input_name, expected in test_cases:

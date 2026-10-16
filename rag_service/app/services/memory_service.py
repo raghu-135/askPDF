@@ -23,9 +23,8 @@ from app.db.vector import get_vector_db
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.models_sqlmodel import GlobalMemoryRepresentation
 from sqlalchemy.future import select
-from app.models.llm_server_client import get_embedding_model
+from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_embedding_model
 from app.models.memory_tools import normalize_memory_attributes
-from app.models.memory_limits import MAX_MEMORY_CONTEXT_CHARS
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z
 from app.services.embedding_model_service import (
@@ -41,6 +40,7 @@ from app.services.effective_memory_service import (
 from app.services.memory_retrieval_policy import (
     DEFAULT_RELATIVE_SCORE_RATIO,
     NEAR_DUPLICATE_TOKEN_SIMILARITY,
+    compute_memory_retrieval_budget,
     memory_is_applicable,
     memory_score_floor,
     pack_memory_results,
@@ -374,6 +374,13 @@ async def search_thread_memory(
             continue
         seen_hashes.add(item.get("content_hash"))
         memories.append(item)
+    if char_budget is None:
+        settings = getattr(context.thread, "settings", None)
+        window = settings.get("context_window") if isinstance(settings, dict) else None
+        if not isinstance(window, int) or window <= 0:
+            window = DEFAULT_TOKEN_BUDGET
+        char_budget = int(compute_memory_retrieval_budget(window)["char_budget"])
+
     kind_priority = {"instruction": 0, "constraint": 1, "preference": 2, "decision": 3, "profile": 4, "fact": 5}
     def recency_rank(item: Dict[str, Any]) -> float:
         if (item.get("attributes") or {}).get("durability") != "time_sensitive":
@@ -391,7 +398,7 @@ async def search_thread_memory(
     ))
     for item in memories:
         item.pop("content_hash", None)
-    packed, packed_chars = pack_memory_results(memories, char_budget or MAX_MEMORY_CONTEXT_CHARS)
+    packed, packed_chars = pack_memory_results(memories, char_budget)
     rejected_count = sum(rejection_reasons.values()) + max(0, len(memories) - len(packed))
     elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
     return {
@@ -404,7 +411,7 @@ async def search_thread_memory(
         "precedence": ["thread", "project", "user"],
         "representation_issues": representation_issues,
         "retrieval_debug": {
-            "budget_chars": int(char_budget or MAX_MEMORY_CONTEXT_CHARS),
+            "budget_chars": int(char_budget),
             "candidate_limit": max_results,
             "candidate_count": len(hits),
             "candidates_retrieved": len(hits),

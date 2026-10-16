@@ -5,20 +5,16 @@ from __future__ import annotations
 from typing import Dict
 
 from app.runtime.adapter import AgentRuntimeAdapter
-from app.runtime.contracts import AgentDefinition
-from app.runtime.mode import AgentRuntimeMode, agent_runtime_mode
+from app.runtime.hermes_config import hermes_runtime_enabled
+from runtime_protocol.contracts import AgentDefinition
 
 
 def _default_langgraph_adapter() -> AgentRuntimeAdapter:
-    """Select transport at process startup while retaining an emergency fallback."""
+    """Return the only supported LangGraph execution transport."""
 
-    if agent_runtime_mode() is AgentRuntimeMode.EXTERNAL:
-        from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
+    from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
 
-        return HttpLangGraphRuntimeAdapter()
-    from app.runtime.langgraph_adapter import LangGraphRuntimeAdapter
-
-    return LangGraphRuntimeAdapter()
+    return HttpLangGraphRuntimeAdapter()
 
 
 def _default_hermes_adapter() -> AgentRuntimeAdapter:
@@ -43,7 +39,8 @@ class RuntimeRegistry:
             return
         self._initialized = True
         self.register(_default_langgraph_adapter())
-        self.register(_default_hermes_adapter())
+        if hermes_runtime_enabled():
+            self.register(_default_hermes_adapter())
 
     def initialize(self) -> None:
         """Resolve and import the configured adapters during application startup."""
@@ -51,6 +48,26 @@ class RuntimeRegistry:
 
     def register(self, adapter: AgentRuntimeAdapter) -> None:
         self._adapters[(adapter.framework, adapter.builder_id)] = adapter
+
+    @staticmethod
+    def deployment_id(adapter: AgentRuntimeAdapter) -> str:
+        return f"{adapter.framework}:{adapter.builder_id}"
+
+    def adapters(self) -> list[AgentRuntimeAdapter]:
+        """Return registered adapters in deterministic deployment order."""
+
+        self._ensure_defaults()
+        return [
+            self._adapters[key]
+            for key in sorted(self._adapters)
+        ]
+
+    def get_deployment(self, deployment_id: str) -> AgentRuntimeAdapter | None:
+        self._ensure_defaults()
+        for adapter in self._adapters.values():
+            if self.deployment_id(adapter) == deployment_id:
+                return adapter
+        return None
 
     def get(self, definition: AgentDefinition) -> AgentRuntimeAdapter:
         self._ensure_defaults()

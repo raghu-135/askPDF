@@ -1,6 +1,10 @@
 """Deterministic OpenAI-compatible provider for external runtime CI."""
 
+import asyncio
+import json
+
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 
 app = FastAPI()
 
@@ -10,8 +14,9 @@ async def models():
     return {
         "object": "list",
         "data": [
-            {"id": "phase5-deterministic", "object": "model"},
-            {"id": "phase5-deterministic-embedding", "object": "model"},
+            {"id": "external_runtime-deterministic", "object": "model"},
+            {"id": "external_runtime-deterministic-embedding", "object": "model"},
+            {"id": "hermes-runtime-deterministic-hermes", "object": "model"},
         ],
     }
 
@@ -30,7 +35,7 @@ async def embeddings(payload: dict):
         data.append({"object": "embedding", "index": index, "embedding": vector})
     return {
         "object": "list",
-        "model": payload.get("model") or "phase5-deterministic-embedding",
+        "model": payload.get("model") or "external_runtime-deterministic-embedding",
         "data": data,
         "usage": {"prompt_tokens": 1, "total_tokens": 1},
     }
@@ -48,10 +53,53 @@ async def completions(payload: dict):
         content = '{"pass":true,"reason":"Deterministic answer accepted.","issues":[]}'
     elif "clarif" in question.lower():
         content = "Deterministic clarification response."
-    return {
-        "id": "phase5-deterministic-response",
+    response = {
+        "id": "external_runtime-deterministic-response",
         "object": "chat.completion",
-        "model": payload.get("model") or "phase5-deterministic",
+        "model": payload.get("model") or "external_runtime-deterministic",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
+    if payload.get("tool_choice") == "required" and payload.get("tools"):
+        function = payload["tools"][0].get("function") or {}
+        response["choices"][0]["message"] = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "external-runtime-tool-probe",
+                "type": "function",
+                "function": {"name": function.get("name"), "arguments": "{}"},
+            }],
+        }
+        response["choices"][0]["finish_reason"] = "tool_calls"
+    if not payload.get("stream"):
+        return response
+
+    async def chunks():
+        words = content.split(" ")
+        slow = "continue until stopped" in question.lower()
+        for index, word in enumerate(words):
+            chunk = {
+                "id": response["id"],
+                "object": "chat.completion.chunk",
+                "model": response["model"],
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": (("" if index == 0 else " ") + word)},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+            if slow:
+                await asyncio.sleep(1)
+        final = {
+            "id": response["id"],
+            "object": "chat.completion.chunk",
+            "model": response["model"],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(final)}\n\ndata: [DONE]\n\n"
+
+    return StreamingResponse(chunks(), media_type="text/event-stream")

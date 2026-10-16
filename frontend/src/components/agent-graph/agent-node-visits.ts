@@ -1,4 +1,4 @@
-import type { TraceNodeView } from '../agent-debug/agent-trace-projection';
+import type { TraceOperationView } from '../agent-debug/agent-trace-projection';
 import type { AgentGraphEdge, AgentGraphNode, AgentNodeVisitRef } from './agent-graph-types';
 
 export const normalizeVisitIndex = (value: unknown): number => {
@@ -7,37 +7,37 @@ export const normalizeVisitIndex = (value: unknown): number => {
 };
 
 export const toAgentNodeVisitRef = (
-  node: Pick<TraceNodeView, 'id' | 'visitIndex'>,
+  node: Pick<TraceOperationView, 'id' | 'visitIndex'>,
 ): AgentNodeVisitRef => ({
   nodeId: node.id,
   visitIndex: normalizeVisitIndex(node.visitIndex),
 });
 
 export const agentNodeVisitKey = (
-  visit: AgentNodeVisitRef | Pick<TraceNodeView, 'id' | 'visitIndex'>,
+  visit: AgentNodeVisitRef | Pick<TraceOperationView, 'id' | 'visitIndex'>,
 ): string => {
   const nodeId = 'nodeId' in visit ? visit.nodeId : visit.id;
   return `${nodeId}:${normalizeVisitIndex(visit.visitIndex)}`;
 };
 
 export const getChronologicalNodeVisits = (
-  nodes: readonly TraceNodeView[],
+  nodes: readonly TraceOperationView[],
   nodeId: string,
-): TraceNodeView[] => nodes.filter((node) => node.id === nodeId);
+): TraceOperationView[] => nodes.filter((node) => node.id === nodeId);
 
 export const getLatestNodeVisit = (
-  nodes: readonly TraceNodeView[],
+  nodes: readonly TraceOperationView[],
   nodeId: string,
-): TraceNodeView | undefined => {
+): TraceOperationView | undefined => {
   const visits = getChronologicalNodeVisits(nodes, nodeId);
   return visits[visits.length - 1];
 };
 
 const getAdjacentNodeVisit = (
-  nodes: readonly TraceNodeView[],
+  nodes: readonly TraceOperationView[],
   selected: AgentNodeVisitRef,
   offset: -1 | 1,
-): TraceNodeView | undefined => {
+): TraceOperationView | undefined => {
   const visits = getChronologicalNodeVisits(nodes, selected.nodeId);
   const selectedKey = agentNodeVisitKey(selected);
   const selectedPosition = visits.findIndex((visit) => agentNodeVisitKey(visit) === selectedKey);
@@ -46,21 +46,21 @@ const getAdjacentNodeVisit = (
 };
 
 export const getPreviousNodeVisit = (
-  nodes: readonly TraceNodeView[],
+  nodes: readonly TraceOperationView[],
   selected: AgentNodeVisitRef,
-): TraceNodeView | undefined => getAdjacentNodeVisit(nodes, selected, -1);
+): TraceOperationView | undefined => getAdjacentNodeVisit(nodes, selected, -1);
 
 export const getNextNodeVisit = (
-  nodes: readonly TraceNodeView[],
+  nodes: readonly TraceOperationView[],
   selected: AgentNodeVisitRef,
-): TraceNodeView | undefined => getAdjacentNodeVisit(nodes, selected, 1);
+): TraceOperationView | undefined => getAdjacentNodeVisit(nodes, selected, 1);
 
 const nonEmptyString = (value: unknown): string | undefined => (
   typeof value === 'string' && value.length > 0 ? value : undefined
 );
 
 /** Returns the route chosen by this invocation, including evaluator-specific routes. */
-export const getNodeVisitRoute = (node: TraceNodeView | undefined): string | undefined => {
+export const getNodeVisitRoute = (node: TraceOperationView | undefined): string | undefined => {
   if (!node) return undefined;
   const raw = node.raw || {};
   const detail = raw.detail && typeof raw.detail === 'object' ? raw.detail : {};
@@ -75,7 +75,7 @@ export const getNodeVisitRoute = (node: TraceNodeView | undefined): string | und
 /** Applies only the selected invocation to its logical node and outgoing route. */
 export const applySelectedVisitOverlay = <T extends { nodes: AgentGraphNode[]; edges: AgentGraphEdge[] }>(
   graph: T,
-  traceNodes: readonly TraceNodeView[],
+  traceNodes: readonly TraceOperationView[],
   selected: AgentNodeVisitRef | null | undefined,
 ): T => {
   if (!selected) return graph;

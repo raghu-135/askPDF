@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 def mcp_request_timeout_seconds() -> float:
     # Retrieval and document parsing can legitimately take longer than the
     # HTTP client's short default, especially on a cold local-model start.
-    raw = os.getenv("MCP_REQUEST_TIMEOUT_SECONDS", "120").strip()
+    raw = os.getenv("MCP_REQUEST_TIMEOUT_SECONDS", "").strip()
     try:
         value = float(raw)
     except ValueError as exc:
@@ -23,7 +23,7 @@ def mcp_request_timeout_seconds() -> float:
 
 
 def mcp_transport() -> str:
-    value = os.getenv("MCP_TRANSPORT", "in_process").strip().lower()
+    value = os.getenv("MCP_TRANSPORT", "").strip().lower()
     if value not in {"in_process", "loopback_http"}:
         raise RuntimeError(
             f"Invalid MCP_TRANSPORT={value!r}; expected 'in_process' or 'loopback_http'"

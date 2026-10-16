@@ -122,9 +122,9 @@ async def get_active_tab_via_cdp():
                 logger.info(f"Fallback to tab: {url} - {tab.get('title')}")
                 return tab
         
-        # Last resort - first tab
-        logger.warning(f"Using first available tab: {tabs[0].get('url')} - {tabs[0].get('title')}")
-        return tabs[0]
+        raise Exception(
+            "No capturable browser tab found. Open an http(s) page in Brave before capturing."
+        )
         
     except Exception as e:
         logger.error(f"Failed to get active tab: {e}")

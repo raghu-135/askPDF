@@ -52,7 +52,7 @@ import {
   memoryScopeLabel,
 } from '../../lib/memory-ui';
 import { createManagerIntent, memoryReviewManagerIntent, type MemoryManagerIntent } from '../../lib/memory-manager';
-import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
+import { JsonPreview } from '../inspector/JsonPreview';
 
 const MEMORY_LIMIT = 500;
 

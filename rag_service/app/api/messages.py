@@ -16,10 +16,10 @@ from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.agent.prompting import normalize_tool_instructions
-from app.agent_workflows.repository import AgentWorkflowRepository
-from app.agent_workflows.service import AgentRunService
-from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
-from app.agent_workflows.workflow_runtime import workflow_supports_replans
+from app.product_orchestration.repository import AgentWorkflowRepository
+from app.product_orchestration.service import AgentRunService
+from app.product_orchestration.execution_stream import AgentExecutionEventSink, retain_background_task
+from app.product_orchestration.workflow_runtime import workflow_supports_replans
 from app.db import (
     MessageRole,
     delete_message_pair,
@@ -31,8 +31,10 @@ from app.db import (
 )
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
+from app.auth import current_principal
 from app.models.llm_server_client import merge_thread_settings
 from app.models.requests import ThreadChatRequest
+from app.services.canvas_service import CanvasService
 from app.services.embedding_model_service import (
     EmbeddingModelResolutionError,
     EmbeddingModelUnavailableError,
@@ -75,6 +77,7 @@ async def get_thread_messages_endpoint(
             raise HTTPException(status_code=404, detail="Thread not found")
 
         messages = await get_thread_messages(thread_id, limit, offset)
+        canvas_refs = await CanvasService().refs_by_turn(thread_id)
         return {
             "thread_id": thread_id,
             "messages": [
@@ -92,6 +95,11 @@ async def get_thread_messages_endpoint(
                     "agent_run_turn_kind": getattr(m, "agent_run_turn_kind", None),
                     "agent_run_sequence": getattr(m, "agent_run_sequence", None),
                     "agent_trace_refs": getattr(m, "agent_trace_refs", None),
+                    "canvas_ref": (
+                        canvas_refs.get(getattr(m, "turn_id", None) or "")
+                        if str(getattr(m, "role", "")) in {MessageRole.ASSISTANT.value, "assistant"}
+                        else None
+                    ),
                     "created_at": iso_utc_z(m.created_at),
                 }
                 for m in messages
@@ -233,7 +241,9 @@ async def thread_chat_endpoint(
             req.custom_instructions_override = thread_settings["custom_instructions"]
         service = AgentRunService()
         if "text/event-stream" not in str(accept or "").lower():
-            return await service.run_thread_chat(thread_id, req, embedding_context.embedding_model)
+            return await service.run_thread_chat(
+                thread_id, req, embedding_context.embedding_model, user_id=current_principal()
+            )
 
         sink = AgentExecutionEventSink(include_details=False)
 
@@ -243,6 +253,7 @@ async def thread_chat_endpoint(
                     thread_id,
                     req,
                     embedding_context.embedding_model,
+                    user_id=current_principal(),
                     execution_event_sink=sink,
                 )
                 await sink.queue.put({"event": "__result__", "data": result})
@@ -260,7 +271,12 @@ async def thread_chat_endpoint(
             try:
                 while True:
                     try:
-                        item = await asyncio.wait_for(sink.queue.get(), timeout=12)
+                        from app.runtime.operational_limits import required_positive_float
+
+                        item = await asyncio.wait_for(
+                            sink.queue.get(),
+                            timeout=required_positive_float("AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS"),
+                        )
                     except asyncio.TimeoutError:
                         sequence += 1
                         yield _chat_sse({"event": "heartbeat", "data": {}}, sequence)
@@ -268,27 +284,17 @@ async def thread_chat_endpoint(
                     event = str(item.get("event") or "message")
                     data = item.get("data") or {}
                     if event == "__result__":
-                        status = str(data.get("status") or "completed")
-                        terminal_event = (
-                            "interrupt.created"
-                            if status == "awaiting_human"
-                            else "run.canceled"
-                            if status == "cancelled"
-                            else "run.failed"
-                            if status in {"failed", "error"} or data.get("agent_error")
-                            else "run.completed"
-                        )
-                        sequence += 1
-                        yield _chat_sse({"event": terminal_event, "data": {"run_id": data.get("agent_run_id"), "status": status, "response": data}}, sequence)
                         break
                     if event == "__error__":
                         sequence += 1
-                        yield _chat_sse({"event": "run.failed", "data": data}, sequence)
+                        yield _chat_sse({"event": "stream.error", "data": data}, sequence)
                         break
                     sequence += 1
                     yield _chat_sse(item, sequence)
+                    if event in {"run.completed", "run.failed", "run.cancelled"}:
+                        break
             finally:
-                sink.close()
+                sink.detach_delivery()
 
         return StreamingResponse(
             events(),

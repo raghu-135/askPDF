@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Mapping, Protocol
 
 from app.runtime.adapter import AgentRuntimeEventSink
-from app.runtime.contracts import (
+from runtime_protocol.contracts import (
     AgentDefinition,
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -24,7 +24,6 @@ class BuilderCapabilities:
 
     framework: str
     builder_id: str
-    schema_versions: tuple[int, ...] = (2,)
     validation: bool = True
     normalization: bool = True
     catalog: bool = True
@@ -37,7 +36,6 @@ class BuilderCapabilities:
         return {
             "framework": self.framework,
             "builder_id": self.builder_id,
-            "schema_versions": list(self.schema_versions),
             "validation": self.validation,
             "normalization": self.normalization,
             "catalog": self.catalog,
@@ -54,7 +52,6 @@ class BuilderCatalog:
 
     framework: str
     builder_id: str
-    schema_versions: tuple[int, ...] = (2,)
     capabilities: BuilderCapabilities | None = None
     payload: Mapping[str, Any] = field(default_factory=dict)
 
@@ -62,10 +59,18 @@ class BuilderCatalog:
         return {
             "framework": self.framework,
             "builder_id": self.builder_id,
-            "schema_versions": list(self.schema_versions),
             "capabilities": self.capabilities.to_dict() if self.capabilities else None,
             "payload": dict(self.payload),
         }
+
+
+@dataclass(frozen=True)
+class BuilderTestContext:
+    run: Any
+    test_request: Any
+    embedding_model: str
+    builder_session_id: str
+    resume_decision: Mapping[str, Any] | None = None
 
 
 class UnsupportedRequestOverrideError(ValueError):
@@ -89,8 +94,6 @@ class AgentBuilderProvider(Protocol):
         *,
         options: Mapping[str, Any] | None = None,
     ) -> RuntimeValidationResult: ...
-
-    def report(self, spec: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
     async def normalize(
         self,
@@ -119,7 +122,22 @@ class AgentBuilderProvider(Protocol):
 
     async def catalog(self, definition: AgentDefinition | None = None) -> BuilderCatalog: ...
 
+    def supports_task_web_search(self, definition: AgentDefinition) -> bool: ...
+
+    def task_configuration_fields(
+        self,
+        definition: AgentDefinition,
+        spec: Mapping[str, Any],
+    ) -> tuple[Mapping[str, Any], ...]: ...
+
+    def normalize_task_limits(
+        self,
+        limits: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
     async def source(self, definition_id: str) -> Mapping[str, Any]: ...
+
+    async def prompt_preview(self, definition: AgentDefinition, spec: Mapping[str, Any], options: Mapping[str, Any]) -> str: ...
 
     async def transient_test(
         self,

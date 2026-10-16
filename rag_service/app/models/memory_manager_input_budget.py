@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Sequence
 
-from app.models.llm_server_client import AVG_CHUNK_CHARS, CHARS_PER_TOKEN
+from runtime_protocol.context_budget import AVG_CHUNK_CHARS, CHARS_PER_TOKEN
 from app.models.memory_limits import MAX_MEMORY_QUERY_CHARS, MAX_MEMORY_ROWS
 
 

@@ -77,7 +77,7 @@ import useStoredLayoutState from '../workbench/useStoredLayoutState';
 import type { ResolvedWorkbenchPlacement } from '../../lib/workbench-layout';
 import ChatInterface, { type ChatTraceDescriptor } from '../ChatInterface';
 import ThreadSecondaryPanel from '../ThreadSecondaryPanel';
-import { buildDocumentWorkspaceTabs, type PdfTab } from '../../lib/document-tabs';
+import { buildDocumentWorkspaceTabs, DOCUMENTS_TAB_ID, THREAD_OVERVIEW_TAB_ID, type PdfTab } from '../../lib/document-tabs';
 import { getThread } from '../../lib/api';
 import { hydrateThreadPdfTab, loadThreadTabs } from '../../lib/thread-utils';
 import { getActiveTab, getActiveTabData } from '../../lib/pdf-utils';
@@ -95,6 +95,15 @@ type ContextualNodeRequest =
 const collectNodeToolIds = (nodes: BuilderNodeState[]) => (
   Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
 );
+
+const loadCatalogForWorkflow = (workflow: AgentWorkflow) => {
+  const framework = workflow.framework?.trim();
+  const builderId = workflow.builder_id?.trim();
+  if (!framework || !builderId) {
+    throw new Error(`Workflow ${workflow.id} does not declare a runtime builder identity.`);
+  }
+  return getInternalAgentWorkflowCatalog(framework, builderId);
+};
 
 const builderStateFromWorkflowSpec = (
   catalog: AgentWorkflowCatalogResponse,
@@ -191,6 +200,7 @@ export default function AgentWorkflowBuilderPage() {
   const [builderState, setBuilderState] = useState<AgentWorkflowBuilderState | null>(null);
   const [selection, setSelection] = useState<BuilderSelection>(null);
   const [validation, setValidation] = useState<AgentWorkflowValidationReport | null>(null);
+  const [validationServiceError, setValidationServiceError] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
   const [persistenceForm, setPersistenceForm] = useState<BuilderPersistenceState>({
     workflowId: '',
@@ -226,6 +236,7 @@ export default function AgentWorkflowBuilderPage() {
   const [testThread, setTestThread] = useState<Thread | null>(null);
   const [testPdfTabs, setTestPdfTabs] = useState<PdfTab[]>([]);
   const [testActiveTabId, setTestActiveTabId] = useState<string | null>(null);
+  const [testActiveDocumentId, setTestActiveDocumentId] = useState<string | null>(null);
   const [testThreadLoading, setTestThreadLoading] = useState(false);
   const [testSidebarVersion, setTestSidebarVersion] = useState(0);
   const {
@@ -241,14 +252,17 @@ export default function AgentWorkflowBuilderPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([getInternalAgentWorkflowCatalog(), listAgentWorkflows()])
-      .then(async ([nextCatalog, workflowList]) => {
+    listAgentWorkflows()
+      .then(async (workflowList) => {
         if (cancelled) return;
         const workflowOptions = workflowList.agent_workflows || [];
         const defaultWorkflow = workflowOptions.find((workflow) => workflow.is_builtin && workflow.is_default)
           || workflowOptions.find((workflow) => workflow.is_builtin);
         if (!defaultWorkflow) throw new Error('The backend did not return a built-in workflow starter.');
-        const source = await getBuiltinAgentWorkflowSource(getAgentWorkflowSourceKey(defaultWorkflow));
+        const [nextCatalog, source] = await Promise.all([
+          loadCatalogForWorkflow(defaultWorkflow),
+          getBuiltinAgentWorkflowSource(getAgentWorkflowSourceKey(defaultWorkflow)),
+        ]);
         if (cancelled) return;
         setCatalog(nextCatalog);
         setWorkflows(workflowOptions);
@@ -316,13 +330,20 @@ export default function AgentWorkflowBuilderPage() {
 
   useEffect(() => {
     if (!builderState) return;
+    const framework = selectedStarterWorkflow?.framework?.trim();
+    const builderId = selectedStarterWorkflow?.builder_id?.trim();
+    if (!framework || !builderId) {
+      setValidationServiceError('The selected workflow does not declare a runtime builder identity.');
+      return;
+    }
     const timer = window.setTimeout(() => {
-      void validateAgentWorkflowSpec(assembleAgentWorkflowSpec(builderState))
-        .then(setValidation)
-        .catch(() => undefined);
+      setValidationServiceError(null);
+      void validateAgentWorkflowSpec(assembleAgentWorkflowSpec(builderState), framework, builderId)
+        .then((report) => { setValidation(report); setValidationServiceError(null); })
+        .catch((error) => setValidationServiceError(error instanceof Error ? error.message : String(error)));
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [builderState]);
+  }, [builderState, selectedStarterWorkflow]);
 
   useEffect(() => {
     if (!isDirty) return;
@@ -335,14 +356,17 @@ export default function AgentWorkflowBuilderPage() {
   }, [isDirty]);
 
   const resetToStarter = useCallback(async (workflowId?: string) => {
-    if (!catalog) return;
     const workflow = workflows.find((option) => option.id === workflowId)
       || workflows.find((option) => option.is_builtin && option.is_default)
       || workflows.find((option) => option.is_builtin);
     if (!workflow?.is_builtin) return;
     try {
-      const source = await getBuiltinAgentWorkflowSource(getAgentWorkflowSourceKey(workflow));
-      setBuilderState(builderStateFromWorkflowSpec(catalog, source.spec_json));
+      const [nextCatalog, source] = await Promise.all([
+        loadCatalogForWorkflow(workflow),
+        getBuiltinAgentWorkflowSource(getAgentWorkflowSourceKey(workflow)),
+      ]);
+      setCatalog(nextCatalog);
+      setBuilderState(builderStateFromWorkflowSpec(nextCatalog, source.spec_json));
       setStarter(workflow.id);
       setSelection(null);
       setValidation(null);
@@ -361,14 +385,15 @@ export default function AgentWorkflowBuilderPage() {
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     }
-  }, [catalog, workflows]);
+  }, [workflows]);
 
   const loadCustomWorkflow = useCallback(async (workflowId: string) => {
-    if (!catalog) return;
     try {
       setError(null);
       const response = await getInternalAgentWorkflow(workflowId);
-      const loadedState = normalizeBuilderState(catalog, loadBuilderStateFromSpec(response.spec.spec_json));
+      const nextCatalog = await loadCatalogForWorkflow(response.agent_workflow);
+      const loadedState = normalizeBuilderState(nextCatalog, loadBuilderStateFromSpec(response.spec.spec_json));
+      setCatalog(nextCatalog);
       setBuilderState({
         ...loadedState,
         allowed_tool_ids: collectNodeToolIds(loadedState.nodes),
@@ -391,7 +416,7 @@ export default function AgentWorkflowBuilderPage() {
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     }
-  }, [catalog]);
+  }, []);
 
   const handleStarterChange = (workflowId: string) => {
     const workflow = workflows.find((option) => option.id === workflowId);
@@ -639,14 +664,14 @@ export default function AgentWorkflowBuilderPage() {
     if (!builderState) return;
     try {
       setValidating(true);
-      const report = await validateAgentWorkflowSpec(assembleAgentWorkflowSpec(builderState));
+      const framework = selectedStarterWorkflow?.framework?.trim();
+      const builderId = selectedStarterWorkflow?.builder_id?.trim();
+      if (!framework || !builderId) throw new Error('The selected workflow does not declare a runtime builder identity.');
+      const report = await validateAgentWorkflowSpec(assembleAgentWorkflowSpec(builderState), framework, builderId);
       setValidation(report);
+      setValidationServiceError(null);
     } catch (err) {
-      setValidation({
-        valid: false,
-        errors: [err instanceof Error ? err.message : String(err)],
-        warnings: [],
-      });
+      setValidationServiceError(err instanceof Error ? err.message : String(err));
     } finally {
       setValidating(false);
     }
@@ -677,19 +702,20 @@ export default function AgentWorkflowBuilderPage() {
     }
   }, [baseWorkflowId, clearTestTraces, testThread?.id]);
 
-  const testActiveDocument = getActiveTab(testPdfTabs, testActiveTabId);
+  const testActiveDocument = getActiveTab(testPdfTabs, testActiveDocumentId);
   const testActiveDocumentData = getActiveTabData(testActiveDocument);
   const testWorkspaceTabs = useMemo(() => buildDocumentWorkspaceTabs({
     enabled: Boolean(testThread),
-    documents: testPdfTabs,
+    documentCount: testPdfTabs.length,
     traces: testTraceTabs,
-  }), [testPdfTabs, testThread, testTraceTabs]);
+  }), [testPdfTabs.length, testThread, testTraceTabs]);
 
   const handleTestThreadSelect = useCallback(async (thread: Thread | null) => {
     if (!thread) {
       setTestThread(null);
       setTestPdfTabs([]);
       setTestActiveTabId(null);
+      setTestActiveDocumentId(null);
       setTestSession(emptyBuilderTestSession());
       clearTestTraces();
       return;
@@ -700,19 +726,10 @@ export default function AgentWorkflowBuilderPage() {
       const tabs = await loadThreadTabs(detailed);
       setTestThread(detailed);
       setTestPdfTabs(tabs);
-      setTestActiveTabId(tabs[0]?.id || 'browser-tab');
+      setTestActiveTabId(THREAD_OVERVIEW_TAB_ID);
+      setTestActiveDocumentId(null);
       setTestSession(emptyBuilderTestSession(detailed.id));
       clearTestTraces();
-      window.setTimeout(() => {
-        detailed.files.slice(1).forEach(async (threadFile) => {
-          try {
-            const hydrated = await hydrateThreadPdfTab(detailed.id, threadFile);
-            setTestPdfTabs(prev => prev.map(tab => tab.fileHash === hydrated.fileHash ? hydrated : tab));
-          } catch (error) {
-            console.warn(`Failed to hydrate background test PDF tab ${threadFile.fileHash}:`, error);
-          }
-        });
-      }, 0);
     } finally {
       setTestThreadLoading(false);
     }
@@ -720,14 +737,21 @@ export default function AgentWorkflowBuilderPage() {
 
   const handleTestTabChange = useCallback((tabId: string) => {
     setTestActiveTabId(tabId);
-    const tab = testPdfTabs.find(item => item.id === tabId);
-    if (!testThread || !tab || tabId === 'browser-tab' || tab.sentences) return;
+    if (tabId === DOCUMENTS_TAB_ID && !testActiveDocumentId && testPdfTabs[0]) {
+      setTestActiveDocumentId(testPdfTabs[0].id);
+    }
+  }, [testActiveDocumentId, testPdfTabs]);
+
+  const handleTestActiveDocumentChange = useCallback((documentId: string) => {
+    setTestActiveDocumentId(documentId);
+    const tab = testPdfTabs.find((item) => item.id === documentId);
+    if (!testThread || !tab || tab.sentences) return;
     void hydrateThreadPdfTab(testThread.id, {
       fileHash: tab.fileHash,
       fileName: tab.fileName,
       sourceType: tab.sourceType,
     }).then((hydrated) => {
-      setTestPdfTabs(prev => prev.map(item => item.fileHash === hydrated.fileHash ? hydrated : item));
+      setTestPdfTabs((prev) => prev.map((item) => item.fileHash === hydrated.fileHash ? hydrated : item));
     }).catch((error) => {
       console.warn(`Failed to hydrate selected test PDF tab ${tab.fileHash}:`, error);
     });
@@ -756,7 +780,10 @@ export default function AgentWorkflowBuilderPage() {
       setPersistenceStatus(null);
       const workflowId = persistedWorkflow?.workflow.id;
       const saveSpec = { ...spec };
-      const report = await validateAgentWorkflowSpec(saveSpec);
+      const framework = persistedWorkflow?.workflow.framework || selectedStarterWorkflow?.framework;
+      const builderId = persistedWorkflow?.workflow.builder_id || selectedStarterWorkflow?.builder_id;
+      if (!framework || !builderId) throw new Error('The selected definition does not declare a runtime builder identity.');
+      const report = await validateAgentWorkflowSpec(saveSpec, framework, builderId);
       setValidation(report);
       if (!report.valid) {
         setPersistenceError('Validation failed. Fix the reported issues before saving.');
@@ -767,8 +794,8 @@ export default function AgentWorkflowBuilderPage() {
         name: persistenceForm.name.trim(),
         description: persistenceForm.description,
         spec_json: saveSpec,
-        framework: persistedWorkflow?.workflow.framework || undefined,
-        builder_id: persistedWorkflow?.workflow.builder_id || undefined,
+        framework,
+        builder_id: builderId,
       });
       setPersistedWorkflow({ workflow: response.agent_workflow, spec: response.spec });
       setPersistenceForm((previous) => ({
@@ -896,6 +923,8 @@ export default function AgentWorkflowBuilderPage() {
               ) : (
                 <ThreadWorkspaceContent
                   activeTabId={testActiveTabId}
+                  activeDocumentId={testActiveDocumentId}
+                  onActiveDocumentChange={handleTestActiveDocumentChange}
                   activeDocument={testActiveDocument}
                   documentSentences={testActiveDocumentData.pdfSentences}
                   documentDownloadUrl={testActiveDocumentData.downloadUrl}
@@ -910,8 +939,7 @@ export default function AgentWorkflowBuilderPage() {
                   autoScroll={false}
                   highlightEnabled
                   threadId={testThread?.id || null}
-                  emptyTitle={testThread ? 'Choose a workspace tab' : 'Select a thread to test'}
-                  emptyDescription={testThread ? 'Open a PDF, Browser, or Debug Trace.' : 'Use the project-grouped thread browser in the secondary panel.'}
+                  documents={testPdfTabs}
                 />
               )
             ) : buildTab === 'spec-tab' && spec ? (
@@ -923,6 +951,7 @@ export default function AgentWorkflowBuilderPage() {
                     validation={validation}
                     issues={validationIssues}
                     workflowIsValid={workflowIsValid}
+                    serviceError={validationServiceError}
                     onSelectIssue={(nextSelection) => { setSelection(nextSelection); setBuildTab('canvas-tab'); }}
                   />
                 )}

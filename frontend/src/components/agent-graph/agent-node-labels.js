@@ -8,7 +8,6 @@ const FALLBACK_NODE_LABELS = {
   thread_conversation_history_worker: 'Thread Conversation History',
   durable_memory_worker: 'Durable Memory',
   thread_events_worker: 'Thread Events Retrieval',
-  web_approval_gate: 'Web Approval',
   web_worker: 'Web Retrieval',
   direct_answer: 'Direct Answer',
   synthesizer: 'Synthesizer',

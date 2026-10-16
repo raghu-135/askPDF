@@ -323,7 +323,7 @@ class AgentWorkflow(SQLModel, table=True):
     framework: str = Field(default="langgraph", index=True)
     builder_id: str = Field(default="langgraph_graph", index=True)
     category: Optional[str] = Field(default=None, index=True)
-    schema_version: int = Field(default=2)
+    schema_version: int = Field(default=1)
     spec_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -377,7 +377,6 @@ class AgentRun(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, default=dict),
     )
-    runtime_binding_version: int = Field(default=1)
     runtime_binding_status: str = Field(default="active", index=True)
     run_metadata_json: Dict[str, Any] = Field(
         default_factory=dict,
@@ -388,7 +387,6 @@ class AgentRun(SQLModel, table=True):
         sa_column=Column(JSONB, default=dict)
     )
     status: str = Field(default=AgentRunStatus.RUNNING.value, index=True)
-    checkpoint_thread_id: Optional[str] = None
     task_id: Optional[str] = Field(
         default=None,
         sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True),
@@ -464,6 +462,42 @@ class AgentRun(SQLModel, table=True):
         self.run_metadata_json = metadata
 
 
+class ToolInvocation(SQLModel, table=True):
+    """Fence one runtime-owned tool invocation and retain its replay result."""
+    __tablename__ = "tool_invocations"
+    __table_args__ = (UniqueConstraint("run_id", "invocation_id", name="uq_tool_invocation"),)
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False))
+    invocation_id: str
+    tool_name: str
+    argument_hash: str
+    status: str
+    result_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    started_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+
+class ToolApprovalDecision(SQLModel, table=True):
+    """Durable human permission, bound to a tool and an explicit scope."""
+    __tablename__ = "tool_approval_decisions"
+    __table_args__ = (
+        UniqueConstraint("run_id", "interrupt_id", name="uq_tool_approval_interrupt"),
+        Index("ix_tool_approval_scope", "scope", "scope_id", "tool_name", "created_at"),
+    )
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False))
+    interrupt_id: str
+    tool_name: str
+    invocation_id: str
+    argument_hash: str
+    scope: str
+    scope_id: str
+    decision: str
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False))
+
+
 class AgentRunEvent(SQLModel, table=True):
     """Canonical, framework-neutral observability event for an agent run."""
     __tablename__ = "agent_run_events"
@@ -482,6 +516,11 @@ class AgentRunEvent(SQLModel, table=True):
         sa_column=Column(JSONB, nullable=False, default=dict),
     )
     trace_id: Optional[str] = Field(default=None, index=True)
+    terminal: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="false"))
+    source_metadata_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
     created_at: datetime = Field(
         default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now()),
@@ -536,7 +575,7 @@ class AgentTask(SQLModel, table=True):
         CheckConstraint("length(btrim(objective)) > 0", name="ck_agent_tasks_objective_nonempty"),
         CheckConstraint("length(btrim(objective_hash)) > 0", name="ck_agent_tasks_objective_hash_nonempty"),
         CheckConstraint("length(btrim(create_idempotency_key)) > 0", name="ck_agent_tasks_idempotency_nonempty"),
-        CheckConstraint("status in ('created','queued','running','pausing','paused','awaiting_approval','cancelling','cancelled','completed','failed','expired')", name="ck_agent_tasks_status"),
+        CheckConstraint("status in ('created','queued','running','pausing','paused','awaiting_approval','cancelling','recovery_required','cancelled','completed','failed','expired')", name="ck_agent_tasks_status"),
         CheckConstraint("version >= 1 and latest_run_attempt >= 0", name="ck_agent_tasks_versions"),
         CheckConstraint("progress between 0 and 100 and completed_todos >= 0 and total_todos >= 0", name="ck_agent_tasks_progress"),
         Index(
@@ -648,8 +687,23 @@ class AgentTaskArtifact(SQLModel, table=True):
     __tablename__ = "agent_task_artifacts"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
-    agent_run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    task_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True, nullable=True),
+    )
+    agent_run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True, nullable=True),
+    )
+    thread_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), index=True, nullable=True),
+    )
+    chat_turn_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("chat_turns.id", ondelete="SET NULL"), index=True, nullable=True),
+    )
+    idempotency_key: Optional[str] = Field(default=None, index=True)
     todo_id: Optional[str] = Field(default=None, index=True)
     subagent_run_id: Optional[str] = Field(default=None, sa_column=Column(String, ForeignKey("agent_task_subagent_runs.id", ondelete="SET NULL"), index=True))
     ownership_key: str = Field(index=True)
@@ -670,11 +724,26 @@ class AgentTaskArtifact(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
 
     __table_args__ = (
-        CheckConstraint("kind in ('tool_output','intermediate_report','context_summary','final_report')", name="ck_agent_task_artifacts_kind"),
+        CheckConstraint(
+            "kind in ('tool_output','intermediate_report','context_summary','final_report','research_canvas')",
+            name="ck_agent_task_artifacts_kind",
+        ),
+        CheckConstraint(
+            "(task_id IS NOT NULL AND agent_run_id IS NOT NULL) OR (kind = 'research_canvas' AND thread_id IS NOT NULL)",
+            name="ck_agent_task_artifacts_owner",
+        ),
         CheckConstraint("validity in ('valid','invalid','deleted') and sensitivity in ('private','sensitive')", name="ck_agent_task_artifacts_state"),
         CheckConstraint("byte_size >= 0 and version >= 1", name="ck_agent_task_artifacts_values"),
         CheckConstraint("length(btrim(ownership_key)) > 0", name="ck_agent_task_artifacts_ownership_key"),
         UniqueConstraint("agent_run_id", "ownership_key", "sha256", "kind", name="uq_agent_task_artifact_content"),
+        Index(
+            "uq_agent_task_artifact_thread_idempotency",
+            "thread_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL AND kind = 'research_canvas'"),
+        ),
+        Index("idx_agent_task_artifact_thread_kind_created", "thread_id", "kind", "created_at"),
         Index(
             "uq_agent_task_artifacts_final_report",
             "agent_run_id",
@@ -690,6 +759,8 @@ class AgentTaskEvent(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
     sequence: int
+    event_id: Optional[str] = Field(default=None, index=True)
+    causal_key: Optional[str] = Field(default=None, index=True)
     event_type: str = Field(index=True)
     actor_type: str
     actor_id: Optional[str] = None
@@ -700,13 +771,51 @@ class AgentTaskEvent(SQLModel, table=True):
     payload_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
     policy_hash: Optional[str] = None
     config_hash: Optional[str] = None
+    occurred_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    terminal: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default="false"))
+    source_metadata_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
     created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
 
     __table_args__ = (
         CheckConstraint("sequence >= 1", name="ck_agent_task_events_sequence"),
         UniqueConstraint("task_id", "sequence", name="uq_agent_task_event_sequence"),
+        UniqueConstraint("task_id", "causal_key", name="uq_agent_task_event_causal_key"),
         Index("idx_agent_task_events_stream", "task_id", "sequence"),
         Index("idx_agent_task_events_run_stream", "task_id", "agent_run_id", "sequence"),
+    )
+
+
+class AgentTaskRuntimeDelta(SQLModel, table=True):
+    """Exactly-once ledger for runtime-owned orchestration boundaries."""
+
+    __tablename__ = "agent_task_runtime_deltas"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    task_id: str = Field(sa_column=Column(String, ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True))
+    agent_run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    attempt_id: str
+    operation_id: str
+    event_id: str
+    idempotency_key: str
+    payload_sha256: str
+    observed_task_version: int
+    observed_plan_revision: int
+    applied_task_version: int
+    applied_plan_revision: int
+    applied_runtime_plan_revision: int = 0
+    applied_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+
+    __table_args__ = (
+        CheckConstraint(
+            "observed_task_version >= 0 and observed_plan_revision >= 0 and "
+            "applied_task_version >= 1 and applied_plan_revision >= 0 and applied_runtime_plan_revision >= 0",
+            name="ck_agent_task_runtime_delta_versions",
+        ),
+        UniqueConstraint("agent_run_id", "event_id", name="uq_agent_task_runtime_delta_event"),
+        UniqueConstraint("task_id", "idempotency_key", name="uq_agent_task_runtime_delta_idempotency"),
     )
 
 
@@ -726,9 +835,34 @@ class AgentTaskCommand(SQLModel, table=True):
     completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
     __table_args__ = (
-        CheckConstraint("action in ('start','pause','resume','cancel','retry','expire','delete')", name="ck_agent_task_commands_action"),
+        CheckConstraint("action in ('start','pause','resume','cancel','retry','expire','delete','steer')", name="ck_agent_task_commands_action"),
         CheckConstraint("status in ('accepted','completed','rejected') and expected_version >= 1", name="ck_agent_task_commands_state"),
         UniqueConstraint("task_id", "action", "idempotency_key", name="uq_agent_task_command_idempotency"),
+    )
+
+
+class AgentRuntimeOperation(SQLModel, table=True):
+    """Product-owned idempotency record for a runtime control operation."""
+    __tablename__ = "agent_runtime_operations"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    run_id: str = Field(sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True))
+    operation: str = Field(index=True)
+    idempotency_key: str
+    request_fingerprint: str
+    status: str = Field(default="in_progress", index=True)
+    result_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    error_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    created_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    claimed_at: datetime = Field(default_factory=utc_now, sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()))
+    claim_expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+    __table_args__ = (
+        CheckConstraint("status in ('in_progress', 'completed', 'failed')", name="ck_agent_runtime_operations_status"),
+        CheckConstraint("length(btrim(idempotency_key)) > 0", name="ck_agent_runtime_operations_key_nonempty"),
+        UniqueConstraint("run_id", "operation", "idempotency_key", name="uq_agent_runtime_operation_idempotency"),
+        Index("idx_agent_runtime_operations_run_operation", "run_id", "operation"),
     )
 
 
@@ -974,6 +1108,255 @@ class EmbeddingJob(SQLModel, table=True):
         ),
         Index("idx_embedding_job_claim", "status", "available_at"),
         Index("idx_embedding_job_model_status", "resource_type", "embedding_model", "status"),
+    )
+
+
+class DocumentProcessingJob(SQLModel, table=True):
+    """Durable claim record for conversion and model-specific projection work."""
+
+    __tablename__ = "document_processing_jobs"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), index=True, nullable=False)
+    )
+    job_kind: str = Field(index=True)
+    embedding_model: str = Field(default="", index=True)
+    generation: str
+    extraction_fingerprint: str
+    chunking_fingerprint: str = ""
+    claim_token: Optional[str] = Field(default=None, index=True)
+    status: str = Field(default="pending", index=True)
+    attempts: int = Field(default=0)
+    error: Optional[str] = None
+    available_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    claimed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    updated_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+
+    __table_args__ = (
+        CheckConstraint("job_kind in ('conversion', 'projection')", name="ck_document_processing_job_kind"),
+        CheckConstraint("status in ('pending', 'running', 'completed', 'failed')", name="ck_document_processing_job_status"),
+        CheckConstraint("attempts >= 0", name="ck_document_processing_job_attempts"),
+        CheckConstraint("length(btrim(file_hash)) > 0", name="ck_document_processing_job_file_hash"),
+        CheckConstraint("length(btrim(generation)) > 0", name="ck_document_processing_job_generation"),
+        UniqueConstraint(
+            "file_hash", "job_kind", "embedding_model", "generation", "extraction_fingerprint", "chunking_fingerprint",
+            name="uq_document_processing_job_target",
+        ),
+        Index("idx_document_processing_job_claim", "status", "available_at"),
+    )
+
+
+class CanonicalDocument(SQLModel, table=True):
+    """The durable, shared Docling representation for one source PDF."""
+
+    __tablename__ = "canonical_documents"
+
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), primary_key=True)
+    )
+    generation: str = Field(index=True)
+    extraction_fingerprint: str = Field(index=True)
+    claim_token: Optional[str] = Field(default=None, index=True)
+    claimed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    docling_version: str = Field(default="unknown")
+    status: str = Field(default="pending", index=True)
+    document_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    source_metadata_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    failure_json: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB),
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    completed_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True)),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending', 'running', 'completed', 'failed')",
+            name="ck_canonical_documents_status",
+        ),
+        CheckConstraint("length(btrim(generation)) > 0", name="ck_canonical_documents_generation"),
+        CheckConstraint(
+            "length(btrim(extraction_fingerprint)) > 0",
+            name="ck_canonical_documents_fingerprint",
+        ),
+        Index("idx_canonical_documents_status", "status"),
+    )
+
+
+class DocumentSection(SQLModel, table=True):
+    """Heading hierarchy derived from the canonical document."""
+
+    __tablename__ = "document_sections"
+
+    section_id: str = Field(primary_key=True)
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), index=True)
+    )
+    generation: str = Field(index=True)
+    parent_section_id: Optional[str] = Field(default=None, index=True)
+    section_order: int = Field(default=0)
+    level: int = Field(default=0)
+    title: str = Field(default="")
+    heading_path: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+    element_ids: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+
+    __table_args__ = (
+        UniqueConstraint("file_hash", "generation", "section_order", name="uq_document_sections_order"),
+        Index("idx_document_sections_parent", "file_hash", "generation", "parent_section_id"),
+    )
+
+
+class DocumentElement(SQLModel, table=True):
+    """A structural Docling element with source provenance."""
+
+    __tablename__ = "document_elements"
+
+    element_id: str = Field(primary_key=True)
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), index=True)
+    )
+    generation: str = Field(index=True)
+    element_order: int = Field(default=0)
+    element_type: str = Field(index=True)
+    label: Optional[str] = None
+    text: str = Field(default="", sa_column=Column(Text, nullable=False, default=""))
+    section_id: Optional[str] = Field(default=None, index=True)
+    parent_element_id: Optional[str] = Field(default=None, index=True)
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    provenance_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    structure_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+
+    __table_args__ = (
+        Index("idx_document_elements_generation_order", "file_hash", "generation", "element_order"),
+        Index("idx_document_elements_section_order", "section_id", "element_order"),
+    )
+
+
+class DocumentChunkManifest(SQLModel, table=True):
+    """Atomic publication marker for one model-specific chunk projection."""
+
+    __tablename__ = "document_chunk_manifests"
+
+    manifest_id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), index=True)
+    )
+    embedding_model: str = Field(index=True)
+    generation: str = Field(index=True)
+    extraction_fingerprint: str = Field(default="", index=True)
+    chunking_fingerprint: str = Field(index=True)
+    source_version: str = Field(default="", index=True)
+    is_current: bool = Field(default=False, index=True)
+    status: str = Field(default="pending", index=True)
+    vector_status: str = Field(default="missing", index=True)
+    vector_count: int = Field(default=0)
+    expected_chunk_count: int = Field(default=0)
+    expected_chunk_ids: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+    expected_source_ids: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, default=list),
+    )
+    failure_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    published_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), index=True))
+    superseded_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    completed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending', 'running', 'completed', 'failed')",
+            name="ck_document_chunk_manifests_status",
+        ),
+        CheckConstraint(
+            "vector_status in ('missing', 'running', 'completed', 'failed')",
+            name="ck_document_chunk_manifests_vector_status",
+        ),
+        CheckConstraint("expected_chunk_count >= 0", name="ck_document_chunk_manifests_count"),
+        Index("idx_document_chunk_manifests_ready", "file_hash", "embedding_model", "status"),
+        Index("idx_document_chunk_manifests_published", "file_hash", "embedding_model", "published_at"),
+        Index(
+            "uq_document_chunk_manifests_current",
+            "file_hash",
+            "embedding_model",
+            unique=True,
+            postgresql_where=text("is_current"),
+        ),
+    )
+
+
+class DocumentChunk(SQLModel, table=True):
+    """Retrieval passage with original body text kept separate from context."""
+
+    __tablename__ = "document_chunks"
+
+    chunk_id: str = Field(sa_column=Column(String, primary_key=True, index=True))
+    manifest_id: str = Field(
+        sa_column=Column(String, ForeignKey("document_chunk_manifests.manifest_id", ondelete="CASCADE"), primary_key=True, index=True)
+    )
+    source_id: str = Field(index=True)
+    file_hash: str = Field(index=True)
+    embedding_model: str = Field(index=True)
+    chunk_order: int = Field(default=0)
+    body_text: str = Field(default="", sa_column=Column(Text, nullable=False, default=""))
+    contextualized_text: str = Field(default="", sa_column=Column(Text, nullable=False, default=""))
+    sentence_ids: List[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    source_element_ids: List[str] = Field(default_factory=list, sa_column=Column(JSONB, nullable=False, default=list))
+    section_id: Optional[str] = Field(default=None, index=True)
+    table_id: Optional[str] = Field(default=None, index=True)
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    metadata_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+
+    __table_args__ = (
+        UniqueConstraint("manifest_id", "chunk_order", name="uq_document_chunks_order"),
+        UniqueConstraint("manifest_id", "source_id", name="uq_document_chunks_source"),
+        Index("idx_document_chunks_file_model_order", "file_hash", "embedding_model", "chunk_order"),
+        Index("idx_document_chunks_section", "file_hash", "section_id", "chunk_order"),
     )
 
 

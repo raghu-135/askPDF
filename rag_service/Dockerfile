@@ -22,21 +22,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements-control-plane.txt requirements-control-plane.txt
-RUN pip install -r requirements-control-plane.txt
+COPY rag_service/requirements.txt requirements.txt
+RUN pip install -r requirements.txt
+COPY runtime_protocol /tmp/runtime_protocol
+RUN pip install --no-deps /tmp/runtime_protocol
 
 ARG DOWNLOAD_LOCAL_MODELS=true
+COPY rag_service/app/services/embedding_tokenizer_registry.py /tmp/embedding_tokenizer_registry.py
+COPY rag_service/scripts/download_embedding_tokenizers.py /tmp/download_embedding_tokenizers.py
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
       python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); print('Downloaded local embedding + reranker models')"; \
+      python /tmp/download_embedding_tokenizers.py; \
       python -m spacy download en_core_web_sm; \
     fi
 
 RUN mkdir -p /models/hf /static
 
-COPY alembic alembic
-COPY scripts scripts
-COPY app app
-COPY alembic.ini main.py ./
+COPY rag_service/alembic alembic
+COPY rag_service/scripts scripts
+COPY rag_service/app app
+COPY rag_service/alembic.ini rag_service/main.py ./
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

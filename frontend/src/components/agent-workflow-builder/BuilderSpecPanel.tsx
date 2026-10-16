@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Box, Button, InputAdornment, Stack, TextField, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
-import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
+import { JsonPreview } from '../inspector/JsonPreview';
 import type { AgentWorkflowBuilderSpec } from '../../lib/api';
 
 export default function BuilderSpecPanel({ spec }: { spec: AgentWorkflowBuilderSpec }) {

@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
-from app.tools.contracts import DocumentSearchRequest, FocusedDocumentSearchRequest, InternetSearchRequest, QueryRequest, TimelineRequest
+from app.tools.contracts import DocumentSearchRequest, InspectDocumentRequest, ReadContextRequest, SearchKnowledgeRequest, InternetSearchRequest, QueryRequest, TimelineRequest
 from app.tools.thread_shape import ThreadShapeRequest
 from app.tools.wikipedia import WikipediaRequest
 from app.models.memory_tools import MemoryGetInput, MemoryPrepareChangeInput, MemorySearchInput
@@ -27,8 +27,9 @@ _DISCOVERY_CACHE: dict[tuple[object, str], MCPDiscoveredTool] = {}
 
 _REQUEST_MODELS: dict[str, type[BaseModel]] = {
     "get_thread_shape": ThreadShapeRequest,
-    "search_documents": DocumentSearchRequest,
-    "search_document_by_id": FocusedDocumentSearchRequest,
+    "search_knowledge": SearchKnowledgeRequest,
+    "inspect_document": InspectDocumentRequest,
+    "read_context": ReadContextRequest,
     "search_thread_conversation_history": DocumentSearchRequest,
     "search_durable_memory": DocumentSearchRequest,
     "search_thread_events": TimelineRequest,

@@ -10,8 +10,10 @@ import {
   List,
   ListItem,
   ListItemButton,
+  ListItemIcon,
   ListItemText,
   IconButton,
+  Menu,
   Typography,
   TextField,
   Button,
@@ -35,6 +37,7 @@ import {
   Divider,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import SpeakerNotesIcon from '@mui/icons-material/SpeakerNotes';
@@ -47,6 +50,7 @@ import EmbeddingModelReadinessIndicator from './EmbeddingModelReadinessIndicator
 import ClearIcon from '@mui/icons-material/Clear';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import SettingsIcon from '@mui/icons-material/Settings';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 
@@ -58,6 +62,7 @@ import {
   listProjects,
   listThreads,
   bulkDeleteThreads,
+  deleteThread,
   forkThread,
   updateThread,
   updateProject,
@@ -74,10 +79,14 @@ import {
 } from '../lib/project-lifecycle';
 import {
   sidebarDeletionTarget,
+  sidebarGroupsForProject,
+  sortSidebarGroupsByActivity,
   threadsEligibleForProjectDeletion,
 } from '../lib/sidebar-deletion';
 import ThreadReferenceChip from './ThreadReferenceChip';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
+import ProjectSettingsForm from './workbench/ProjectSettingsForm';
+import ThreadStatsList, { threadDocumentsFromMeta } from './workbench/ThreadStatsList';
 import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
 
 
@@ -92,7 +101,11 @@ export interface ThreadSidebarHeaderState {
   allItemsSelected: boolean;
   someItemsSelected: boolean;
   isBulkDeleting: boolean;
+  isLoading: boolean;
   openCreateProjectDialog: () => void;
+  openCreateThreadDialog: () => void;
+  openCloneProjectDialog?: (includeThreads: boolean) => void;
+  openDeleteProjectDialog?: () => void;
   enterSelectionMode: () => void;
   clearSelection: () => void;
   deleteSelected: () => void;
@@ -185,6 +198,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [forkingThreadId, setForkingThreadId] = useState<string | null>(null);
   const [forkDialogThread, setForkDialogThread] = useState<Thread | null>(null);
+  const [threadMenuAnchorEl, setThreadMenuAnchorEl] = useState<HTMLElement | null>(null);
+  const [threadMenuThread, setThreadMenuThread] = useState<Thread | null>(null);
+  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
   const [projectReadiness, setProjectReadiness] = useState<Record<string, boolean | null>>({});
@@ -223,8 +239,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       current.threads.push(thread);
       groups.set(key, current);
     }
-    return Array.from(groups.values());
-  }, [projects, projectsById, threads]);
+    return sortSidebarGroupsByActivity(
+      sidebarGroupsForProject(Array.from(groups.values()), activeProjectId),
+    );
+  }, [activeProjectId, projects, projectsById, threads]);
   const virtualThreadRows = useMemo(() => (
     groupedThreads.flatMap((group) => [
       { kind: 'group' as const, id: `group-${group.project?.id || 'unassigned'}`, group },
@@ -324,6 +342,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       setNewProjectName('');
       setNewProjectDescription('');
       setNewProjectReadsUserMemory(false);
+      onProjectSelect?.(project);
     } catch (error) {
       console.error('Failed to create project:', error);
     } finally {
@@ -497,9 +516,6 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
   const handleProjectClick = async (project: Project) => {
     if (selectionOnly) return;
-    if (activeProjectId === project.id) {
-      return;
-    }
     onProjectSelect?.(project);
     setProjectReadiness((current) => ({ ...current, [project.id]: null }));
     onProjectReadinessChange?.(project.id, null);
@@ -659,7 +675,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
     try {
       const updated = await updateThread(threadId, editingName.trim());
-      setThreads(prev => prev.map(t => t.id === threadId ? { ...t, name: updated.name } : t));
+      setThreads((prev) => prev.map((t) => (
+        t.id === threadId
+          ? { ...t, name: updated.name, last_activity_at: new Date().toISOString() }
+          : t
+      )));
       setEditingThreadId(null);
       setEditingName('');
     } catch (error) {
@@ -667,15 +687,53 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     }
   };
 
+  const closeThreadMenu = useCallback(() => {
+    setThreadMenuAnchorEl(null);
+    setThreadMenuThread(null);
+  }, []);
+
+  const openThreadMenu = (thread: Thread, event: React.MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+    setThreadMenuAnchorEl(event.currentTarget);
+    setThreadMenuThread(thread);
+  };
+
   const startEditing = (thread: Thread, event: React.MouseEvent) => {
     event.stopPropagation();
+    closeThreadMenu();
     setEditingThreadId(thread.id);
     setEditingName(thread.name);
   };
 
   const openForkDialog = (thread: Thread, event: React.MouseEvent) => {
     event.stopPropagation();
+    closeThreadMenu();
     setForkDialogThread(thread);
+  };
+
+  const handleDeleteSingleThread = async (thread: Thread) => {
+    closeThreadMenu();
+    if (!confirm(`Delete "${thread.name}" and all its messages?`)) return;
+
+    try {
+      setDeletingThreadId(thread.id);
+      await deleteThread(thread.id);
+      setThreads((prev) => prev.filter((item) => item.id !== thread.id));
+      setSelectedThreadIds((current) => {
+        if (!current.has(thread.id)) return current;
+        const next = new Set(current);
+        next.delete(thread.id);
+        return next;
+      });
+      if (activeThreadId === thread.id) {
+        onThreadSelect(null);
+      }
+    } catch (error) {
+      console.error('Failed to delete thread:', error);
+      alert('Failed to delete thread.');
+    } finally {
+      setDeletingThreadId(null);
+    }
   };
 
   const handleForkThread = async (options: { name?: string; targetProjectId?: string; memoryCopyMode?: MemoryCopyMode }) => {
@@ -750,7 +808,23 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     allItemsSelected,
     someItemsSelected,
     isBulkDeleting,
+    isLoading: loading,
     openCreateProjectDialog: selectionOnly ? () => undefined : handleOpenCreateProjectDialog,
+    openCreateThreadDialog: selectionOnly
+      ? () => undefined
+      : () => handleOpenCreateThreadDialog(activeProjectId || undefined, Boolean(activeProjectId)),
+    openCloneProjectDialog: selectionOnly
+      ? undefined
+      : (includeThreads: boolean) => {
+        const project = projects.find((item) => item.id === activeProjectId);
+        if (project) handleOpenCloneProject(project, includeThreads);
+      },
+    openDeleteProjectDialog: selectionOnly
+      ? undefined
+      : () => {
+        const project = projects.find((item) => item.id === activeProjectId);
+        if (project) handleOpenDeleteProject(project);
+      },
     enterSelectionMode: selectionOnly ? () => undefined : enterThreadSelectionMode,
     clearSelection: clearThreadSelection,
     deleteSelected: deletionTarget === 'projects'
@@ -765,9 +839,13 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     enterThreadSelectionMode,
     handleBulkDeleteThreads,
     handleOpenCreateProjectDialog,
+    handleOpenCloneProject,
+    handleOpenCreateThreadDialog,
+    handleOpenDeleteProject,
     handleRequestBulkDeleteProjects,
     handleToggleAllItemsChecked,
     isBulkDeleting,
+    loading,
     isSelectionMode,
     selectedCount,
     someItemsSelected,
@@ -786,6 +864,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       onHeaderStateChange?.(null);
     };
   }, [onHeaderStateChange]);
+
+  useEffect(() => {
+    const list = threadListRef.current;
+    if (!list || !threadMenuAnchorEl) return undefined;
+    const handleScroll = () => closeThreadMenu();
+    list.addEventListener('scroll', handleScroll);
+    return () => list.removeEventListener('scroll', handleScroll);
+  }, [closeThreadMenu, threadMenuAnchorEl]);
 
   const focusThreadInList = (threadId: string, event?: React.MouseEvent) => {
     event?.preventDefault();
@@ -818,150 +904,16 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     };
   }, [focusedThreadId]);
 
-  const renderThreadTooltip = (thread: Thread) => {
-    const forkInfo = thread.thread_metadata?.fork;
-    const childIds = Array.isArray(thread.thread_metadata?.fork_children)
-      ? thread.thread_metadata.fork_children.filter((id): id is string => typeof id === 'string' && id.length > 0)
-      : [];
-    const documents = Object.entries(thread.documents_meta || {})
-      .filter((entry): entry is [string, NonNullable<Thread['documents_meta']>[string]] => {
-        const meta = entry[1];
-        return !!meta && typeof meta === 'object' && !Array.isArray(meta);
-      })
-      .filter(([, meta]) =>
-        Boolean(meta.file_name || meta.page_count || meta.document_available_in_thread_at)
-      );
-    const sectionSx = {
-      pt: 0.75,
-      mt: 0.75,
-      borderTop: 1,
-      borderColor: 'divider',
-      '&:first-of-type': {
-        pt: 0,
-        mt: 0,
-        borderTop: 0,
-      },
-    };
-
-    return (
-      <Box
-        sx={{
-          p: 0.5,
-          pr: 0.75,
-          minWidth: 220,
-          maxWidth: 320,
-          maxHeight: 'min(360px, calc(100vh - 96px))',
-          overflowY: 'auto',
-        }}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <Box sx={sectionSx}>
-          <Typography variant="caption" color="text.secondary" component="div">
-            Project
-          </Typography>
-          <Typography variant="caption" component="div" sx={{ wordBreak: 'break-word' }}>
-            {thread.project_id ? projectsById.get(thread.project_id)?.name || thread.project_id : 'Unassigned'}
-          </Typography>
-        </Box>
-        <Box sx={sectionSx}>
-          <Typography variant="caption" color="text.secondary" component="div">
-            Created
-          </Typography>
-          <Typography variant="caption" component="div">
-            {new Date(thread.created_at).toLocaleString()}
-          </Typography>
-        </Box>
-        <Box sx={sectionSx}>
-          <Typography variant="caption" color="text.secondary" component="div">
-            Embedding model
-          </Typography>
-          <Typography variant="caption" component="div" sx={{ wordBreak: 'break-word' }}>
-            {thread.embeddingModel}
-          </Typography>
-        </Box>
-        {forkInfo?.parent_thread_id && (
-          <Box sx={sectionSx}>
-            <Typography variant="caption" color="text.secondary" component="div">
-              Parent
-            </Typography>
-            <ThreadReferenceChip
-              threadId={forkInfo.parent_thread_id}
-              fallbackName={forkInfo.parent_thread_name}
-              threadsById={threadsById}
-              onOpenThread={(target) => focusThreadInList(target.id)}
-            />
-          </Box>
-        )}
-        {childIds.length > 0 && (
-          <Box sx={sectionSx}>
-            <Typography variant="caption" color="text.secondary" component="div">
-              Children
-            </Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-              {childIds.map(childId => (
-                <Box key={childId}>
-                  <ThreadReferenceChip
-                    threadId={childId}
-                    threadsById={threadsById}
-                    onOpenThread={(target) => focusThreadInList(target.id)}
-                  />
-                </Box>
-              ))}
-            </Box>
-          </Box>
-        )}
-        {documents.length > 0 && (
-          <Box sx={sectionSx}>
-            <Typography variant="caption" color="text.secondary" component="div">
-              Documents
-            </Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-              {documents.map(([fileHash, meta]) => (
-                <Box key={fileHash} sx={{ minWidth: 0 }}>
-                  {meta.file_name && (
-                    <Typography variant="caption" component="div" sx={{ fontWeight: 600, lineHeight: 1.25, wordBreak: 'break-word' }}>
-                      {meta.file_name}
-                    </Typography>
-                  )}
-                  {meta.page_count !== undefined && meta.page_count !== null && meta.page_count !== '' && (
-                    <Typography variant="caption" color="text.secondary" component="div" sx={{ lineHeight: 1.25 }}>
-                      Pages: {meta.page_count}
-                    </Typography>
-                  )}
-                  {meta.document_available_in_thread_at && (
-                    <Typography variant="caption" color="text.secondary" component="div" sx={{ lineHeight: 1.25 }}>
-                      Added: {new Date(meta.document_available_in_thread_at).toLocaleString()}
-                    </Typography>
-                  )}
-                </Box>
-              ))}
-            </Box>
-          </Box>
-        )}
-        {forkInfo?.forked_at && (
-          <Box sx={sectionSx}>
-            <Typography variant="caption" color="text.secondary" component="div">
-              Forked at
-            </Typography>
-            <Typography variant="caption" component="div">
-              {new Date(forkInfo.forked_at).toLocaleString()}
-            </Typography>
-          </Box>
-        )}
-        {forkInfo?.memory_copy_mode && (
-          <Box sx={sectionSx}>
-            <Typography variant="caption" color="text.secondary" component="div">
-              Memory copy
-            </Typography>
-            <Typography variant="caption" component="div" sx={{ wordBreak: 'break-word' }}>
-              {forkInfo.memory_copy_mode.replace(/_/g, ' ')}
-              {Array.isArray(forkInfo.copied_memory_ids) ? ` (${forkInfo.copied_memory_ids.length})` : ''}
-            </Typography>
-          </Box>
-        )}
-      </Box>
-    );
-  };
+  const renderThreadTooltip = (thread: Thread) => (
+    <ThreadStatsList
+      thread={thread}
+      projectName={thread.project_id ? projectsById.get(thread.project_id)?.name || thread.project_id : 'Unassigned'}
+      threadsById={threadsById}
+      onOpenThread={(target) => focusThreadInList(target.id)}
+      documents={threadDocumentsFromMeta(thread)}
+      compact
+    />
+  );
 
   const threadActionButtonSx = {
     width: 32,
@@ -1032,7 +984,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 color="primary"
                 onClick={handleOpenCreateProjectDialog}
               >
-                <AddIcon fontSize="small" />
+                <CreateNewFolderIcon fontSize="small" />
               </IconButton>
             </Tooltip>}
           </Box>
@@ -1322,7 +1274,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                             onClick={(e) => e.stopPropagation()}
                           />
                         ) : (
-                          <Tooltip title={renderThreadTooltip(thread)} placement="left" arrow enterDelay={500} leaveDelay={150} disableInteractive={false}>
+                          <Tooltip
+                            title={renderThreadTooltip(thread)}
+                            placement="bottom-start"
+                            arrow
+                            enterDelay={500}
+                            leaveDelay={150}
+                            disableHoverListener={Boolean(threadMenuAnchorEl)}
+                          >
                             <Box sx={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', ...flexTruncateSx }}>
                               <ListItemText
                                 primary={
@@ -1351,19 +1310,25 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         )}
                       </ListItemButton>
 
-                      {!selectionOnly && (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flex: '0 0 auto', px: 1 }}>
-                          <Tooltip title="Fork thread">
+                      {!selectionOnly && editingThreadId !== thread.id && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', flex: '0 0 auto', px: 0.5 }}>
+                          <Tooltip title="Thread actions">
                             <span>
-                              <IconButton size="small" onClick={(e) => openForkDialog(thread, e)} disabled={forkingThreadId === thread.id} sx={threadActionButtonSx}>
-                                {forkingThreadId === thread.id ? <CircularProgress size={16} /> : <CallSplitIcon fontSize="small" />}
+                              <IconButton
+                                size="small"
+                                aria-label={`Thread actions for ${thread.name}`}
+                                aria-controls={threadMenuThread?.id === thread.id ? 'thread-actions-menu' : undefined}
+                                aria-haspopup="true"
+                                aria-expanded={threadMenuThread?.id === thread.id ? 'true' : undefined}
+                                onClick={(event) => openThreadMenu(thread, event)}
+                                disabled={forkingThreadId === thread.id || deletingThreadId === thread.id}
+                                sx={threadActionButtonSx}
+                              >
+                                {forkingThreadId === thread.id || deletingThreadId === thread.id
+                                  ? <CircularProgress size={16} />
+                                  : <MoreVertIcon fontSize="small" />}
                               </IconButton>
                             </span>
-                          </Tooltip>
-                          <Tooltip title="Rename thread">
-                            <IconButton size="small" onClick={(e) => startEditing(thread, e)} sx={threadActionButtonSx}>
-                              <EditIcon fontSize="small" />
-                            </IconButton>
                           </Tooltip>
                         </Box>
                       )}
@@ -1372,145 +1337,55 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 );
               })}
             </Box>
-            {false && groupedThreads.map((group) => (
-              <Box key={group.project?.id || 'unassigned'}>
-                <Box sx={{ px: 1.5, py: 0.75, bgcolor: 'action.hover', borderTop: 1, borderColor: 'divider' }}>
-                  <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>
-                    {group.project?.name || 'Unassigned'}
-                  </Typography>
-                </Box>
-                {group.threads.map((thread) => (
-                  <ListItem
-                    key={thread.id}
-                    ref={(node) => {
-                      threadRowRefs.current[thread.id] = node;
-                    }}
-                    disablePadding
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'stretch',
-                      bgcolor: activeThreadId === thread.id
-                        ? theme.palette.mode === 'dark'
-                          ? theme.palette.primary.dark
-                          : theme.palette.primary.light
-                        : focusedThreadId === thread.id
-                          ? theme.palette.action.focus
-                        : isSelectionMode && selectedThreadIds.has(thread.id)
-                          ? theme.palette.action.selected
-                        : 'transparent',
-                      boxShadow: focusedThreadId === thread.id
-                        ? `inset 3px 0 0 ${theme.palette.primary.main}`
-                        : 'none',
-                      transition: 'background-color 160ms ease, box-shadow 160ms ease',
-                      '&:hover': {
-                        bgcolor: activeThreadId === thread.id
-                          ? theme.palette.mode === 'dark'
-                            ? theme.palette.primary.dark
-                            : theme.palette.primary.light
-                          : focusedThreadId === thread.id
-                            ? theme.palette.action.focus
-                          : isSelectionMode && selectedThreadIds.has(thread.id)
-                            ? theme.palette.action.selected
-                          : theme.palette.mode === 'dark'
-                            ? theme.palette.background.paper
-                            : theme.palette.grey[100]
-                      }
-                    }}
-                  >
-                    <ListItemButton
-                      onClick={() => handleThreadRowClick(thread)}
-                      selected={activeThreadId === thread.id}
-                      sx={{
-                        flex: 1,
-                        minWidth: 0,
-                        py: 1,
-                        pr: 1,
-                        bgcolor: 'transparent',
-                        '&:hover, &.Mui-selected, &.Mui-selected:hover, &.Mui-focusVisible': {
-                          bgcolor: 'transparent',
-                        },
-                      }}
-                    >
-                      {isSelectionMode && !selectionOnly && (
-                        <Checkbox
-                          edge="start"
-                          size="small"
-                          checked={selectedThreadIds.has(thread.id)}
-                          onChange={(e) => handleToggleThreadSelection(thread.id, e)}
-                          onClick={(e) => e.stopPropagation()}
-                          disabled={isBulkDeleting}
-                          inputProps={{ 'aria-label': `Select ${thread.name}` }}
-                          sx={{ p: 0.5, mr: 0.5 }}
-                        />
-                      )}
-
-                      {editingThreadId === thread.id ? (
-                        <TextField
-                          size="small"
-                          value={editingName}
-                          onChange={(e) => setEditingName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleEditThread(thread.id);
-                            if (e.key === 'Escape') setEditingThreadId(null);
-                          }}
-                          onBlur={() => handleEditThread(thread.id)}
-                          autoFocus
-                          fullWidth
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <Tooltip title={renderThreadTooltip(thread)} placement="left" arrow enterDelay={500} leaveDelay={150} disableInteractive={false}>
-                          <Box sx={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%' }}>
-                            <ListItemText
-                              primary={
-                                <Typography variant="body2" fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'} noWrap>
-                                  {thread.name}
-                                </Typography>
-                              }
-                              secondaryTypographyProps={{ component: 'span' }}
-                              secondary={
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, minWidth: 0, maxWidth: '100%' }}>
-                                  <Typography variant="caption" color="text.secondary" noWrap>
-                                    {formatDate(thread.created_at)}
-                                  </Typography>
-                                  {thread.message_count !== undefined && thread.message_count > 0 && (
-                                    <Chip label={`${thread.message_count} msgs`} size="small" sx={{ height: 16, fontSize: '0.65rem' }} />
-                                  )}
-                                  {thread.file_count !== undefined && thread.file_count > 0 && (
-                                    <Chip icon={<DescriptionIcon sx={{ fontSize: '0.7rem !important' }} />} label={thread.file_count} size="small" sx={{ height: 16, fontSize: '0.65rem' }} />
-                                  )}
-                                </Box>
-                              }
-                              sx={{ m: 0, minWidth: 0 }}
-                            />
-                          </Box>
-                        </Tooltip>
-                      )}
-                    </ListItemButton>
-
-                    {!isSelectionMode && !selectionOnly && (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flex: '0 0 auto', px: 1 }}>
-                        <Tooltip title="Fork thread">
-                          <span>
-                            <IconButton size="small" onClick={(e) => openForkDialog(thread, e)} disabled={forkingThreadId === thread.id} sx={threadActionButtonSx}>
-                              {forkingThreadId === thread.id ? <CircularProgress size={16} /> : <CallSplitIcon fontSize="small" />}
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                        <Tooltip title="Rename thread">
-                          <IconButton size="small" onClick={(e) => startEditing(thread, e)} sx={threadActionButtonSx}>
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    )}
-                  </ListItem>
-                ))}
-              </Box>
-            ))}
           </List>
         )}
       </Collapse>
+
+      <Menu
+        id="thread-actions-menu"
+        anchorEl={threadMenuAnchorEl}
+        open={Boolean(threadMenuAnchorEl && threadMenuThread)}
+        onClose={closeThreadMenu}
+        onClick={(event) => event.stopPropagation()}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        {threadMenuThread && (
+          <MenuItem
+            disabled={forkingThreadId === threadMenuThread.id}
+            onClick={(event) => openForkDialog(threadMenuThread, event)}
+          >
+            <ListItemIcon>
+              {forkingThreadId === threadMenuThread.id
+                ? <CircularProgress size={16} />
+                : <CallSplitIcon fontSize="small" />}
+            </ListItemIcon>
+            <ListItemText>Fork thread</ListItemText>
+          </MenuItem>
+        )}
+        {threadMenuThread && (
+          <MenuItem onClick={(event) => startEditing(threadMenuThread, event)}>
+            <ListItemIcon><EditIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Rename thread</ListItemText>
+          </MenuItem>
+        )}
+        {threadMenuThread && (
+          <MenuItem
+            disabled={deletingThreadId === threadMenuThread.id}
+            onClick={() => {
+              void handleDeleteSingleThread(threadMenuThread);
+            }}
+            sx={{ color: 'error.main' }}
+          >
+            <ListItemIcon sx={{ color: 'error.main' }}>
+              {deletingThreadId === threadMenuThread.id
+                ? <CircularProgress size={16} />
+                : <DeleteIcon fontSize="small" />}
+            </ListItemIcon>
+            <ListItemText>Delete thread</ListItemText>
+          </MenuItem>
+        )}
+      </Menu>
 
       <Dialog
         open={bulkProjectDeleteOpen}
@@ -1645,7 +1520,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           {!isThreadProjectLocked && (
             <Button
               size="small"
-              startIcon={<AddIcon />}
+              startIcon={<CreateNewFolderIcon />}
               onClick={() => {
                 setNewProjectReadsUserMemory(false);
                 setCreateProjectDialogOpen(true);
@@ -1689,96 +1564,23 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       >
         <DialogTitle>Project settings</DialogTitle>
         <DialogContent>
-          <TextField
-            autoFocus
-            fullWidth
-            margin="dense"
-            label="Project name"
-            value={settingsProjectName}
-            onChange={(event) => setSettingsProjectName(event.target.value)}
-            disabled={creating}
-            inputProps={{ maxLength: 200 }}
-            sx={{ mb: 1 }}
-          />
-          <FormControlLabel
-            control={
-              <Switch
-                checked={settingsProjectReadsUserMemory}
-                onChange={(event) => setSettingsProjectReadsUserMemory(event.target.checked)}
-              />
-            }
-            label="Allow global memory"
-          />
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-            Applies immediately. Each thread keeps its own global-memory preference.
-          </Typography>
-          <Divider sx={{ my: 2 }} />
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>Project actions</Typography>
           {projectActionError && (
             <Alert severity="error" sx={{ mb: 1.5 }}>{projectActionError}</Alert>
           )}
-          {projectLifecycleLoading ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
-              <CircularProgress size={18} />
-              <Typography variant="body2">Loading project details...</Typography>
-            </Box>
-          ) : (
-            <Box sx={{ display: 'grid', gap: 1 }}>
-              <Button
-                variant="outlined"
-                startIcon={<ContentCopyIcon />}
-                onClick={() => settingsProject && handleOpenCloneProject(settingsProject, false)}
-                disabled={
-                  creating
-                  || !settingsProject
-                  || !projectLifecycle?.can_clone
-                  || projectReadiness[settingsProject.id] !== true
-                }
-                sx={{ justifyContent: 'flex-start' }}
-              >
-                Clone project
-              </Button>
-              <Button
-                variant="outlined"
-                startIcon={<ContentCopyIcon />}
-                onClick={() => settingsProject && handleOpenCloneProject(settingsProject, true)}
-                disabled={
-                  creating
-                  || !settingsProject
-                  || !projectLifecycle?.can_clone
-                  || projectReadiness[settingsProject.id] !== true
-                }
-                sx={{ justifyContent: 'flex-start' }}
-              >
-                Clone with threads
-              </Button>
-              <Button
-                variant="outlined"
-                color="error"
-                startIcon={<DeleteForeverIcon />}
-                onClick={() => settingsProject && handleOpenDeleteProject(settingsProject)}
-                disabled={creating || !settingsProject || !projectLifecycle?.can_delete}
-                sx={{ justifyContent: 'flex-start' }}
-              >
-                Delete project
-              </Button>
-              {projectLifecycle?.blocked_reason === 'active_agent_runs' && (
-                <Typography variant="caption" color="warning.main">
-                  Finish or cancel active agent runs before cloning or deleting this project.
-                </Typography>
-              )}
-              {projectLifecycle?.protected && (
-                <Typography variant="caption" color="text.secondary">
-                  The default project cannot be deleted.
-                </Typography>
-              )}
-              {settingsProject && projectReadiness[settingsProject.id] === false && (
-                <Typography variant="caption" color="warning.main">
-                  Cloning is unavailable while the locked embedding model is offline.
-                </Typography>
-              )}
-            </Box>
-          )}
+          <ProjectSettingsForm
+            projectName={settingsProjectName}
+            onProjectNameChange={setSettingsProjectName}
+            allowGlobalMemory={settingsProjectReadsUserMemory}
+            onAllowGlobalMemoryChange={setSettingsProjectReadsUserMemory}
+            embeddingModel={settingsProject?.embeddingModel}
+            disabled={creating}
+            lifecycle={projectLifecycle}
+            lifecycleLoading={projectLifecycleLoading}
+            projectReady={settingsProject ? projectReadiness[settingsProject.id] === true : false}
+            onCloneProject={settingsProject ? () => handleOpenCloneProject(settingsProject, false) : undefined}
+            onCloneProjectWithThreads={settingsProject ? () => handleOpenCloneProject(settingsProject, true) : undefined}
+            onDeleteProject={settingsProject ? () => handleOpenDeleteProject(settingsProject) : undefined}
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSettingsProject(null)} disabled={creating}>Cancel</Button>

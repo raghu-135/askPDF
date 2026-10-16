@@ -106,3 +106,19 @@ def plan_diff(previous: dict[str, Any], current: dict[str, Any], *, reason: str)
         "changed": changed,
         "reordered": old_order != new_order,
     }
+
+
+def timeline_run_error(run: Any) -> dict[str, Any]:
+    stored = dict(getattr(run, "error_json", None) or {})
+    if stored.get("code") or stored.get("safe_message") or stored.get("message"):
+        return stored
+    debug = getattr(run, "debug_trace_json", None)
+    summary = ((debug or {}).get("diagnostics") or {}).get("summary") if isinstance(debug, dict) else {}
+    if isinstance(summary, dict) and (summary.get("code") or summary.get("message")):
+        return {
+            "code": summary.get("code"),
+            "safe_message": summary.get("message"),
+            "retryable": summary.get("retryable"),
+            "details": dict(summary.get("location") or {}),
+        }
+    return stored

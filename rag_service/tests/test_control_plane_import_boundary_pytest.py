@@ -1,73 +1,161 @@
-"""Guard the neutral control-plane contract from framework imports."""
+"""Static guards for the external-only framework boundary."""
 
 import ast
+import importlib.util
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 
-NEUTRAL_MODULES = (
-    "app/runtime/contracts.py",
-    "app/runtime/errors.py",
-    "app/runtime/transport.py",
-    "app/runtime/adapter.py",
-    "app/runtime/catalog.py",
-    "app/runtime/builder.py",
-    "app/runtime/http_adapter.py",
-    "app/runtime/http_runtime_adapter.py",
-    "app/runtime/hermes_adapter.py",
-)
-FORBIDDEN = ("langgraph", "langchain_core.messages", "langchain_core.tools")
 ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(
+    os.getenv("ASKPDF_REPO_DIR", str(ROOT.parent))
+).resolve()
+ROOT = REPOSITORY_ROOT / "rag_service"
 
 
-def test_neutral_runtime_contract_modules_have_no_framework_imports():
-    for relative in NEUTRAL_MODULES:
-        tree = ast.parse((ROOT / relative).read_text(), filename=relative)
-        imported = {
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module
-        }
-        imported.update(
-            alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-        )
-        assert not any(any(name == token or name.startswith(token + ".") for token in FORBIDDEN) for name in imported), relative
+def _source_files(relative_path: str, *suffixes: str) -> list[Path]:
+    directory = REPOSITORY_ROOT / relative_path
+    if not directory.is_dir() and relative_path == "runtime_protocol":
+        spec = importlib.util.find_spec("runtime_protocol")
+        if spec is not None and spec.submodule_search_locations:
+            directory = Path(next(iter(spec.submodule_search_locations)))
+    assert directory.is_dir(), f"expected source directory does not exist: {directory}"
+    files = sorted(
+        path
+        for path in directory.rglob("*")
+        if path.is_file() and path.suffix in suffixes
+    )
+    assert files, f"expected source files under {directory}"
+    return files
 
 
-def test_control_plane_requirements_do_not_install_langgraph_checkpoint_packages():
-    requirements = (ROOT / "requirements-control-plane.txt").read_text().lower()
-    assert "langgraph" not in requirements
-    assert "checkpoint-postgres" not in requirements
-
-
-def test_langgraph_package_init_does_not_eagerly_import_framework_modules():
-    source = (ROOT / "app/runtime/langgraph/__init__.py").read_text()
-    tree = ast.parse(source, filename="app/runtime/langgraph/__init__.py")
-    imported = {
-        node.module
-        for node in ast.walk(tree)
+def _imports(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    values = {
+        node.module for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and node.module
     }
-    imported.update(
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
+    values.update(
+        alias.name for node in ast.walk(tree)
+        if isinstance(node, ast.Import) for alias in node.names
     )
-    assert "app.runtime.langgraph.compiler" not in imported
-    assert "app.runtime.langgraph.graph" not in imported
-    assert "app.runtime.langgraph.router_runtime" not in imported
+    return values
 
 
-def test_external_runtime_maintenance_does_not_import_local_checkpointing():
-    source = (ROOT / "app/services/agent_task_maintenance.py").read_text()
-    assert "if not external_runtime_enabled():" in source
+def _dynamic_framework_references(path: Path) -> list[str]:
+    """Catch string-based runtime imports that AST import checks cannot see."""
+    source = path.read_text()
+    return re.findall(
+        r"(?:monkeypatch\.setattr|patch(?:\.object)?|import_module)\(\s*['\"]"
+        r"(?:langgraph|langgraph_runtime)(?:\.|['\"])",
+        source,
+    )
 
 
-def test_external_langgraph_resolution_does_not_import_local_graph():
-    source = (ROOT / "app/runtime/langgraph_builder.py").read_text()
-    assert "if self._external_runtime_enabled():" in source
-    assert "control plane only freezes neutral workflow inputs" in source
-    assert "Materialization is framework-owned" in source
+def test_control_plane_has_no_langgraph_or_runtime_imports():
+    forbidden = ("langgraph", "langgraph_runtime", "langchain_core.tools", "langchain_core.runnables")
+    for path in _source_files("rag_service/app", ".py"):
+        assert not any(
+            name == prefix or name.startswith(prefix + ".")
+            for name in _imports(path) for prefix in forbidden
+        ), path.relative_to(ROOT)
+
+
+def test_control_plane_tests_have_no_framework_execution_imports():
+    forbidden = ("langgraph", "langgraph_runtime", "langchain_core.tools", "langchain_core.runnables")
+    for path in _source_files("rag_service/tests", ".py"):
+        assert not any(
+            name == prefix or name.startswith(prefix + ".")
+            for name in _imports(path) for prefix in forbidden
+        ), path
+        assert _dynamic_framework_references(path) == [], path
+
+
+def test_runtime_has_no_control_plane_imports():
+    for path in [*_source_files("langgraph_runtime", ".py"), *_source_files("hermes_runtime", ".py")]:
+        assert not any(name == "app" or name.startswith("app.") for name in _imports(path)), path
+
+
+def test_runtime_protocol_is_dependency_neutral():
+    forbidden = ("app", "langgraph", "langchain", "sqlalchemy", "sqlmodel")
+    for path in _source_files("runtime_protocol", ".py"):
+        assert not any(
+            name == prefix or name.startswith(prefix + ".")
+            for name in _imports(path) for prefix in forbidden
+        ), path.relative_to(ROOT)
+
+
+def test_control_plane_manifest_and_legacy_paths_are_clean():
+    requirements = (ROOT / "requirements.txt").read_text().lower()
+    assert "langgraph" not in requirements
+    assert "checkpoint-postgres" not in requirements
+    assert not (ROOT / "app/runtime/mode.py").exists()
+    assert not (ROOT / "app/runtime/langgraph_adapter.py").exists()
+    assert not (ROOT / "app/runtime/langgraph").exists()
+    assert not (ROOT / "runtime_service").exists()
+    # Empty bind-mounted directories also create importable namespaces.
+    assert not (ROOT / "langgraph_runtime").exists()
+    # The integration test harness can inspect sibling sources via PYTHONPATH;
+    # production/dev services expose only the control-plane source root.
+    assert (REPOSITORY_ROOT / "runtime_protocol" / "__init__.py").is_file()
+    if (
+        os.getenv("ASKPDF_ENFORCE_DEPENDENCY_ISOLATION") == "1"
+        and not (REPOSITORY_ROOT / "langgraph_runtime").exists()
+    ):
+        subprocess.run([
+            sys.executable, "-I", "-c",
+            f"import sys, importlib.util; sys.path.insert(0, {str(REPOSITORY_ROOT)!r}); "
+            "assert importlib.util.find_spec('langgraph') is None; "
+            "assert importlib.util.find_spec('langgraph_runtime') is None; "
+            "assert importlib.util.find_spec('runtime_protocol') is not None",
+        ], check=True)
+    for legacy in (
+        "product_orchestration/evidence.py",
+        "product_orchestration/parallel_contracts.py",
+        "product_orchestration/graph_validation.py",
+        "product_orchestration/node_catalog.py",
+        "product_orchestration/validator.py",
+        "mcp/langchain_adapter.py",
+    ):
+        assert not (ROOT / "app" / legacy).exists()
+    assert not (ROOT / "agent_workflows").exists()
+    assert not (ROOT / "runtime_protocol").exists()
+
+
+def test_control_plane_test_inventory_assigns_every_backend_test_file():
+    from scripts.run_tests import (
+        _approved_test_exclusions,
+        _declared_control_plane_test_names,
+    )
+
+    repository_tests = {path.name for path in (ROOT / "tests").glob("test_*.py")}
+    assigned = _declared_control_plane_test_names()
+    excluded = set(_approved_test_exclusions())
+    assert not assigned & excluded
+    assert repository_tests == assigned | excluded
+
+
+def test_control_plane_has_no_framework_execution_symbols():
+    forbidden = ("StateGraph", "RunnableConfig", "GraphInterrupt", "RuntimeExecutionContext")
+    offenders = {
+        str(path.relative_to(ROOT)): token
+        for path in (ROOT / "app").rglob("*.py")
+        for token in forbidden
+        if token in path.read_text()
+    }
+    assert offenders == {}
+
+
+def test_frontend_and_product_api_do_not_expose_checkpoint_identity():
+    product_sources = [
+        *_source_files("rag_service/app", ".py"),
+        *_source_files("frontend/src", ".ts", ".tsx"),
+    ]
+    offenders = [
+        path for path in product_sources
+        if "checkpoint_thread_id" in path.read_text()
+    ]
+    assert offenders == []

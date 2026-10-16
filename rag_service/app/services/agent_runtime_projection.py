@@ -2,38 +2,36 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Mapping
 
-from app.db import ChatTurnStatus, ReasoningFormat, create_chat_turn, increment_qa_stats, update_message_context_compact
-from app.rag.indexer import index_chat_memory_for_thread
+from app.db import ChatTurnStatus, ReasoningFormat, create_chat_turn, increment_qa_stats
+from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
+    EmbeddingModelUnavailableError,
+    require_thread_embedding_ready,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class AgentRuntimeProjection:
     """Persist canonical product records after runtime execution completes."""
 
     async def apply_event(self, *, run: Any, event: Any) -> bool:
-        """Record the bounded last event marker; duplicate IDs are ignored."""
+        """Apply only events newer than the persisted projection sequence."""
 
-        from app.agent_workflows.repository import AgentWorkflowRepository
+        from app.product_orchestration.repository import AgentWorkflowRepository
 
-        metadata = dict(getattr(run, "run_metadata_json", None) or {})
-        projection = dict(metadata.get("projection") or {})
         event_id = str(getattr(event, "event_id", None) or "")
-        if event_id and event_id == projection.get("last_event_id"):
-            return False
-        projection.update(
-            {
-                "version": 1,
-                "status": projection.get("status") or "pending",
-                "last_event_id": event_id,
-                "last_event_sequence": int(getattr(event, "sequence", 0) or 0),
-            }
+        sequence = int(getattr(event, "sequence", 0) or 0)
+        return await AgentWorkflowRepository().apply_runtime_projection_event(
+            run.id,
+            event_id=event_id,
+            sequence=sequence,
+            continuation=getattr(event, "continuation", None),
+            checkpoint_boundary_available=getattr(event, "checkpoint_boundary_available", None),
         )
-        await AgentWorkflowRepository().update_runtime_projection(run.id, projection)
-        continuation = getattr(event, "continuation", None)
-        if continuation is not None:
-            await AgentWorkflowRepository().update_runtime_binding(run.id, continuation)
-        return True
 
     async def project_terminal_result(self, *, run: Any, result: Mapping[str, Any], terminal_event_id: str | None = None) -> dict[str, Any]:
         from app.services.agent_runtime_reconciliation import record_terminal_result
@@ -46,40 +44,19 @@ class AgentRuntimeProjection:
             await self.apply_event(run=run, event=event)
 
     async def rebuild_trace_from_events(self, *, run: Any, result: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
-        """Rebuild the retained compatibility trace from the canonical journal."""
+        """Rebuild the product trace from the canonical runtime journal."""
 
-        from app.agent_workflows.debug_trace import AgentTraceRecorder, finalize_and_merge_debug_payload
-        from app.agent_workflows.repository import AgentWorkflowRepository
-        from app.runtime.observability import project_event_to_trace_recorder
+        from app.product_orchestration.debug_trace import build_debug_payload_from_journal
+        from app.product_orchestration.repository import AgentWorkflowRepository
 
         repository = AgentWorkflowRepository()
-        if not hasattr(repository, "list_run_events") or not hasattr(repository, "set_run_debug_trace"):
-            # Compatibility for injected repositories used by older callers;
-            # the canonical repository always exposes both operations.
-            return None
-        events = await repository.list_run_events(run.id)
-        if not events:
-            return None
-        recorder = AgentTraceRecorder(run)
-        for event in events:
-            project_event_to_trace_recorder(
-                recorder,
-                str(event.kind),
-                event.payload_json if isinstance(event.payload_json, dict) else {},
-            )
-        result_payload = dict(result or {})
-        debug = finalize_and_merge_debug_payload(
-            recorder=recorder,
-            run=run,
-            metrics=dict(getattr(run, "metrics_json", None) or {}),
-            result=result_payload or None,
-            chat_turn_id=result_payload.get("chat_turn_id"),
-            route=result_payload.get("route"),
-            route_reason=result_payload.get("route_reason"),
-            error=result_payload.get("agent_error") or getattr(run, "error_json", None),
-            run_status=str(result_payload.get("status") or getattr(run, "status", "")),
-            completed_at=getattr(run, "completed_at", None),
+        debug = build_debug_payload_from_journal(
+            run,
+            await repository.list_run_events(run.id),
+            result=result,
         )
+        if debug is None:
+            return None
         await repository.set_run_debug_trace(run.id, debug)
         return debug
 
@@ -107,10 +84,20 @@ class AgentRuntimeProjection:
         repository = None
         projection: dict[str, Any] = {}
         if run_id:
-            from app.agent_workflows.repository import AgentWorkflowRepository
+            from app.product_orchestration.repository import AgentWorkflowRepository
 
             repository = AgentWorkflowRepository()
             fresh_run = await repository.get_run(str(run_id))
+            if getattr(fresh_run, "task_id", None):
+                projected.update(
+                    {
+                        "answer": projected.get("final_answer") or projected.get("answer") or "",
+                        "agent_run_turn_kind": "assistant_final",
+                        "agent_run_sequence": 0,
+                        "duration_ms": duration_ms,
+                    }
+                )
+                return projected
             projection = dict(
                 ((getattr(fresh_run, "run_metadata_json", None) or {}).get("projection") or {})
             )
@@ -172,20 +159,30 @@ class AgentRuntimeProjection:
             )
         else:
             turn = existing
-        if projected.get("embedding_model") and projected.get("llm_model"):
-            indexed = await index_chat_memory_for_thread(
+        embedding_model = await _resolve_chat_memory_embedding_model(thread_id, projected)
+        llm_name = str(projected.get("llm_model") or run_context.get("llm_model") or "").strip() or None
+        if embedding_model:
+            from app.services.embedding_materialization_service import index_persisted_chat_turn
+
+            raw_window = projected.get("context_window")
+            if raw_window is None:
+                raw_window = run_context.get("context_window")
+            await index_persisted_chat_turn(
                 thread_id=thread_id,
-                message_id=turn.id,
+                turn_id=turn.id,
                 question=question,
                 answer=str(projected.get("final_answer") or projected.get("answer") or ""),
-                embedding_model=projected["embedding_model"],
-                llm_name=projected["llm_model"],
-                context_window=projected.get("context_window"),
+                embedding_model=embedding_model,
+                llm_name=llm_name,
+                context_window=raw_window if isinstance(raw_window, int) else None,
                 message_created_at=turn.completed_at or turn.created_at,
             )
-            compact = indexed.get("memory_compact_text") if isinstance(indexed, dict) else None
-            if compact:
-                await update_message_context_compact(turn.id, compact)
+        else:
+            logger.warning(
+                "Skipping chat-memory indexing for thread %s turn %s because no embedding model is available",
+                thread_id,
+                turn.id,
+            )
         try:
             await increment_qa_stats(thread_id, len(question or "") + len(str(projected.get("answer") or projected.get("final_answer") or "")))
         except Exception:
@@ -207,7 +204,6 @@ class AgentRuntimeProjection:
                     str(run_id),
                     {
                         **projection,
-                        "version": max(int(projection.get("version") or 0), 1),
                         "status": "applied",
                         "result_hash": digest,
                         "terminal_event_id": (
@@ -228,12 +224,31 @@ class AgentRuntimeProjection:
             return run
         if str(result.get("status") or "") in {"awaiting_human", "paused"}:
             return run
+        if getattr(run, "task_id", None):
+            await self.rebuild_trace_from_events(run=run, result=result)
+            return result
         projected = await self.project_chat_result(
             thread_id=run.thread_id,
-            question=str(result.get("question") or ""),
+            question=str(
+                result.get("question")
+                or (getattr(run, "run_metadata_json", None) or {}).get("question")
+                or ""
+            ),
             result=result,
             run_context={"agent_run_id": run.id, "agent_workflow_id": run.workflow_id},
             duration_ms=float(result.get("duration_ms") or 0),
         )
         await self.rebuild_trace_from_events(run=run, result=projected)
         return projected
+
+
+async def _resolve_chat_memory_embedding_model(thread_id: str, projected: Mapping[str, Any]) -> str | None:
+    model = str(projected.get("embedding_model") or "").strip()
+    if model:
+        return model
+    try:
+        context = await require_thread_embedding_ready(thread_id)
+    except (EmbeddingModelResolutionError, EmbeddingModelUnavailableError) as exc:
+        logger.warning("Could not resolve embedding model for chat-memory indexing | thread_id=%s error=%s", thread_id, exc)
+        return None
+    return str(context.embedding_model or "").strip() or None

@@ -1,4 +1,6 @@
 import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -6,35 +8,16 @@ from app.mcp.registry import MCP_TOOL_DEFINITIONS, enabled_definitions
 
 
 @pytest.mark.asyncio
-async def test_workflow_tool_invocation_dispatches_by_mcp_tool_name(monkeypatch):
-    from app.agent_workflows import runtime_invocation
+async def test_tool_audit_preserves_call_identity_and_surfaces_storage_failure(monkeypatch):
+    from app.mcp import tool_audit
 
-    calls = []
-
-    class FakeExecutor:
-        async def ainvoke(self, value, config=None):
-            calls.append((value, config))
-            return "mcp-result"
-
-    monkeypatch.setattr(
-        runtime_invocation,
-        "resolve_tool_executor",
-        lambda tool_name, *, caller_node, config: (calls.append((tool_name, caller_node, config)) or FakeExecutor()),
-    )
-
-    result = await runtime_invocation.invoke_tool_for_node(
-        "search_documents",
-        {"query": "question"},
-        state={},
-        config={},
-        node="retrieval_worker",
-        started=0.0,
-    )
-
-    assert result == "mcp-result"
-    assert calls[0][0] == "search_documents"
-    assert calls[1][0] == {"query": "question"}
-    assert "tool" not in inspect.signature(runtime_invocation.invoke_tool_for_node).parameters
+    append = AsyncMock()
+    monkeypatch.setattr(tool_audit, "AgentWorkflowRepository", lambda: SimpleNamespace(append_run_event_payload=append))
+    await tool_audit.persist_tool_audit(run_id="run", request_id="call", phase="started", tool_name="search_documents")
+    assert append.await_args.kwargs["payload_json"]["tool_call_id"] == "call"
+    append.side_effect = ValueError("storage rejected event")
+    with pytest.raises(ValueError, match="storage rejected event"):
+        await tool_audit.persist_tool_audit(run_id="run", request_id="call", phase="completed", tool_name="search_documents")
 
 
 def test_mcp_runner_includes_all_framework_neutral_tests():
@@ -46,7 +29,7 @@ def test_mcp_runner_includes_all_framework_neutral_tests():
         "test_mcp_transport.py",
         "test_mcp_contracts.py",
         "test_mcp_compatibility.py",
-        "test_mcp_langchain_adapter.py",
+        "test_mcp_tool_adapter.py",
         "test_mcp_framework_neutral.py",
     }
 
@@ -54,8 +37,9 @@ def test_mcp_runner_includes_all_framework_neutral_tests():
 def test_migrated_mcp_handlers_are_framework_neutral():
     migrated = {
         "get_thread_shape",
-        "search_documents",
-        "search_document_by_id",
+        "search_knowledge",
+        "inspect_document",
+        "read_context",
         "search_thread_conversation_history",
         "search_durable_memory",
         "search_thread_events",
@@ -98,8 +82,8 @@ def test_logical_server_groups_have_unique_known_tools():
 
 
 @pytest.mark.asyncio
-async def test_durable_memory_budget_is_clamped_to_contract_limit(monkeypatch):
-    from app.models.memory_limits import MAX_MEMORY_CONTEXT_CHARS
+async def test_durable_memory_budget_scales_with_context_window(monkeypatch):
+    from app.services.memory_retrieval_policy import compute_memory_retrieval_budget
     from app.tools.context import ToolInvocationContext
     from app.tools.retrieval_memory import search_durable_memory
     from app.tools.contracts import DocumentSearchRequest
@@ -121,7 +105,7 @@ async def test_durable_memory_budget_is_clamped_to_contract_limit(monkeypatch):
         ToolInvocationContext(thread_id="thread-1", context_window=20_000),
     )
 
-    assert captured["char_budget"] == MAX_MEMORY_CONTEXT_CHARS
+    assert captured["char_budget"] == int(compute_memory_retrieval_budget(20_000, expanded=True)["char_budget"])
     assert result.ok is True
 
 

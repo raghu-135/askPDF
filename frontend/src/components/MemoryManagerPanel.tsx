@@ -27,6 +27,8 @@ import {
   type MemoryConsistencyReviewCursor,
   type MemoryWorkspaceReadiness,
 } from '../lib/api';
+import { packingBudgetPayload } from '../lib/context-budget';
+import { useContextBudgetState } from '../hooks/useContextBudgetState';
 import { checkLlmModelReady, fetchAvailableLlmModels } from '../lib/models-api';
 import {
   buildCuratorContext,
@@ -159,6 +161,12 @@ export default function MemoryManagerPanel({
   const [models, setModels] = useState<string[]>([]);
   const [llmModel, setLlmModel] = useState('');
   const [contextWindow, setContextWindow] = useState(defaultContextWindow);
+  const {
+    contextBudget,
+    defaultContextBudget,
+    contextBudgetReady,
+    setContextBudget,
+  } = useContextBudgetState();
   const [modelReady, setModelReady] = useState<boolean | null>(null);
   const [workspaceReadiness, setWorkspaceReadiness] = useState<MemoryWorkspaceReadiness | null>(null);
   const [workspaceReadinessFailed, setWorkspaceReadinessFailed] = useState(false);
@@ -260,7 +268,7 @@ export default function MemoryManagerPanel({
     nextMessages: CuratorUiMessage[],
     webSearchDecision?: { query: string; approved: boolean },
   ) => {
-    if (!llmModel || modelReady !== true) return;
+    if (!llmModel || modelReady !== true || !contextBudget) return;
     setBusy(true);
     setError(null);
     setApplied(false);
@@ -276,6 +284,7 @@ export default function MemoryManagerPanel({
         })),
         llm_model: llmModel,
         context_window: contextWindow,
+        context_budget: packingBudgetPayload(contextBudget),
         review_round: reviewCursor ? 2 : 1,
         review_id: reviewId,
         web_search_mode: webSearchMode,
@@ -526,12 +535,16 @@ export default function MemoryManagerPanel({
             models={models}
             model={llmModel}
             contextWindow={contextWindow}
+            contextBudget={contextBudget}
+            defaultContextBudget={defaultContextBudget}
             disabled={busy}
+            contextBudgetDisabled={!contextBudgetReady}
             onModelChange={setLlmModel}
             onContextWindowChange={(value) => {
               setContextWindow(value);
               if (value > 0) window.localStorage.setItem('last_context_window', String(value));
             }}
+            onContextBudgetChange={setContextBudget}
             sx={{
               minHeight: 72,
               px: 1.5,
@@ -541,17 +554,13 @@ export default function MemoryManagerPanel({
             beforeModelControls={(
               <WebSearchModeControl mode={webSearchMode} disabled={busy} onChange={setWebSearchMode} />
             )}
-            leading={(
-              <Box sx={{ minWidth: 0, overflow: 'hidden' }}>
-                {curatorEmbeddingModel && (
-                  <EmbeddingModelReadinessIndicator
-                    model={curatorEmbeddingModel}
-                    ready={workspaceReadiness?.embedding_model_ready ?? null}
-                    size={18}
-                  />
-                )}
-              </Box>
-            )}
+            leading={curatorEmbeddingModel ? (
+              <EmbeddingModelReadinessIndicator
+                model={curatorEmbeddingModel}
+                ready={workspaceReadiness?.embedding_model_ready ?? null}
+                size={18}
+              />
+            ) : undefined}
           />
         </>
       )}
