@@ -46,7 +46,10 @@ from langgraph_runtime.workflows.state import consume_task_result_packets, task_
 from langgraph_runtime.prompts.loaders import get_deep_research_policy
 from langgraph_runtime.agent.canvas_layout_skills import canvas_emit_enabled, canvas_layout_skills_section
 from langgraph_runtime.workflows.canvas_publish import synthesize_with_canvas_publish
+from langgraph_runtime.workflows.evidence import format_prefetch_summary
 from langgraph_runtime.budgets import planner_limits
+
+_THREAD_CONTEXT_CHAR_CAP = 6_000
 
 
 def canonical_hash(value: Any) -> str:
@@ -445,15 +448,34 @@ async def _call_model(
     return _response_text(response), metadata
 
 
+def _thread_has_document_inventory(bundle: Mapping[str, Any]) -> bool:
+    documents = bundle.get("documents")
+    if isinstance(documents, list) and documents:
+        return True
+    shape = str(bundle.get("thread_shape_text") or "")
+    if not shape.strip():
+        return False
+    lowered = shape.lower()
+    return "documents   : none" not in lowered and "documents   :" in shape
+
+
+def _bounded_thread_context(state: Mapping[str, Any]) -> str:
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), Mapping) else {}
+    summary = format_prefetch_summary(dict(bundle))
+    return summary[:_THREAD_CONTEXT_CHAR_CAP] if summary.strip() else ""
+
+
 def _planning_context(state: Mapping[str, Any]) -> str:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
     budget = state.get("context_budget")
     section_limit = usable_context_chars(state.get("context_window"), ratio_key="plan_section_ratio", budget=budget)
     total_limit = usable_context_chars(state.get("context_window"), ratio_key="plan_total_ratio", budget=budget)
+    inventory_cap = min(section_limit, _THREAD_CONTEXT_CHAR_CAP)
     sections = [
         str(bundle.get("recent_history_text") or ""),
         str(bundle.get("semantic_history_text") or ""),
         str(bundle.get("document_evidence_text") or ""),
+        str(bundle.get("thread_shape_text") or "")[:inventory_cap],
     ]
     return "\n\n".join(value[:section_limit] for value in sections if value)[:total_limit]
 
@@ -1488,6 +1510,14 @@ Effective memory snapshot (bounded, provenance retained):
 Unresolved required todos: {json.dumps(failed, ensure_ascii=True)[:12000]}
 Unavailable evidence: {json.dumps(all_gaps, ensure_ascii=True)[:4000]}
 Clearly label the result incomplete when unresolved required todos exist. Preserve source references and do not invent citations."""
+    thread_context = _bounded_thread_context(state)
+    if thread_context:
+        prompt += (
+            "\n\nAuthoritative thread context (listed documents are attached to this thread; "
+            "inventory proves attachment only — retrieve content with search_knowledge / inspect_document "
+            "before claiming missing uploads or quoting document text):\n"
+            f"{thread_context}"
+        )
     layout = canvas_layout_skills_section(state.get("allowed_tool_ids")) if not provisional else ""
     if layout:
         prompt += (
@@ -1537,6 +1567,16 @@ Clearly label the result incomplete when unresolved required todos exist. Preser
             "provisional_synthesis.completed" if synthesis_error is None else "provisional_synthesis.failed",
             {"usable_output": bool(text.strip()), "error": synthesis_error},
         )
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), Mapping) else {}
+    synthesis_warnings: list[dict[str, Any]] = []
+    if (
+        _thread_has_document_inventory(bundle)
+        and _DOCUMENT_ABSENCE_ASSERTION.search(str(text or ""))
+    ):
+        synthesis_warnings.append({
+            "code": "synthesis_contradicts_thread_inventory",
+            "message": "The report claims missing documents although thread inventory lists attached files.",
+        })
     return {
         **context_update,
         "final_answer": text,
@@ -1544,7 +1584,7 @@ Clearly label the result incomplete when unresolved required todos exist. Preser
         "task_incomplete_reasons": [str(todo.get("id")) for todo in failed] + all_gaps,
         "task_result_warnings": [
             dict(value) for value in state.get("task_result_warnings") or [] if isinstance(value, Mapping)
-        ] + ([synthesis_error] if synthesis_error else []),
+        ] + ([synthesis_error] if synthesis_error else []) + synthesis_warnings,
         "task_provisional_synthesis_failed": synthesis_error or {},
     }
 

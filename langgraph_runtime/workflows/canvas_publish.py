@@ -88,6 +88,14 @@ def _tool_calls(response: Any) -> list[dict[str, Any]]:
     return [dict(call) for call in calls if str(call.get("name") or "") == _PUBLISH_TOOL]
 
 
+def _tool_call_args(call: Mapping[str, Any]) -> dict[str, Any]:
+    raw = call.get("args")
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    parsed = _parse_json_object(raw)
+    return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
 def _parse_json_object(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -512,7 +520,7 @@ async def synthesize_with_canvas_publish(
             if published:
                 conversation.append(ToolMessage(content="Canvas already published for this run.", tool_call_id=call_id))
                 continue
-            args = call.get("args") if isinstance(call.get("args"), Mapping) else {}
+            args = _tool_call_args(call)
             publish_calls += 1
             tool_started = time.perf_counter()
             tool_runtime = tool_config_for_node(
@@ -520,6 +528,12 @@ async def synthesize_with_canvas_publish(
             )
             try:
                 normalized_spec = normalize_publish_canvas_spec(args)
+                if isinstance(normalized_spec, str):
+                    normalized_spec = _parse_json_object(normalized_spec)
+                if not isinstance(normalized_spec, Mapping):
+                    raise CanvasSpecNormalizeError(
+                        "Canvas spec must be a JSON object with schema_version, title, and sections."
+                    )
             except CanvasSpecNormalizeError as exc:
                 tool_call_id = str((tool_runtime.get("configurable") or {}).get("tool_call_id") or call_id)
                 last_publish_error = exc.message

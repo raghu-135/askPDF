@@ -16,6 +16,31 @@ EXPLICIT_GAP_WARNINGS = frozenset({"missing_document_vectors", "indexing_in_prog
 def _bounded(value: Any, limit: int = INHERITED_EVIDENCE_CONTENT_LIMIT) -> str:
     return str(value or "").strip()[:limit]
 
+
+_THREAD_INVENTORY_HEADER = (
+    "[THREAD DOCUMENT INVENTORY — metadata only; use search_knowledge or inspect_document for content]"
+)
+
+
+def _document_inventory_text(bundle: Mapping[str, Any], *, limit: int) -> str:
+    shape = _bounded(bundle.get("thread_shape_text"), limit)
+    if shape:
+        return shape
+    documents = bundle.get("documents") or []
+    if not isinstance(documents, list) or not documents:
+        return ""
+    lines = [_THREAD_INVENTORY_HEADER]
+    for doc in documents[:50]:
+        if not isinstance(doc, Mapping):
+            continue
+        name = _bounded(doc.get("file_name") or doc.get("file_hash"), 300)
+        file_hash = _bounded(doc.get("file_hash"), 128)
+        chunks = doc.get("chunk_count")
+        chunk_text = str(chunks) if chunks not in (None, "") else "unknown"
+        lines.append(f"- file_name={name} | file_hash={file_hash} | chunks={chunk_text}")
+    return _bounded("\n".join(lines), limit)
+
+
 def _source_text(sources: Iterable[Mapping[str, Any]]) -> str:
     lines = []
     for source in sources:
@@ -34,8 +59,22 @@ def _packet(kind: RuntimeEvidenceKind, content: Any, *, sources: Iterable[Mappin
 def inherited_evidence_packets(prefetch: Mapping[str, Any] | None, *, profile_id: str | None = None, context_window: int | None = None, context_budget: Mapping[str, Any] | None = None) -> tuple[RuntimeInheritedEvidence, ...]:
     bundle = dict(prefetch or {})
     limit = usable_context_chars(context_window, budget=context_budget)
+    inventory_limit = min(limit, 8_000)
+    document_content = _bounded(bundle.get("document_evidence_text"), limit)
+    document_warnings: list[str] = []
+    if not document_content:
+        document_content = _document_inventory_text(bundle, limit=inventory_limit)
+        if document_content:
+            document_warnings.append("thread_inventory_metadata_only")
     packets = {
-        RuntimeEvidenceKind.DOCUMENT: _packet(RuntimeEvidenceKind.DOCUMENT, bundle.get("document_evidence_text"), sources=bundle.get("document_sources") or bundle.get("documents") or (), provenance={"origin": "prefetch", "inventory": list(bundle.get("documents") or [])[:100]}, limit=limit),
+        RuntimeEvidenceKind.DOCUMENT: _packet(
+            RuntimeEvidenceKind.DOCUMENT,
+            document_content,
+            sources=bundle.get("document_sources") or bundle.get("documents") or (),
+            provenance={"origin": "prefetch", "inventory": list(bundle.get("documents") or [])[:100]},
+            warnings=document_warnings,
+            limit=limit,
+        ),
         RuntimeEvidenceKind.WEB: _packet(RuntimeEvidenceKind.WEB, bundle.get("web_evidence_text"), sources=bundle.get("web_sources") or (), provenance={"origin": "prefetch"}, limit=limit),
         RuntimeEvidenceKind.CONVERSATION: _packet(RuntimeEvidenceKind.CONVERSATION, "\n\n".join(value for value in (_bounded(bundle.get("recent_history_text"), limit), _bounded(bundle.get("semantic_history_text"), limit)) if value), sources=bundle.get("semantic_memory_refs") or bundle.get("recent_message_refs") or (), provenance={"origin": "prefetch"}, limit=limit),
         RuntimeEvidenceKind.MEMORY: _packet(RuntimeEvidenceKind.MEMORY, bundle.get("durable_memory_text"), sources=bundle.get("durable_memory_refs") or (), provenance={"origin": "prefetch"}, limit=limit),

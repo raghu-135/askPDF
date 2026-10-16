@@ -96,7 +96,7 @@ class TableBlock(CanvasModel):
     type: Literal["table"] = "table"
     caption: Optional[str] = Field(default=None, max_length=160)
     headers: list[str] = Field(min_length=1, max_length=MAX_TABLE_HEADERS)
-    rows: list[list[TableCell]] = Field(min_length=1, max_length=MAX_TABLE_ROWS)
+    rows: list[list[Union[str, TableCell]]] = Field(min_length=1, max_length=MAX_TABLE_ROWS)
 
     @field_validator("headers")
     @classmethod
@@ -106,20 +106,14 @@ class TableBlock(CanvasModel):
             raise ValueError("table headers must be non-empty and within the cell limit")
         return cleaned
 
-    @field_validator("rows", mode="before")
+    @field_validator("rows", mode="after")
     @classmethod
-    def coerce_rows(cls, value: Any) -> Any:
-        if not isinstance(value, list):
-            return value
-        return [[_coerce_table_cell(cell) for cell in row] for row in value]
-
-    @field_validator("rows")
-    @classmethod
-    def validate_rows(cls, value: list[list[TableCell]]) -> list[list[TableCell]]:
-        for row in value:
+    def coerce_rows(cls, value: list[list[Union[str, TableCell]]]) -> list[list[TableCell]]:
+        coerced = [[_coerce_table_cell(cell) for cell in row] for row in value]
+        for row in coerced:
             if any(len(cell.text) > MAX_TABLE_CELL_CHARS for cell in row):
                 raise ValueError("table cells exceed the character limit")
-        return value
+        return coerced
 
     @model_validator(mode="after")
     def validate_row_width(self) -> "TableBlock":

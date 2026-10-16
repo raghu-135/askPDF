@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from langgraph.types import interrupt
 from langgraph.func import task
 from langgraph.config import get_config
@@ -145,11 +146,34 @@ class _TimelineArguments(_QueryArguments):
     max_results: int = Field(default=10, ge=1, le=30)
 
 
+def _coerce_publish_canvas_spec(value: Any) -> dict[str, Any]:
+    parsed: Any = value
+    if isinstance(parsed, Mapping):
+        return dict(parsed)
+    if isinstance(parsed, str):
+        for _ in range(2):
+            if not isinstance(parsed, str):
+                break
+            try:
+                parsed = json.loads(parsed)
+            except json.JSONDecodeError as exc:
+                raise ValueError("publish_canvas spec must be a JSON object") from exc
+        if not isinstance(parsed, Mapping):
+            raise ValueError("publish_canvas spec must be a JSON object")
+        return dict(parsed)
+    raise ValueError("publish_canvas spec must be a JSON object")
+
+
 class _PublishCanvasArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
     spec: dict[str, Any] = Field(description=CANVAS_SPEC_V1_FIELD_HINT)
     supersedes_id: str | None = None
     idempotency_key: str | None = None
+
+    @field_validator("spec", mode="before")
+    @classmethod
+    def _spec_must_be_object(cls, value: Any) -> dict[str, Any]:
+        return _coerce_publish_canvas_spec(value)
 
 
 _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
