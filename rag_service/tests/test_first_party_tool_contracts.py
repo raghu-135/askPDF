@@ -589,6 +589,25 @@ def test_vector_citation_preserves_validated_provenance_metadata():
     assert source["source_element_ids"] == ["element-1"]
 
 
+def test_vector_citation_includes_sentence_ids_from_metadata():
+    source = _source_from_chunk({
+        "file_hash": "file-1",
+        "source_id": "src-1",
+        "generation": "generation-1",
+        "manifest_id": "manifest-file-1",
+        "text": "evidence",
+        "metadata": {
+            "body_text": "evidence",
+            "generation": "generation-1",
+            "manifest_id": "manifest-file-1",
+            "extraction_fingerprint": "extract-1",
+            "chunking_fingerprint": "chunk-1",
+            "sentence_ids": ["7", "8"],
+        },
+    })
+    assert source["sentence_ids"] == ["7", "8"]
+
+
 def test_context_cursor_binds_budget_and_tokenizer_version():
     cursor = _context_cursor(
         manifest_id="manifest-1",

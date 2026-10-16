@@ -71,6 +71,14 @@ def test_group_document_chunks_emits_one_passage_per_section():
     assert sources[1]["text"].startswith("B")
 
 
+def test_group_document_chunks_propagates_sentence_ids():
+    chunks = [
+        _chunk(file_hash="f1", section_id="s1", chunk_index=0, text="Evidence", sentence_ids=["3", "4"]),
+    ]
+    _, sources = group_document_chunks(chunks, {"f1": {"file_name": "doc.pdf"}})
+    assert sources[0]["sentence_ids"] == ["3", "4"]
+
+
 @pytest.mark.asyncio
 async def test_expand_synthetic_sentence_siblings_adds_missing_pieces(monkeypatch):
     chunks = [

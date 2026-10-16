@@ -765,6 +765,7 @@ async def index_document_for_thread(
                             "manifest_id": web_manifest_id,
                             "generation": web_generation,
                             "extraction_fingerprint": web_extraction_fingerprint,
+                            "sentence_ids": [str(index)],
                         },
                     }
                     for index, chunk in enumerate(parse_markdown_to_chunks(markdown_content))

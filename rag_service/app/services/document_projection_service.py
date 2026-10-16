@@ -398,7 +398,8 @@ async def ensure_retrieval_projection(
         },
     )
     payload = canonical.document_json or {}
-    sentences = project_sentences(payload, element_policy=None)
+    reading = payload.get("reading_projection") if isinstance(payload.get("reading_projection"), list) else []
+    sentences = reading if reading else project_sentences(payload)
     chunks = pack_retrieval_chunks(
         sentences,
         token_counter=counter,

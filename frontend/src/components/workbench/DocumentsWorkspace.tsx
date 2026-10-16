@@ -40,6 +40,7 @@ export default function DocumentsWorkspace({
   cachedSentences = [],
   cachedDownloadUrl = null,
   currentDocumentSentenceId = null,
+  highlightSentenceIds = null,
   onDocumentJump,
   autoScroll = false,
   highlightEnabled = true,
@@ -74,6 +75,7 @@ export default function DocumentsWorkspace({
   cachedSentences?: any[];
   cachedDownloadUrl?: string | null;
   currentDocumentSentenceId?: number | null;
+  highlightSentenceIds?: number[] | null;
   onDocumentJump: (id: number) => void;
   autoScroll?: boolean;
   highlightEnabled?: boolean;
@@ -185,6 +187,7 @@ export default function DocumentsWorkspace({
             downloadUrl={documentDownloadUrl}
             sentences={documentSentences}
             currentId={currentDocumentSentenceId}
+            highlightSentenceIds={highlightSentenceIds}
             onJump={onDocumentJump}
             autoScroll={autoScroll}
             isResizing={isResizing}

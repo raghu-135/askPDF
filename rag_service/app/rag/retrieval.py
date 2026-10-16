@@ -480,10 +480,15 @@ def group_document_chunks(
                 "pages",
                 "timeline_event_at",
                 "timeline_event_type",
+                "sentence_ids",
             ):
                 value = chunk_meta.get(field)
                 if value not in (None, ""):
                     source_entry[field] = value
+            if not source_entry.get("sentence_ids"):
+                raw_ids = chunk.get("sentence_ids") or chunk_meta.get("sentence_ids")
+                if raw_ids:
+                    source_entry["sentence_ids"] = [str(item) for item in raw_ids]
             document_sources.append(source_entry)
 
         pages_label = _compact_page_ranges(group_pages)

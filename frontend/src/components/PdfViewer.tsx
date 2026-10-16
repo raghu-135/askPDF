@@ -86,6 +86,7 @@ import {
   type SentenceWithPageBBoxes,
 } from "../lib/pdf-utils";
 import { clampPanelRatio, PANEL_RATIOS } from "../lib/panel-ratio";
+import { highlightIdSet, sentenceById } from "../lib/sentence-catalog";
 
 
 type BBox = {
@@ -113,6 +114,7 @@ type Word = {
 type Sentence = {
   id: number;
   text: string;
+  readable?: boolean;
   label: string;
   page: number;
   bbox: [number, number, number, number];
@@ -129,6 +131,7 @@ type Props = {
   downloadUrl: string;
   sentences: Sentence[] | null;
   currentId: number | null;
+  highlightSentenceIds?: number[] | null;
   onJump: (id: number) => void;
   autoScroll: boolean;
   isResizing?: boolean;
@@ -413,6 +416,7 @@ function EmbedPdfDocumentBody({
   downloadUrl: _downloadUrl,
   sentences,
   currentId,
+  highlightSentenceIds = null,
   onJump,
   autoScroll,
   isResizing,
@@ -524,7 +528,7 @@ function EmbedPdfDocumentBody({
     if (isHistoryProcessingRef.current) return;
 
     if (!autoScroll || currentId === null || !sentences) return;
-    const s = sentences[currentId];
+    const s = sentenceById(sentences, currentId);
     const bbox = s?.bboxes?.[0];
     if (!bbox) return;
 
@@ -816,7 +820,8 @@ function EmbedPdfDocumentBody({
       }
 
       const pageData = byPage[pageNumber] || [];
-      const activeSentence = pageData.find((s) => s.id === currentId);
+      const activeIds = highlightIdSet(currentId, highlightSentenceIds);
+      const activeSentences = pageData.filter((sentence) => activeIds.has(sentence.id));
 
       return (
         <div
@@ -864,7 +869,7 @@ function EmbedPdfDocumentBody({
               )}
             />}
             {searchHighlightLayer}
-            {activeSentence ? (
+            {activeSentences.length ? (
               <div
                 style={{
                   position: "absolute",
@@ -873,9 +878,9 @@ function EmbedPdfDocumentBody({
                   zIndex: 25,
                 }}
               >
-                {activeSentence.pageBBoxes.map((bbox, idx) => (
+                {activeSentences.flatMap((activeSentence) => activeSentence.pageBBoxes.map((bbox, idx) => (
                   <div
-                    key={idx}
+                    key={`${activeSentence.id}-${idx}`}
                     style={{
                       position: "absolute",
                       left: `${(bbox.x / bbox.page_width) * 100}%`,
@@ -885,7 +890,7 @@ function EmbedPdfDocumentBody({
                       backgroundColor: "rgba(0, 180, 255, 0.28)",
                     }}
                   />
-                ))}
+                )))}
               </div>
             ) : null}
           </PagePointerProvider>
@@ -896,6 +901,7 @@ function EmbedPdfDocumentBody({
       documentId,
       byPage,
       currentId,
+      highlightSentenceIds,
       highlightEnabled,
       searchByPage,
       pdfSearch.activeIndex,
@@ -1040,6 +1046,7 @@ const PdfViewer = React.memo(function PdfViewer({
   downloadUrl,
   sentences,
   currentId,
+  highlightSentenceIds = null,
   onJump,
   autoScroll,
   isResizing,
@@ -1111,6 +1118,7 @@ const PdfViewer = React.memo(function PdfViewer({
               downloadUrl={downloadUrl}
               sentences={sentences}
               currentId={currentId}
+              highlightSentenceIds={highlightSentenceIds}
               onJump={onJump}
               autoScroll={autoScroll}
               isResizing={isResizing}

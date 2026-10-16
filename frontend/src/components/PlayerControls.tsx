@@ -7,10 +7,12 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 
 import { ttsSentence, getVoices } from "../lib/tts-api";
 import { useTtsPrefetchCache } from "../hooks/useTtsPrefetchCache";
+import { adjacentReadableId } from "../lib/sentence-catalog";
 
 type Sentence = {
   id: number;
   text: string;
+  readable?: boolean;
   label?: string;
   page?: number;
   bbox?: [number, number, number, number];
@@ -312,15 +314,23 @@ export const PlayerPlaybackChrome = React.memo(function PlayerPlaybackChrome() {
           )}
         </IconButton>
         <IconButton
-          onClick={() => currentId !== null && currentId > 0 && void playSentence(currentId - 1)}
-          disabled={isDisabled || currentId === null || currentId <= 0}
+          onClick={() => {
+            if (currentId === null) return;
+            const previousId = adjacentReadableId(sentences, currentId, -1);
+            if (previousId !== null) void playSentence(previousId);
+          }}
+          disabled={isDisabled || currentId === null || adjacentReadableId(sentences, currentId, -1) === null}
           size="small"
         >
           <SkipPrevious fontSize="small" />
         </IconButton>
         <IconButton
-          onClick={() => currentId !== null && currentId < (sentences?.length ?? 0) - 1 && void playSentence(currentId + 1)}
-          disabled={isDisabled || currentId === null || currentId >= (sentences?.length ?? 0) - 1}
+          onClick={() => {
+            if (currentId === null) return;
+            const nextId = adjacentReadableId(sentences, currentId, 1);
+            if (nextId !== null) void playSentence(nextId);
+          }}
+          disabled={isDisabled || currentId === null || adjacentReadableId(sentences, currentId, 1) === null}
           size="small"
         >
           <SkipNext fontSize="small" />

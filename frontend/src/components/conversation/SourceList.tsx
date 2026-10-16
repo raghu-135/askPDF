@@ -16,6 +16,8 @@ export type DisplaySource = {
   url?: string;
   text?: string;
   snippet?: string;
+  file_hash?: string;
+  sentence_ids?: string[];
   origin_attempt?: number;
   inherited?: boolean;
   origins?: DisplaySourceOrigin[];
@@ -28,7 +30,15 @@ const fallbackTitle = (kind?: DisplaySource['kind']) => ({
   web: 'Web result',
 }[kind || 'web']);
 
-export function SourceList({ sources, label = 'Sources used' }: { sources: DisplaySource[]; label?: string }) {
+export function SourceList({
+  sources,
+  label = 'Sources used',
+  onDocumentSourceClick,
+}: {
+  sources: DisplaySource[];
+  label?: string;
+  onDocumentSourceClick?: (source: DisplaySource) => void;
+}) {
   if (!sources.length) return null;
   return (
     <Box sx={{ mt: 1 }}>
@@ -41,8 +51,20 @@ export function SourceList({ sources, label = 'Sources used' }: { sources: Displ
             const additionalAttempts = [...new Set((source.origins || [])
               .filter((origin) => origin.attempt && origin.attempt !== source.origin_attempt)
               .map((origin) => origin.attempt))];
+            const documentClickable = Boolean(onDocumentSourceClick && source.file_hash);
             return (
-              <Box key={source.id || `${source.url || source.title}-${index}`} sx={{ p: 1, borderRadius: 1, bgcolor: 'action.hover', borderLeft: '3px solid', borderColor: 'primary.light' }}>
+              <Box
+                key={source.id || `${source.url || source.title}-${index}`}
+                onClick={documentClickable ? () => onDocumentSourceClick?.(source) : undefined}
+                sx={{
+                  p: 1,
+                  borderRadius: 1,
+                  bgcolor: 'action.hover',
+                  borderLeft: '3px solid',
+                  borderColor: 'primary.light',
+                  cursor: documentClickable ? 'pointer' : 'default',
+                }}
+              >
                 {source.url ? (
                   <Typography variant="caption" component="a" href={source.url} target="_blank" rel="noopener noreferrer" sx={{ color: 'primary.main', display: 'block', fontWeight: 600, textDecoration: 'none', overflowWrap: 'anywhere', '&:hover': { textDecoration: 'underline' } }}>
                     {source.title || source.url}
