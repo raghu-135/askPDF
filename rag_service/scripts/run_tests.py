@@ -72,7 +72,7 @@ UNIT_TEST_FILES = [
     "test_provider_clients.py",
     "test_first_party_tool_contracts.py",
     "test_llm_server_client_pytest.py",
-    "test_model_errors_pytest.py",
+    "test_runtime_model_errors_pytest.py",
     "test_search_skips_failed_files_pytest.py",
     "test_memory_retrieval_policy_pytest.py",
     "test_memory_hardening_pytest.py",
