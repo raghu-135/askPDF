@@ -74,6 +74,7 @@ export default function Home() {
 
   const [activeSource, setActiveSource] = useState<'pdf' | 'chat'>('pdf');
   const [currentPdfId, setCurrentPdfId] = useState<number | null>(null);
+  const [pdfHighlightSentenceIds, setPdfHighlightSentenceIds] = useState<number[] | null>(null);
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
   const [playRequestId, setPlayRequestId] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -964,10 +965,14 @@ export default function Home() {
       traceId: null,
       canvasId: null,
     });
-    if (target.sentenceId != null) {
-      setCurrentPdfId(target.sentenceId);
+    const highlightIds = (target.sentenceIds?.length ? target.sentenceIds : (
+      target.sentenceId != null ? [target.sentenceId] : null
+    ));
+    if (highlightIds?.length) {
+      setPdfHighlightSentenceIds(highlightIds);
+      setCurrentPdfId(highlightIds[0]);
       if (target.play !== false) {
-        setPlayRequestId(target.sentenceId);
+        setPlayRequestId(highlightIds[0]);
       }
     }
   }, [hydrateDocumentOnSelect, pdfTabs, persistWorkspaceResume, workspaceContextKey]);
@@ -1132,7 +1137,13 @@ export default function Home() {
               isResizing={isResizing}
               darkMode={pdfDarkMode}
               currentDocumentSentenceId={activeSource === 'pdf' ? currentPdfId : null}
-              onDocumentJump={(id) => { setActiveSource('pdf'); setCurrentPdfId(id); setPlayRequestId(id); }}
+              highlightSentenceIds={pdfHighlightSentenceIds}
+              onDocumentJump={(id) => {
+                setActiveSource('pdf');
+                setCurrentPdfId(id);
+                setPdfHighlightSentenceIds([id]);
+                setPlayRequestId(id);
+              }}
               autoScroll={autoScroll}
               highlightEnabled={highlightEnabled}
               threadId={activeThread?.id ?? null}
@@ -1287,6 +1298,7 @@ export default function Home() {
                   onOpenTrace={handleOpenTrace}
                   onOpenCanvas={handleOpenCanvas}
                   onOpenMemoryReview={handleOpenConversationReview}
+                  onOpenDocumentCitation={handleOpenDocumentCitation}
                   hideInlineLineage
                   darkMode={pdfDarkMode}
                   autoScroll={autoScroll}

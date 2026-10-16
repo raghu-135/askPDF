@@ -90,6 +90,7 @@ async def get_thread_messages_endpoint(
                     "reasoning_available": m.reasoning_available,
                     "reasoning_format": m.reasoning_format,
                     "web_sources": m.web_sources,
+                    "document_sources": getattr(m, "document_sources", None),
                     "metadata": _agent_message_metadata(m),
                     "agent_run_id": getattr(m, "agent_run_id", None),
                     "agent_run_turn_kind": getattr(m, "agent_run_turn_kind", None),

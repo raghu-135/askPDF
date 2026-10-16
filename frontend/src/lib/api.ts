@@ -975,6 +975,16 @@ export interface WebSource {
   score?: number;
 }
 
+export interface DocumentSource {
+  text: string;
+  file_hash: string;
+  score?: number;
+  file_name?: string;
+  title?: string;
+  url?: string;
+  sentence_ids?: string[];
+}
+
 export interface AgentMessageMetadata {
   agent_run_id?: string;
   agent_workflow_id?: string;
@@ -1000,6 +1010,7 @@ export interface Message {
   reasoning_format?: ReasoningFormatValue;
   context_compact?: string;
   web_sources?: WebSource[];
+  document_sources?: DocumentSource[];
   metadata?: AgentMessageMetadata;
   agent_run_id?: string;
   agent_run_turn_kind?: string;
@@ -2845,7 +2856,7 @@ export interface ThreadChatResponse {
   user_message_id: string | null;
   assistant_message_id: string | null;
   used_chat_ids: string[];
-  document_sources: { text: string; file_hash: string; score: number; source_type?: typeof ThreadFileSourceType.Pdf; title?: string; url?: string }[];
+  document_sources: DocumentSource[];
   web_sources?: WebSource[];
   reasoning?: string;
   reasoning_available?: boolean;

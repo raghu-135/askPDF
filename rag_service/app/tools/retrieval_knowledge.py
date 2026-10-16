@@ -148,6 +148,11 @@ def _source_from_chunk(
     )
     table_id = metadata.get("table_id") or get("table_id")
     section_id = metadata.get("section_id") or get("section_id")
+    sentence_ids = list(
+        metadata.get("sentence_ids")
+        or get("sentence_ids", None)
+        or []
+    )
     return {
         "source_id": source_id,
         "file_hash": get("file_hash"),
@@ -163,6 +168,7 @@ def _source_from_chunk(
         "heading_path": list(metadata.get("heading_path") or get("heading_path", []) or []),
         "table_id": table_id,
         "section_id": section_id,
+        "sentence_ids": [str(value) for value in sentence_ids],
         "generation": generation,
         "manifest_id": manifest_id,
         "extraction_fingerprint": extraction_fingerprint,
