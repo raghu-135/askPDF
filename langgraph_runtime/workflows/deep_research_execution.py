@@ -281,7 +281,14 @@ class RuntimeBudgetMeter:
             for key, amount in usage.items():
                 increment = max(0, int(amount or 0))
                 if key in limit_names:
-                    tranche_usage[key] = int(tranche_usage.get(key) or 0) + increment
+                    limit_name = limit_names[key]
+                    cap = max(1, int(self._limits.get(limit_name) or 1))
+                    current = int(tranche_usage.get(key) or 0)
+                    if current >= cap:
+                        increment = 0
+                    else:
+                        increment = min(increment, cap - current)
+                    tranche_usage[key] = current + increment
                 lifetime_usage[key] = int(lifetime_usage.get(key) or 0) + increment
             self._budget.update({
                 "tranche_usage": tranche_usage,

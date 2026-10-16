@@ -20,7 +20,7 @@ from langgraph.func import task
 from langgraph.config import get_config
 
 from langgraph_runtime.agent.tool_registry import TOOL_FRIENDLY_CONFIG
-from langgraph_runtime.canvas_spec_contract import CANVAS_SPEC_V1_FIELD_HINT
+from langgraph_runtime.canvas_draft_contract import CANVAS_PUBLISH_DRAFT_HINT
 from runtime_protocol.tool_approval import stable_invocation_id
 from runtime_protocol.tool_contract import normalize_tool_result
 
@@ -132,6 +132,19 @@ class _InspectDocumentArguments(BaseModel):
     cursor: str | None = None
     page_size: int = Field(default=50, ge=1, le=200)
 
+    @field_validator("cursor", mode="before")
+    @classmethod
+    def _coerce_cursor(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value or None
+        if isinstance(value, int):
+            import base64
+            payload = json.dumps({"offset": max(0, int(value))}, separators=(",", ":"))
+            return base64.urlsafe_b64encode(payload.encode()).decode()
+        return value
+
 
 class _ReadContextArguments(BaseModel):
     source_id: str = Field(min_length=1, max_length=256)
@@ -146,34 +159,23 @@ class _TimelineArguments(_QueryArguments):
     max_results: int = Field(default=10, ge=1, le=30)
 
 
-def _coerce_publish_canvas_spec(value: Any) -> dict[str, Any]:
-    parsed: Any = value
-    if isinstance(parsed, Mapping):
-        return dict(parsed)
-    if isinstance(parsed, str):
-        for _ in range(2):
-            if not isinstance(parsed, str):
-                break
-            try:
-                parsed = json.loads(parsed)
-            except json.JSONDecodeError as exc:
-                raise ValueError("publish_canvas spec must be a JSON object") from exc
-        if not isinstance(parsed, Mapping):
-            raise ValueError("publish_canvas spec must be a JSON object")
-        return dict(parsed)
-    raise ValueError("publish_canvas spec must be a JSON object")
+class _CanvasDraftClaimArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=600)
+    source_ids: list[str] = Field(min_length=1, max_length=8)
+    time: str | None = Field(default=None, max_length=80)
+    tone: str | None = None
+    group: str | None = Field(default=None, max_length=120)
 
 
 class _PublishCanvasArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    spec: dict[str, Any] = Field(description=CANVAS_SPEC_V1_FIELD_HINT)
+    layout: str = Field(description="compare, matrix, or timeline")
+    title: str = Field(min_length=1, max_length=160, description=CANVAS_PUBLISH_DRAFT_HINT)
+    summary: str | None = Field(default=None, max_length=400)
+    claims: list[_CanvasDraftClaimArguments] = Field(min_length=1, max_length=30)
     supersedes_id: str | None = None
     idempotency_key: str | None = None
-
-    @field_validator("spec", mode="before")
-    @classmethod
-    def _spec_must_be_object(cls, value: Any) -> dict[str, Any]:
-        return _coerce_publish_canvas_spec(value)
 
 
 _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {

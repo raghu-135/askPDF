@@ -95,6 +95,7 @@ def _source_from_chunk(
     generation: str | None = None,
     manifest_id: str | None = None,
     extraction_fingerprint: str | None = None,
+    chunking_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     metadata = dict(getattr(chunk, "metadata_json", None) or {}) if not isinstance(chunk, dict) else dict(chunk.get("metadata") or {})
     get = chunk.get if isinstance(chunk, dict) else lambda key, default=None: getattr(chunk, key, default)
@@ -116,7 +117,8 @@ def _source_from_chunk(
         or ""
     )
     chunking_fingerprint = str(
-        get("chunking_fingerprint", "")
+        chunking_fingerprint
+        or get("chunking_fingerprint", "")
         or metadata.get("chunking_fingerprint")
         or ""
     )
@@ -642,6 +644,7 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                     generation=canonical.generation,
                     manifest_id=manifest_id,
                     extraction_fingerprint=canonical.extraction_fingerprint,
+                    chunking_fingerprint=str(selected_manifest.chunking_fingerprint or ""),
                 )
             )
             consumed += 1

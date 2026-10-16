@@ -4,7 +4,7 @@ import hashlib
 import json
 import uuid
 from datetime import timedelta
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 from sqlalchemy import case, func, or_
 from sqlalchemy.exc import IntegrityError
@@ -38,6 +38,7 @@ from app.services.agent_task_budgets import (
     initial_budget_state,
     normalize_budget_state,
     reset_tranche,
+    capped_tranche_increment,
 )
 
 
@@ -247,10 +248,13 @@ async def consume_budget(
             increments = {"model_calls": model_calls, "model_tokens": model_tokens, "tool_calls": tool_calls}
             for key, amount in increments.items():
                 increment = max(0, int(amount or 0))
-                usage["tranche_usage"][key] = int(usage["tranche_usage"].get(key) or 0) + increment
+                if key in usage["tranche_usage"]:
+                    increment = capped_tranche_increment(usage, key, increment)
+                    usage["tranche_usage"][key] = int(usage["tranche_usage"].get(key) or 0) + increment
                 usage["lifetime_usage"][key] = int(usage["lifetime_usage"].get(key) or 0) + increment
             exhausted = exhausted_dimensions(usage)
-            if exhausted and not isinstance(usage.get("boundary"), dict):
+            boundary = usage.get("boundary")
+            if exhausted and not (isinstance(boundary, Mapping) and boundary.get("status") == "requested"):
                 usage["boundary"] = {
                     "status": "requested",
                     "dimensions": exhausted,
@@ -727,6 +731,7 @@ async def apply_command(
             allowed, target = COMMAND_TRANSITIONS[action]
             if task.status not in allowed:
                 raise AgentTaskConflict("task_transition_invalid", f"Cannot {action} task from {task.status}", current_version=task.version)
+            prior_status = task.status
             command = AgentTaskCommand(
                 task_id=task.id,
                 action=action,
@@ -828,7 +833,10 @@ async def apply_command(
                     )
             command.status = "accepted" if action == "cancel" and target == AgentTaskStatus.CANCELLING.value else "completed"
             command.result_version = task.version
-            replace_jsonb_field(command, "result_json", {"task_id": task.id, "status": task.status, "version": task.version})
+            command_result = {"task_id": task.id, "status": task.status, "version": task.version}
+            if action == "cancel":
+                command_result["prior_status"] = prior_status
+            replace_jsonb_field(command, "result_json", command_result)
             command.completed_at = None if command.status == "accepted" else now
             await _append_event(
                 session,
@@ -852,6 +860,66 @@ async def complete_control_command(command_id: str, *, result: dict[str, Any] | 
                 command.status = "rejected" if rejected else "completed"
                 command.result_json = dict(result or {})
                 command.completed_at = utc_now()
+
+
+async def revert_cancel_after_runtime_failure(task_id: str, command_id: str) -> None:
+    """Restore task status when runtime cancel could not be submitted (e.g. run not registered)."""
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            command = await session.get(AgentTaskCommand, command_id, with_for_update=True)
+            task = (
+                await session.execute(select(AgentTask).where(AgentTask.id == task_id).with_for_update())
+            ).scalar_one_or_none()
+            if command is None or task is None or command.action != "cancel":
+                return
+            if task.status != AgentTaskStatus.CANCELLING.value:
+                return
+            prior_status = str((command.result_json or {}).get("prior_status") or "").strip()
+            if prior_status not in ACTIVE_TASK_STATUSES and prior_status not in {
+                AgentTaskStatus.CREATED.value,
+                AgentTaskStatus.PAUSED.value,
+                AgentTaskStatus.AWAITING_APPROVAL.value,
+            }:
+                prior_status = AgentTaskStatus.RUNNING.value
+            now = utc_now()
+            task.status = prior_status
+            task.current_phase = prior_status
+            task.version += 1
+            task.updated_at = now
+            command.status = "rejected"
+            replace_jsonb_field(
+                command,
+                "result_json",
+                {**(command.result_json or {}), "rolled_back": True, "status": prior_status},
+            )
+            command.completed_at = now
+            await _append_event(
+                session,
+                task,
+                "task.cancel_rolled_back",
+                agent_run_id=task.active_run_id,
+                payload={"prior_status": prior_status, "command_id": command.id},
+            )
+
+
+async def cancel_actor_for_task(task_id: str) -> str | None:
+    async with async_session_maker() as session:
+        command = (
+            await session.execute(
+                select(AgentTaskCommand)
+                .where(
+                    AgentTaskCommand.task_id == task_id,
+                    AgentTaskCommand.action == "cancel",
+                    AgentTaskCommand.status == "completed",
+                )
+                .order_by(AgentTaskCommand.completed_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if command is None or not command.actor_id:
+            return None
+        return str(command.actor_id)
 
 
 async def complete_pending_cancel_commands(task_id: str, *, result: dict[str, Any]) -> None:
@@ -2108,13 +2176,23 @@ async def respond_to_result_review(
                 )).scalars().all())
                 for todo in todos:
                     todo.status = "pending"
+                    todo.attempt = 0
                     todo.current_subagent_run_id = None
                     todo.terminal_reason = None
                     todo.progress = 0
+                    todo.result_summary = None
+                    replace_jsonb_field(todo, "artifact_ids_json", [])
+                    replace_jsonb_field(todo, "evidence_ids_json", [])
                     todo.version += 1
                     todo.updated_at = now
+                completed = sum(1 for item in (await session.execute(
+                    select(AgentTaskTodo).where(AgentTaskTodo.task_id == task.id)
+                )).scalars().all() if item.status == "completed")
+                task.completed_todos = completed
+                task.progress = int((completed * 100) / max(1, task.total_todos or 1))
                 task.status = AgentTaskStatus.QUEUED.value
                 task.current_phase = "result_review_retry_queued"
+                task.active_run_id = None
                 task.terminal_reason = None
                 task.queued_at = now
                 task.completed_at = None

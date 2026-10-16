@@ -69,6 +69,8 @@ def _progress_context(config: RunnableConfig, *, state: Mapping[str, Any], node:
 
 
 def _usage_summary(response: Any) -> Dict[str, int]:
+    if isinstance(response, Mapping) and response.get("raw") is not None:
+        response = response.get("raw")
     candidates = [getattr(response, "usage_metadata", None)]
     metadata = getattr(response, "response_metadata", None)
     if isinstance(metadata, dict):
@@ -207,12 +209,20 @@ async def invoke_llm_for_node(
                 response=response,
             )
         llm_meta = llm_result_metadata(response, model_name=model_name, retry_attempts=retry_attempts)
+        usage = _usage_summary(response)
+        token_counts = llm_meta.get("token_counts") if isinstance(llm_meta, Mapping) else {}
+        if isinstance(token_counts, Mapping) and not usage.get("total_tokens"):
+            usage = {
+                "prompt_tokens": int(token_counts.get("prompt") or token_counts.get("prompt_tokens") or 0),
+                "completion_tokens": int(token_counts.get("completion") or token_counts.get("completion_tokens") or 0),
+                "total_tokens": int(token_counts.get("total") or token_counts.get("total_tokens") or 0),
+            }
         completed_payload = {
             **progress,
             "status": "completed",
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
             "response_chars": len(str(getattr(response, "content", "") or "")),
-            "usage": _usage_summary(response),
+            "usage": usage,
             "retry_count": len(retry_attempts),
         }
         if llm_meta.get("output_truncated"):

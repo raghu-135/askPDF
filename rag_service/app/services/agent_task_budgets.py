@@ -83,6 +83,20 @@ def normalize_budget_state(value: Mapping[str, Any] | None, limits: Mapping[str,
     return state
 
 
+def capped_tranche_increment(state: Mapping[str, Any], dimension: str, increment: int) -> int:
+    """Apply at most the remaining tranche capacity for a budget dimension."""
+    amount = max(0, int(increment or 0))
+    if amount == 0:
+        return 0
+    limits = state.get("tranche_limits") if isinstance(state.get("tranche_limits"), Mapping) else {}
+    usage = state.get("tranche_usage") if isinstance(state.get("tranche_usage"), Mapping) else {}
+    cap = max(1, int(limits.get(dimension) or 1))
+    current = int(usage.get(dimension) or 0)
+    if current >= cap:
+        return 0
+    return min(amount, cap - current)
+
+
 def exhausted_dimensions(state: Mapping[str, Any]) -> list[str]:
     usage = state.get("tranche_usage") if isinstance(state.get("tranche_usage"), Mapping) else {}
     limits = state.get("tranche_limits") if isinstance(state.get("tranche_limits"), Mapping) else {}

@@ -146,7 +146,12 @@ async def _stage_artifacts(
 async def _stage_final_report(
     *, task_id: str, agent_run_id: str, operation_id: str, text: str
 ) -> dict[str, Any] | None:
-    body = text.strip().encode("utf-8")
+    stripped = text.strip()
+    if stripped.startswith("Limitations identified during evidence review:"):
+        return None
+    if stripped.startswith("Unresolved required work") and "Limitations identified" in stripped:
+        return None
+    body = stripped.encode("utf-8")
     if not body:
         return None
     digest = hashlib.sha256(body).hexdigest()

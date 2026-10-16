@@ -242,13 +242,39 @@ class DeepResearchSubagentActionDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["tool", "finish"]
     tool: Optional[str] = Field(default=None, max_length=128)
-    arguments: Dict[str, Any] = Field(default_factory=dict)
+    document_id: Optional[str] = Field(default=None, max_length=256)
+    source_id: Optional[str] = Field(default=None, max_length=256)
+    section_id: Optional[str] = Field(default=None, max_length=256)
+    query: Optional[str] = Field(default=None, max_length=4000)
+    level: Optional[str] = Field(default=None, max_length=32)
+    expansion: Optional[str] = Field(default=None, max_length=32)
+    max_results: Optional[int] = Field(default=None, ge=1, le=30)
+    token_budget: Optional[int] = Field(default=None, ge=1, le=8000)
+    cursor: Optional[str] = Field(default=None, max_length=512)
 
     @model_validator(mode="after")
     def _require_tool_when_action_is_tool(self) -> "DeepResearchSubagentActionDecision":
         if self.action == "tool" and not str(self.tool or "").strip():
             raise ValueError("tool is required when action is tool")
         return self
+
+    def tool_arguments(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        for key in (
+            "document_id",
+            "source_id",
+            "section_id",
+            "query",
+            "level",
+            "expansion",
+            "max_results",
+            "token_budget",
+            "cursor",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                payload[key] = value
+        return payload
 
 
 class DeepResearchSubagentResult(BaseModel):

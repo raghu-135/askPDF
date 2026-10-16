@@ -402,6 +402,7 @@ class CanonicalDocumentRepository:
                         "extraction_fingerprint": extraction_fingerprint,
                         "source_version": source_version,
                         "manifest_id": manifest.manifest_id,
+                        "chunking_fingerprint": chunking_fingerprint,
                         "source_element_ids": list(item.get("source_element_ids") or []),
                     },
                 ))

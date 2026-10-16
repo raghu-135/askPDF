@@ -807,6 +807,12 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 getattr(latest_run, "id", None),
                 getattr(latest_run, "status", None),
             )
+            if (
+                latest_task is not None
+                and latest_task.status == AgentTaskStatus.QUEUED.value
+                and str(latest_task.current_phase or "") == "result_review_retry_queued"
+            ):
+                await ensure_task_run(latest_task.id)
             return
         runtime_result = await _invoke_task_runtime(
             adapter=adapter,

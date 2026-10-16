@@ -1,5 +1,6 @@
 """Human permission at the shared tool boundary, independent of runtimes."""
 
+import asyncio
 from typing import Any, Awaitable, Callable, Mapping
 from uuid import uuid4
 
@@ -156,6 +157,25 @@ async def check_tool_approval(
     return ApprovalMode.ASK, request
 
 
+async def _finalize_tool_invocation(
+    run_id: str,
+    invocation_id: str,
+    *,
+    status: str,
+    result_json: dict[str, Any] | None = None,
+) -> None:
+    key = (ToolInvocation.run_id == run_id, ToolInvocation.invocation_id == invocation_id)
+    async with async_session_maker() as session:
+        async with session.begin():
+            record = (await session.execute(select(ToolInvocation).where(*key).with_for_update())).scalar_one_or_none()
+            if record is None:
+                return
+            if result_json is not None:
+                record.result_json = result_json
+            record.status = status
+            record.completed_at = utc_now()
+
+
 async def _persisted_run_id(run_id: str | None) -> str | None:
     value = str(run_id or "").strip()
     if not value:
@@ -192,15 +212,29 @@ async def execute_tool_once(
                     error=ToolError(code="tool_invocation_outcome_unknown", message="Inspect the original invocation before retrying with a new identity.", retryable=False),
                     trace=ToolTrace(tool_name=name, agent_run_id=persisted_run_id),
                 )
-    # Cancellation or process death deliberately leaves the fence in place.
-    # Silently retrying a potentially completed side effect would violate the
-    # human's approval of one invocation.
-    result = await invoke()
+    try:
+        result = await invoke()
+    except asyncio.CancelledError:
+        await _finalize_tool_invocation(
+            persisted_run_id,
+            invocation_id,
+            status="cancelled",
+            result_json={
+                "ok": False,
+                "content": "",
+                "error": {
+                    "code": "run_cancelled",
+                    "message": "Tool invocation cancelled",
+                    "retryable": False,
+                },
+            },
+        )
+        raise
     payload = result.to_payload()
-    async with async_session_maker() as session:
-        async with session.begin():
-            record = (await session.execute(select(ToolInvocation).where(*key).with_for_update())).scalar_one()
-            record.result_json = payload
-            record.status = "completed" if result.ok else "failed"
-            record.completed_at = utc_now()
+    await _finalize_tool_invocation(
+        persisted_run_id,
+        invocation_id,
+        status="completed" if result.ok else "failed",
+        result_json=payload,
+    )
     return result

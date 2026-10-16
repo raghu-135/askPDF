@@ -118,7 +118,10 @@ async def list_agent_definitions():
     return {"definitions": entries}
 
 
-def _task_payload(task: Any) -> dict[str, Any]:
+async def _task_payload(task: Any) -> dict[str, Any]:
+    cancelled_by = None
+    if getattr(task, "terminal_reason", None) == "cancelled_by_user":
+        cancelled_by = await repository.cancel_actor_for_task(task.id)
     return {
         "id": task.id,
         "thread_id": task.thread_id,
@@ -143,6 +146,7 @@ def _task_payload(task: Any) -> dict[str, Any]:
         "paused_at": maybe_iso_utc_z(task.paused_at),
         "completed_at": maybe_iso_utc_z(task.completed_at),
         "expires_at": maybe_iso_utc_z(task.expires_at),
+        "cancelled_by": cancelled_by,
     }
 
 
@@ -324,16 +328,15 @@ async def create_agent_task(
         idempotency_key=idempotency_key,
         config=config,
     )
-    return {"task": _task_payload(task), "duplicate": duplicate}
+    return {"task": await _task_payload(task), "duplicate": duplicate}
 
 
 @router.get("/threads/{thread_id}/agent-tasks")
 async def list_agent_tasks(thread_id: str, limit: int = Query(default=50, ge=1, le=100)):
     if await get_thread(thread_id) is None:
         raise HTTPException(status_code=404, detail={"code": "thread_not_found"})
-    return {"tasks": [_task_payload(task) for task in await repository.list_tasks(
-        thread_id, limit=limit, user_id=current_principal()
-    )]}
+    tasks = await repository.list_tasks(thread_id, limit=limit, user_id=current_principal())
+    return {"tasks": [await _task_payload(task) for task in tasks]}
 
 
 @router.get("/agent-tasks/{task_id}")
@@ -341,7 +344,7 @@ async def get_agent_task(task_id: str, thread_id: str = Query(min_length=1)):
     task = await _owned_task(task_id, thread_id)
     run = await AgentWorkflowRepository().get_run(task.active_run_id) if task.active_run_id else None
     plan = await repository.get_latest_plan(task.id, agent_run_id=task.active_run_id)
-    payload = _task_payload(task)
+    payload = await _task_payload(task)
     payload["active_run"] = None if run is None else {
         "id": run.id, "status": run.status,
         "runtime_binding_status": run.runtime_binding_status,
@@ -385,8 +388,11 @@ async def command_agent_task(
             raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     try:
         task, command, duplicate = await repository.apply_command(
-            task.id, action=action, idempotency_key=idempotency_key,
+            task.id,
+            action=action,
+            idempotency_key=idempotency_key,
             expected_version=req.expected_version,
+            actor_id=current_principal(),
         )
         if action in {"start", "retry"} and not duplicate:
             await ensure_task_run(task.id)
@@ -420,10 +426,13 @@ async def command_agent_task(
                         result={"error": exc.to_dict(), "runtime_confirmation": "pending"},
                         rejected=True,
                     )
+                    if not exc.retryable:
+                        await repository.revert_cancel_after_runtime_failure(task.id, command.id)
+                        task = await repository.get_task(task.id) or task
                     raise
                 await repository.complete_control_command(command.id, result=dict(result))
                 task = await repository.get_task(task.id) or task
-        return {"task": _task_payload(task), "command_id": command.id, "duplicate": duplicate}
+        return {"task": await _task_payload(task), "command_id": command.id, "duplicate": duplicate}
     except repository.AgentTaskConflict as exc:
         raise _conflict(exc) from exc
     except AgentRuntimeError as exc:
@@ -508,7 +517,7 @@ async def respond_to_agent_task_result_review(
             linked_run = existing_linked or await ensure_task_run(task.id)
             task = await repository.get_task(task.id) or task
         return {
-            "task": _task_payload(task),
+            "task": await _task_payload(task),
             "linked_run": _run_payload(linked_run) if linked_run is not None else None,
             "duplicate": duplicate,
         }
@@ -594,7 +603,7 @@ async def respond_to_agent_task_budget_review(
         linked_run = await ensure_task_run(task.id) if linked and not duplicate else None
         task = await repository.get_task(task.id) or task
         return {
-            "task": _task_payload(task),
+            "task": await _task_payload(task),
             "linked_run": _run_payload(linked_run) if linked_run else None,
             "correction_delivery": correction_delivery,
             "duplicate": duplicate,
@@ -621,7 +630,7 @@ async def submit_agent_task_course_correction(
             result = dict(existing.result_json or {})
             correction = dict(result.get("correction") or {})
             return {
-                "task": _task_payload(task),
+                "task": await _task_payload(task),
                 "command_id": existing.id,
                 "correction_id": correction.get("correction_id") or correction.get("id"),
                 "correction": correction,
@@ -711,7 +720,7 @@ async def submit_agent_task_course_correction(
                     delivery_state = "delivered"
         refreshed = await repository.get_task(task.id)
         return {
-            "task": _task_payload(refreshed or task),
+            "task": await _task_payload(refreshed or task),
             "command_id": command.id,
             "correction_id": correction.get("correction_id") or correction.get("id"),
             "correction": correction,
@@ -941,7 +950,7 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
             "trace_anchor": {"run_id": run.id},
         })
     items.sort(key=lambda item: (item.get("timestamp") or "", item["id"]))
-    task_payload = _task_payload(task)
+    task_payload = await _task_payload(task)
     return {"task": task_payload, "run": _run_payload(run), "items": items}
 
 

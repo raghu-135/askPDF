@@ -2,7 +2,7 @@
 
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tool_contract import ToolResult
 from app.tools.context import ToolInvocationContext
@@ -40,6 +40,18 @@ class InspectDocumentRequest(BaseModel):
     section_id: str | None = Field(default=None, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     cursor: str | None = Field(default=None, max_length=512)
     page_size: int = Field(default=50, ge=1, le=200)
+
+    @field_validator("cursor", mode="before")
+    @classmethod
+    def _coerce_cursor(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value or None
+        if isinstance(value, int):
+            from app.tools.retrieval_knowledge import _cursor
+            return _cursor(max(0, int(value)))
+        return value
 
 
 class ReadContextRequest(BaseModel):

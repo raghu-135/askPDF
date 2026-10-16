@@ -159,6 +159,8 @@ def _result_from_graph(
     boundary_event_id: str = "",
 ) -> AgentRuntimeResult:
     status = str(result.get("status") or ("clarification" if result.get("clarification_options") else "completed"))
+    if str(result.get("task_controller_route") or "") == "fail":
+        status = "failed"
     interruption = result.get("pending_interrupt") if isinstance(result.get("pending_interrupt"), Mapping) else None
     checkpoint_thread_id = interruption.get("checkpoint_thread_id") if interruption else result.get("checkpoint_thread_id")
     continuation = (
@@ -246,7 +248,14 @@ def _result_from_graph(
                 for value in result.get("task_todos") or []
                 if isinstance(value, Mapping)
             ],
-            "subagent_changes": [_public_value(dict(value)) for value in result.get("task_result_packets") or [] if isinstance(value, Mapping)],
+            "subagent_changes": [
+                _public_value(dict(value))
+                for value in (
+                    list(result.get("task_subagent_history") or [])
+                    or list(result.get("task_result_packets") or [])
+                )
+                if isinstance(value, Mapping)
+            ],
             "budget_usage": _public_value(dict(result.get("task_budget_usage") or {})),
             "artifacts": [_public_value(dict(value)) for value in result.get("runtime_artifacts") or [] if isinstance(value, Mapping)],
             "pending_interrupt": (

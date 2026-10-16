@@ -219,11 +219,18 @@ class MCPServer:
                         else:
                             result = await invoke_handler()
                     except asyncio.CancelledError:
-                        await persist_tool_audit(
-                            run_id=str(context.run_id or ""), request_id=audit_request_id,
-                            phase="cancelled", tool_name=name,
-                            payload={"failure_stage": "handler", "error": {"code": "run_cancelled", "retryable": False}},
-                        )
+                        try:
+                            await persist_tool_audit(
+                                run_id=str(context.run_id or ""), request_id=audit_request_id,
+                                phase="cancelled", tool_name=name,
+                                payload={"failure_stage": "handler", "error": {"code": "run_cancelled", "retryable": False}},
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Unable to persist MCP tool audit event run_id=%s tool=%s phase=cancelled",
+                                context.run_id,
+                                name,
+                            )
                         raise
                     except Exception as exc:
                         missing_fields = []
