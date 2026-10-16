@@ -68,6 +68,7 @@ services:
       - DOCLING_TABLE_MODE=FAST
       - DOCLING_FORCE_FULL_PAGE_OCR=False
       - DOCLING_DO_FORMULA_ENRICHMENT=False
+      - DOCLING_INFERENCE_COMPILE_TORCH_MODELS=False
       - ASKPDF_REPO_DIR=/workspace
       - PYTHONPATH=/workspace:/app
     depends_on:

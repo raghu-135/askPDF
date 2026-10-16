@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from app.agent.tool_contract import make_tool_error_result, make_tool_result, tool_started
 from app.db import get_thread_files
+from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
 from app.models.canvas import (
     CanvasAdmissionError,
     CanvasCreateRequest,
@@ -64,6 +65,14 @@ async def _thread_file_hashes(thread_id: str) -> set[str]:
     return {str(getattr(item, "file_hash", "") or "") for item in files} - {""}
 
 
+async def _thread_embedding_model(thread_id: str) -> str | None:
+    thread = await ThreadRepository().get(thread_id)
+    if thread is None:
+        return None
+    model = str(getattr(thread, "embedding_model", "") or "").strip()
+    return model or None
+
+
 async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvocationContext):
     started = tool_started()
     if not context.thread_id:
@@ -77,6 +86,7 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
         )
 
     thread_file_hashes = await _thread_file_hashes(context.thread_id)
+    embedding_model = context.embedding_model or await _thread_embedding_model(context.thread_id)
     spec: CanvasSpec | None = None
 
     if request.spec is not None:
@@ -109,7 +119,11 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
                 user_message=f"Invalid canvas draft: {exc}",
             )
         try:
-            spec = await compile_canvas_draft(draft, thread_file_hashes=thread_file_hashes)
+            spec = await compile_canvas_draft(
+                draft,
+                thread_file_hashes=thread_file_hashes,
+                embedding_model=embedding_model,
+            )
         except CanvasCompileError as exc:
             return make_tool_error_result(
                 tool_name="publish_canvas",

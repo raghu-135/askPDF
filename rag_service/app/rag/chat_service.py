@@ -23,6 +23,8 @@ from app.db import (
     get_thread_shape,
 )
 from app.rag.retrieval import (
+    document_rerank_candidate_limit,
+    expand_synthetic_sentence_siblings,
     fetch_semantic_history,
     get_document_metadata_lookup,
     group_document_chunks,
@@ -164,7 +166,7 @@ async def prefetch_context(
         try:
             db = get_vector_db()
             limit = budget["document_limit"]
-            rerank_fetch_k = limit
+            rerank_fetch_k = document_rerank_candidate_limit(limit)
             shape = await get_thread_shape(thread_id)
             thread_file_hashes = list(shape.get("documents", {}).keys())
             if not thread_file_hashes:
@@ -189,6 +191,10 @@ async def prefetch_context(
             document_lookup = await get_document_metadata_lookup(thread_id)
             if use_reranker:
                 raw_chunks = await rerank_document_chunks(raw_question, raw_chunks)
+            raw_chunks = await expand_synthetic_sentence_siblings(
+                raw_chunks,
+                embedding_model=embedding_model,
+            )
             return group_document_chunks(
                 raw_chunks,
                 document_lookup,

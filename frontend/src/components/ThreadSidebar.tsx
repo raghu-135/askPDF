@@ -122,6 +122,7 @@ interface ThreadSidebarProps {
   onProjectCloned?: (project: Project) => void;
   onProjectDeleted?: (projectId: string) => void;
   onThreadForked?: (thread: Thread) => void;
+  onThreadRenamed?: (thread: Thread) => void;
   onEmbeddingModelChange?: (model: string) => void;
   hideHeader?: boolean;
   onHeaderStateChange?: (state: ThreadSidebarHeaderState | null) => void;
@@ -139,6 +140,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   onProjectCloned,
   onProjectDeleted,
   onThreadForked,
+  onThreadRenamed,
   onEmbeddingModelChange,
   hideHeader = false,
   onHeaderStateChange,
@@ -206,6 +208,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [projectReadiness, setProjectReadiness] = useState<Record<string, boolean | null>>({});
   const threadRowRefs = useRef<Record<string, HTMLLIElement | null>>({});
   const threadListRef = useRef<HTMLDivElement | null>(null);
+  const threadRenameInputRef = useRef<HTMLInputElement | null>(null);
+  const editingThreadIdRef = useRef<string | null>(null);
+  const savingThreadRenameRef = useRef(false);
 
   const deletionTarget = sidebarDeletionTarget(activeProjectId);
   const eligibleThreads = useMemo(
@@ -670,20 +675,41 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     setIsSelectionMode(false);
   }, [activeProjectId]);
 
+  const cancelThreadRename = useCallback(() => {
+    setEditingThreadId(null);
+    setEditingName('');
+  }, []);
+
   const handleEditThread = async (threadId: string) => {
-    if (!editingName.trim()) return;
+    if (savingThreadRenameRef.current) return;
+
+    const trimmed = editingName.trim();
+    if (!trimmed) {
+      cancelThreadRename();
+      return;
+    }
+
+    const existing = threadsById.get(threadId);
+    if (existing?.name === trimmed) {
+      cancelThreadRename();
+      return;
+    }
 
     try {
-      const updated = await updateThread(threadId, editingName.trim());
+      savingThreadRenameRef.current = true;
+      const updated = await updateThread(threadId, trimmed);
       setThreads((prev) => prev.map((t) => (
         t.id === threadId
           ? { ...t, name: updated.name, last_activity_at: new Date().toISOString() }
           : t
       )));
-      setEditingThreadId(null);
-      setEditingName('');
+      onThreadRenamed?.(updated);
+      cancelThreadRename();
     } catch (error) {
       console.error('Failed to update thread:', error);
+      alert('Failed to rename thread.');
+    } finally {
+      savingThreadRenameRef.current = false;
     }
   };
 
@@ -701,9 +727,27 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const startEditing = (thread: Thread, event: React.MouseEvent) => {
     event.stopPropagation();
     closeThreadMenu();
-    setEditingThreadId(thread.id);
-    setEditingName(thread.name);
+    const { id, name } = thread;
+    requestAnimationFrame(() => {
+      setEditingThreadId(id);
+      setEditingName(name);
+    });
   };
+
+  useEffect(() => {
+    editingThreadIdRef.current = editingThreadId;
+  }, [editingThreadId]);
+
+  useEffect(() => {
+    if (!editingThreadId) return;
+    const frame = requestAnimationFrame(() => {
+      const input = threadRenameInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.select();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [editingThreadId]);
 
   const openForkDialog = (thread: Thread, event: React.MouseEvent) => {
     event.stopPropagation();
@@ -1263,13 +1307,24 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                           <TextField
                             size="small"
                             value={editingName}
+                            inputRef={threadRenameInputRef}
                             onChange={(e) => setEditingName(e.target.value)}
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleEditThread(thread.id);
-                              if (e.key === 'Escape') setEditingThreadId(null);
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                void handleEditThread(thread.id);
+                              }
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                cancelThreadRename();
+                              }
                             }}
-                            onBlur={() => handleEditThread(thread.id)}
-                            autoFocus
+                            onBlur={() => {
+                              window.setTimeout(() => {
+                                if (editingThreadIdRef.current !== thread.id) return;
+                                void handleEditThread(thread.id);
+                              }, 0);
+                            }}
                             fullWidth
                             onClick={(e) => e.stopPropagation()}
                           />
@@ -1346,6 +1401,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         anchorEl={threadMenuAnchorEl}
         open={Boolean(threadMenuAnchorEl && threadMenuThread)}
         onClose={closeThreadMenu}
+        disableRestoreFocus
         onClick={(event) => event.stopPropagation()}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}

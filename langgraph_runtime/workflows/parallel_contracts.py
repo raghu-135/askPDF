@@ -138,6 +138,27 @@ def parallel_policy_catalog() -> Dict[str, Any]:
     }
 
 
+def _deployment_parallel_timeout_floor() -> Dict[str, int]:
+    """Raise worker/dispatch floors from LangGraph Deep Agent env when configured."""
+
+    try:
+        from langgraph_runtime.budgets import deep_agent_budgets
+
+        budgets = deep_agent_budgets("langgraph")
+    except ValueError:
+        return {}
+    floors: Dict[str, int] = {}
+    worker_ms = int(budgets.get("worker_timeout_ms") or 0)
+    dispatch_ms = int(budgets.get("dispatch_timeout_ms") or 0)
+    if worker_ms > 0:
+        _, worker_max = PARALLEL_POLICY_LIMITS["default_worker_timeout_ms"]
+        floors["default_worker_timeout_ms"] = min(worker_ms, worker_max)
+    if dispatch_ms > 0:
+        _, dispatch_max = PARALLEL_POLICY_LIMITS["dispatch_timeout_ms"]
+        floors["dispatch_timeout_ms"] = min(dispatch_ms, dispatch_max)
+    return floors
+
+
 def normalized_parallel_policy(value: Any) -> Dict[str, Any]:
     raw = value if isinstance(value, Mapping) else {}
     policy = deepcopy(DEFAULT_PARALLEL_POLICY)
@@ -150,6 +171,8 @@ def normalized_parallel_policy(value: Any) -> Dict[str, Any]:
         except (TypeError, ValueError):
             parsed = int(policy[key])
         policy[key] = max(minimum, min(parsed, maximum))
+    for key, floor in _deployment_parallel_timeout_floor().items():
+        policy[key] = max(policy[key], floor)
     policy["minimum_successes"] = min(policy["minimum_successes"], policy["max_work_items"])
     return policy
 

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  adjustDiagnosticsForSuccessfulRun,
   buildTraceExportJson,
   buildCorrectiveInspection,
   buildLiveTraceView,
@@ -705,6 +706,34 @@ test('live and retained projections merge repeated visits without duplicating id
 
   assert.deepEqual(merged.operations.map((operation) => `${operation.id}:${operation.visitIndex}`), ['router:1', 'worker:1', 'worker:2']);
   assert.equal(merged.operations[1].status, 'completed');
+});
+
+test('merge ignores retained diagnostics when live and retained runs differ', () => {
+  const retained = buildLiveTraceView([
+    { id: 1, event: 'llm.failed', data: { operation_id: 'deep_task_planner', error: { code: 'provider_rejected', message: 'schema too large' } } },
+  ]);
+  retained.runId = 'run-a';
+  retained.diagnostics.summary.failure_count = 3;
+  const live = buildLiveTraceView([
+    { id: 2, event: 'run.completed', data: {} },
+  ]);
+  live.runId = 'run-b';
+  live.diagnostics = adjustDiagnosticsForSuccessfulRun(live.diagnostics, 'completed');
+
+  const merged = mergeLiveAndRetainedTraceViews(live, retained);
+
+  assert.equal(merged.runId, 'run-b');
+  assert.equal(merged.diagnostics.summary.failure_count, 0);
+});
+
+test('adjustDiagnosticsForSuccessfulRun clears primary banner on completed runs', () => {
+  const view = buildLiveTraceView([
+    { id: 1, event: 'llm.failed', data: { operation_id: 'deep_task_planner', error: { message: 'provider rejected' } } },
+    { id: 2, event: 'run.completed', data: {} },
+  ]);
+  const adjusted = adjustDiagnosticsForSuccessfulRun(view.diagnostics, 'completed');
+  assert.equal(adjusted.summary.failure_count, 0);
+  assert.match(adjusted.summary.message, /recovered/i);
 });
 
 test('live parallel projection overrides an older retained parallel snapshot', () => {

@@ -10,6 +10,14 @@ from app.tools.publish_canvas import PublishCanvasRequest, invoke_publish_canvas
 from tests.test_canvas_spec_pytest import valid_spec
 
 
+@pytest.fixture(autouse=True)
+def _mock_thread_embedding_lookup(monkeypatch):
+    monkeypatch.setattr(
+        "app.tools.publish_canvas._thread_embedding_model",
+        AsyncMock(return_value=None),
+    )
+
+
 def test_admit_canvas_spec_rejects_missing_citations():
     payload = {
         "schema_version": 1,

@@ -227,6 +227,61 @@ def _merge_budget(
     return candidate
 
 
+_BUDGET_DIMENSION_LABELS = {
+    "model_calls": "model calls",
+    "model_tokens": "model tokens",
+    "tool_calls": "tool calls",
+    "elapsed_active_ms": "active runtime",
+}
+
+
+def _result_review_body(
+    budget: Mapping[str, Any],
+    warnings: list[Mapping[str, Any]],
+    gaps: list[str],
+) -> str:
+    dimensions = exhausted_dimensions(budget) if budget else []
+    warning_count = len(warnings)
+    gap_count = len([value for value in gaps if str(value).strip()])
+    if dimensions:
+        names = ", ".join(_BUDGET_DIMENSION_LABELS.get(key, key.replace("_", " ")) for key in dimensions)
+        issue = ""
+        if warning_count or gap_count:
+            issue = (
+                f" {warning_count} flagged claim{'s' if warning_count != 1 else ''}"
+                f" and {gap_count} open gap{'s' if gap_count != 1 else ''} remain."
+            )
+        return (
+            f"Research budget for {names} is at the tranche limit.{issue} "
+            "Finish with this result or continue with guidance (uses more budget)."
+        )
+    if warning_count or gap_count:
+        return (
+            f"{warning_count} unverified claim{'s' if warning_count != 1 else ''} and "
+            f"{gap_count} open gap{'s' if gap_count != 1 else ''}. "
+            "Finish with this result or continue with guidance (uses more budget)."
+        )
+    return "Review the provisional answer before you continue or finish."
+
+
+def _budget_usage_payload(budget: Mapping[str, Any]) -> dict[str, Any]:
+    return {**dict(budget), "exhausted_dimensions": exhausted_dimensions(budget)}
+
+
+def _enrich_result_gaps(budget: Mapping[str, Any], gaps: list[str], task_result: Mapping[str, Any]) -> list[str]:
+    merged = list(dict.fromkeys(str(value) for value in gaps if str(value).strip()))
+    limits = budget.get("tranche_limits") if isinstance(budget.get("tranche_limits"), Mapping) else {}
+    usage = budget.get("tranche_usage") if isinstance(budget.get("tranche_usage"), Mapping) else {}
+    tool_limit = int(limits.get("tool_calls") or 0) if limits else 0
+    tool_used = int(usage.get("tool_calls") or 0)
+    if tool_limit and tool_used >= tool_limit:
+        merged.append(f"Research stopped after {tool_used} tool calls (tranche limit {tool_limit}).")
+    plan_todos = task_result.get("plan_todos") or task_result.get("todos")
+    if isinstance(plan_todos, list) and len(plan_todos) == 0 and str(task_result.get("framework") or "") == "hermes":
+        merged.append("Hermes reported zero planned steps; the agent may have looped on tools without advancing the plan.")
+    return list(dict.fromkeys(merged))
+
+
 def _incomplete_disposition(run: AgentRun, task_result: Mapping[str, Any]) -> tuple[str, int, int]:
     orchestration = dict(
         (dict((run.resolved_spec_json or {}).get("config") or {}).get("task_policy") or {}).get("orchestration")
@@ -450,7 +505,11 @@ async def apply_neutral_task_completion(
             )
 
             warnings = [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]
-            gaps = list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip()))
+            gaps = _enrich_result_gaps(
+                budget,
+                list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip())),
+                task_result,
+            )
             disposition = runtime_status
             pending: dict[str, Any] | None = None
             if runtime_status == "completed" and dimensions:
@@ -481,10 +540,12 @@ async def apply_neutral_task_completion(
                         "type": "incomplete_result_review", "kind": "approval", "status": "pending",
                         "response_operation": "task.result_review.respond",
                         "title": "Review incomplete result",
+                        "body": _result_review_body(budget, warnings, gaps),
                         "allowed_actions": ["accept", "retry_with_input"],
                         "provisional_artifact_id": final_artifact_id,
                         "provisional_answer": str(task_result.get("text") or ""),
                         "warnings": warnings, "gaps": gaps,
+                        "usage": _budget_usage_payload(budget),
                         "review_round": review_round, "max_review_rounds": max_rounds,
                     }
                     event_type = "task.result_review_requested"
@@ -961,7 +1022,11 @@ async def apply_runtime_task_delta(
                 result_status = str(delta.result.get("status") or "")
                 if result_status == "completed" and task_result:
                     warnings = [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]
-                    gaps = list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip()))
+                    gaps = _enrich_result_gaps(
+                        task.budgets_json if isinstance(task.budgets_json, Mapping) else {},
+                        list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip())),
+                        task_result,
+                    )
                     policy, max_rounds, review_round = _incomplete_disposition(run, task_result)
                     needs_review = bool(warnings or gaps or task_result.get("status") == "completed_with_warnings")
                     if needs_review and policy == "review" and review_round <= max_rounds:
@@ -971,7 +1036,7 @@ async def apply_runtime_task_delta(
                             "kind": "approval",
                             "status": "pending",
                             "title": "Review incomplete result",
-                            "body": "The agent returned usable output with warnings or unresolved gaps.",
+                            "body": _result_review_body(task.budgets_json if isinstance(task.budgets_json, Mapping) else {}, warnings, gaps),
                             "response_operation": "task.result_review.respond",
                             "allowed_actions": ["accept", "retry_with_input"],
                             "response_schema": {"type": "object", "properties": {"followup_input": {"type": "string", "maxLength": 20000}}},
@@ -981,6 +1046,7 @@ async def apply_runtime_task_delta(
                             "provisional_answer": str(task_result.get("text") or ""),
                             "warnings": warnings,
                             "gaps": gaps,
+                            "usage": _budget_usage_payload(task.budgets_json if isinstance(task.budgets_json, Mapping) else {}),
                         }
                         replace_jsonb_field(run, "pending_interrupt_json", pending)
                         run.status = AgentRunStatus.AWAITING_HUMAN.value

@@ -15,6 +15,7 @@ from app.agent.evidence_contract import (
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.models_sqlmodel import DocumentChunk
 from app.db import get_file_parsed_sentences
+from app.db.repositories.canonical_document_repo import get_canonical_document_repo
 from app.models.canvas import (
     CanvasCitation,
     CanvasSection,
@@ -127,12 +128,81 @@ async def _canonicalize_draft_source_id(
     return ""
 
 
+async def _citation_for_document_locator(
+    file_hash: str,
+    locator: str,
+    *,
+    default_label: str,
+) -> tuple[CanvasCitation, Optional[tuple[str, int]]]:
+    quote: Optional[tuple[str, int]] = None
+    if locator.isdigit():
+        sentence_id = int(locator)
+        if not await _sentence_exists(file_hash, sentence_id):
+            raise CanvasCompileError(
+                "unknown_sentence",
+                f"sentence_id {sentence_id} was not found for doc:{file_hash}:{locator}",
+            )
+        quote = (file_hash, sentence_id)
+    else:
+        sentence_id = await _first_sentence_for_chunk(file_hash, locator)
+        if sentence_id is not None and await _sentence_exists(file_hash, sentence_id):
+            quote = (file_hash, sentence_id)
+    citation = CanvasCitation(
+        kind="document",
+        label=default_label[:160],
+        file_hash=file_hash,
+        sentence_id=quote[1] if quote else None,
+    )
+    return citation, quote
+
+
+async def _resolve_src_alias(
+    source_id: str,
+    *,
+    thread_file_hashes: set[str],
+    embedding_model: str | None,
+    default_label: str,
+) -> tuple[CanvasCitation, Optional[tuple[str, int]]] | None:
+    if not str(source_id or "").startswith("src_"):
+        return None
+    if not embedding_model:
+        raise CanvasCompileError(
+            "invalid_source_id",
+            f"cannot resolve retrieval source_id {source_id} without thread embedding model",
+        )
+    repo = get_canonical_document_repo()
+    for file_hash in sorted(thread_file_hashes):
+        chunks = await repo.get_chunks_by_source_id(source_id, embedding_model, file_hash=file_hash)
+        if not chunks:
+            continue
+        chunk = chunks[0]
+        locator = str(chunk.chunk_id or chunk.source_id or "")
+        if not locator:
+            continue
+        return await _citation_for_document_locator(
+            file_hash,
+            locator,
+            default_label=default_label,
+        )
+    return None
+
+
 async def _resolve_source_id(
     source_id: str,
     *,
     thread_file_hashes: set[str],
+    embedding_model: str | None,
     default_label: str,
 ) -> tuple[CanvasCitation, Optional[tuple[str, int]]]:
+    src_resolved = await _resolve_src_alias(
+        source_id,
+        thread_file_hashes=thread_file_hashes,
+        embedding_model=embedding_model,
+        default_label=default_label,
+    )
+    if src_resolved is not None:
+        return src_resolved
+
     canonical = await _canonicalize_draft_source_id(source_id, thread_file_hashes=thread_file_hashes)
     normalized = canonical or normalized_canonical_source_id(source_id)
     if not normalized:
@@ -171,33 +241,18 @@ async def _resolve_source_id(
             f"document {file_hash} is not attached to this thread (source_id {source_id})",
         )
 
-    quote: Optional[tuple[str, int]] = None
-    if locator.isdigit():
-        sentence_id = int(locator)
-        if not await _sentence_exists(file_hash, sentence_id):
-            raise CanvasCompileError(
-                "unknown_sentence",
-                f"sentence_id {sentence_id} was not found for {source_id}",
-            )
-        quote = (file_hash, sentence_id)
-    else:
-        sentence_id = await _first_sentence_for_chunk(file_hash, locator)
-        if sentence_id is not None and await _sentence_exists(file_hash, sentence_id):
-            quote = (file_hash, sentence_id)
-
-    citation = CanvasCitation(
-        kind="document",
-        label=default_label[:160],
-        file_hash=file_hash,
-        sentence_id=quote[1] if quote else None,
+    return await _citation_for_document_locator(
+        file_hash,
+        locator,
+        default_label=default_label,
     )
-    return citation, quote
 
 
 async def resolve_draft_claims(
     claims: list[CanvasDraftClaim],
     *,
     thread_file_hashes: set[str],
+    embedding_model: str | None = None,
 ) -> list[ResolvedClaim]:
     resolved: list[ResolvedClaim] = []
     for claim in claims:
@@ -208,6 +263,7 @@ async def resolve_draft_claims(
             citation, claim_quote = await _resolve_source_id(
                 source_id,
                 thread_file_hashes=thread_file_hashes,
+                embedding_model=embedding_model,
                 default_label=label,
             )
             citations.append(citation)
@@ -364,8 +420,13 @@ async def compile_canvas_draft(
     draft: CanvasPublishDraft,
     *,
     thread_file_hashes: set[str],
+    embedding_model: str | None = None,
 ) -> CanvasSpec:
-    claims = await resolve_draft_claims(draft.claims, thread_file_hashes=thread_file_hashes)
+    claims = await resolve_draft_claims(
+        draft.claims,
+        thread_file_hashes=thread_file_hashes,
+        embedding_model=embedding_model,
+    )
     citations = _unique_citations(claims)
     stats = _stat_blocks(claims, draft.layout)
     if draft.layout == "compare":

@@ -1,7 +1,7 @@
 """Shared retrieval helpers for document and semantic history access."""
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.db import FileSourceType, get_thread_shape
 from app.models.llm_server_client import get_reranker_model, LOCAL_RERANKER_MODEL
@@ -85,8 +85,14 @@ def format_search_knowledge_content(
     content_parts: List[str],
     *,
     budget: int = RETRIEVAL_CONTENT_BUDGET,
+    content_source_indexes: Optional[Sequence[Sequence[int]]] = None,
 ) -> tuple[str, bool]:
     """Build LLM-visible search text with a full source catalog and bounded bodies."""
+
+    if content_source_indexes is None:
+        content_source_indexes = [[index] for index in range(len(content_parts))]
+    if len(content_source_indexes) != len(content_parts):
+        raise ValueError("content_source_indexes must align with content_parts")
 
     def catalog_line(index: int, status: str) -> str:
         source = sources[index] if index < len(sources) else {}
@@ -111,9 +117,15 @@ def format_search_knowledge_content(
     draft_catalog = "Ranked sources:\n" + "\n".join(catalog_line(index, "included") for index in range(len(sources)))
     hit_budget = max(1, budget - len(draft_catalog) - 480)
     included_indexes, omitted_indexes, truncated = bounded_retrieval_hits(content_parts, budget=hit_budget)
-    included = {index for index, _body in included_indexes}
+    included_content_indexes = {index for index, _body in included_indexes}
+    included_source_indexes = {
+        source_index
+        for content_index, source_indexes in enumerate(content_source_indexes)
+        if content_index in included_content_indexes
+        for source_index in source_indexes
+    }
     catalog = "Ranked sources:\n" + "\n".join(
-        catalog_line(index, "included" if index in included else "omitted")
+        catalog_line(index, "included" if index in included_source_indexes else "omitted")
         for index in range(len(sources))
     )
     bodies = "\n\n".join(body for _index, body in included_indexes)
@@ -239,89 +251,250 @@ def _format_document_label(source_type: str, name: str, url: Optional[str], page
     return label
 
 
+def document_rerank_candidate_limit(result_limit: int) -> int:
+    """Over-fetch vector hits before reranking so the cross-encoder can promote better sections."""
+
+    if result_limit <= 0:
+        return 100
+    return min(1000, max(100, result_limit * 20))
+
+
+def _chunk_metadata(chunk: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = chunk.get("metadata")
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+def _chunk_score(chunk: Dict[str, Any]) -> float:
+    return float(chunk.get("rerank_score", chunk.get("score", 0.0)) or 0.0)
+
+
+def _is_document_chunk(chunk: Dict[str, Any]) -> bool:
+    return bool(chunk.get("file_hash"))
+
+
+def _chunk_reading_order_key(chunk: Dict[str, Any]) -> tuple[int, str, str]:
+    metadata = _chunk_metadata(chunk)
+    chunk_index = metadata.get("chunk_index", chunk.get("chunk_id"))
+    try:
+        order = int(chunk_index)
+    except (TypeError, ValueError):
+        order = 0
+    sentence_ids = metadata.get("sentence_ids") or chunk.get("sentence_ids") or []
+    first_sentence = str(sentence_ids[0]) if sentence_ids else ""
+    chunk_identity = str(chunk.get("source_id") or chunk.get("chunk_identity") or metadata.get("chunk_identity") or chunk.get("chunk_id") or "")
+    return (order, first_sentence, chunk_identity)
+
+
+def _document_stitch_group_key(chunk: Dict[str, Any]) -> tuple[str, str, str]:
+    file_hash = str(chunk.get("file_hash") or "")
+    metadata = _chunk_metadata(chunk)
+    table_id = metadata.get("table_id") or chunk.get("table_id")
+    if table_id:
+        return (file_hash, "table", str(table_id))
+    section_id = str(metadata.get("section_id") or chunk.get("section_id") or file_hash)
+    return (file_hash, "section", section_id)
+
+
+def _chunk_body_text(chunk: Dict[str, Any]) -> str:
+    metadata = _chunk_metadata(chunk)
+    return str(metadata.get("body_text") or chunk.get("body_text") or chunk.get("text") or "").strip()
+
+
+def _combine_group_bodies(chunks: List[Dict[str, Any]]) -> str:
+    if not chunks:
+        return ""
+    metadata = _chunk_metadata(chunks[0])
+    table_id = metadata.get("table_id") or chunks[0].get("table_id")
+    bodies = [body for body in (_chunk_body_text(item) for item in chunks) if body]
+    if table_id:
+        return "\n".join(bodies)
+    return " ".join(bodies)
+
+
+def reassemble_document_chunks_by_reading_order(chunks: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """Return section/table groups sorted by best rerank score with chunks in source reading order."""
+
+    document_chunks = [chunk for chunk in chunks if _is_document_chunk(chunk)]
+    other_chunks = [chunk for chunk in chunks if not _is_document_chunk(chunk)]
+    grouped: Dict[tuple[str, str, str], List[Dict[str, Any]]] = {}
+    group_scores: Dict[tuple[str, str, str], float] = {}
+    for chunk in document_chunks:
+        key = _document_stitch_group_key(chunk)
+        grouped.setdefault(key, []).append(chunk)
+        group_scores[key] = max(group_scores.get(key, 0.0), _chunk_score(chunk))
+    ordered_groups: List[List[Dict[str, Any]]] = []
+    for key in sorted(group_scores.keys(), key=lambda item: group_scores[item], reverse=True):
+        ordered_groups.append(sorted(grouped[key], key=_chunk_reading_order_key))
+    for chunk in sorted(other_chunks, key=_chunk_score, reverse=True):
+        ordered_groups.append([chunk])
+    return ordered_groups
+
+
+def flatten_document_reading_groups(groups: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    flattened: List[Dict[str, Any]] = []
+    for group in groups:
+        flattened.extend(group)
+    return flattened
+
+
+def _document_chunk_from_row(row: Any) -> Dict[str, Any]:
+    metadata = dict(getattr(row, "metadata_json", None) or {})
+    body_text = str(getattr(row, "body_text", "") or "")
+    metadata.setdefault("body_text", body_text)
+    metadata.setdefault("chunk_index", int(getattr(row, "chunk_order", 0) or 0))
+    metadata.setdefault("sentence_ids", list(getattr(row, "sentence_ids", None) or []))
+    return {
+        "text": body_text,
+        "body_text": body_text,
+        "file_hash": getattr(row, "file_hash", None),
+        "chunk_id": getattr(row, "chunk_id", None),
+        "source_id": getattr(row, "source_id", None),
+        "chunk_identity": getattr(row, "chunk_id", None),
+        "manifest_id": getattr(row, "manifest_id", None),
+        "section_id": getattr(row, "section_id", None),
+        "table_id": getattr(row, "table_id", None),
+        "metadata": metadata,
+        "score": 0.0,
+    }
+
+
+def _chunk_identity(chunk: Dict[str, Any]) -> str:
+    metadata = _chunk_metadata(chunk)
+    return str(
+        chunk.get("source_id")
+        or chunk.get("chunk_identity")
+        or metadata.get("chunk_identity")
+        or chunk.get("chunk_id")
+        or ""
+    )
+
+
+async def expand_synthetic_sentence_siblings(
+    chunks: List[Dict[str, Any]],
+    *,
+    embedding_model: str,
+) -> List[Dict[str, Any]]:
+    """Include missing pieces for oversized sentences that were split at indexing time."""
+
+    if not embedding_model:
+        return chunks
+    expand_targets: list[tuple[str, str, str, frozenset[str]]] = []
+    for chunk in chunks:
+        metadata = _chunk_metadata(chunk)
+        if not metadata.get("synthetic_span"):
+            continue
+        sentence_ids = metadata.get("sentence_ids") or []
+        if not sentence_ids:
+            continue
+        file_hash = str(chunk.get("file_hash") or "")
+        manifest_id = str(chunk.get("manifest_id") or metadata.get("manifest_id") or "")
+        section_id = str(metadata.get("section_id") or chunk.get("section_id") or "")
+        if not file_hash or not manifest_id:
+            continue
+        expand_targets.append(
+            (file_hash, manifest_id, section_id, frozenset(str(value) for value in sentence_ids))
+        )
+    if not expand_targets:
+        return chunks
+
+    from app.db.repositories.canonical_document_repo import get_canonical_document_repo
+
+    repo = get_canonical_document_repo()
+    known_ids = {_chunk_identity(chunk) for chunk in chunks if _chunk_identity(chunk)}
+    augmented = list(chunks)
+    section_cache: Dict[tuple[str, str, str], list[Any]] = {}
+    for file_hash, manifest_id, section_id, wanted_sentence_ids in expand_targets:
+        cache_key = (file_hash, manifest_id, section_id)
+        if cache_key not in section_cache:
+            section_cache[cache_key] = await repo.get_chunks(
+                file_hash,
+                embedding_model,
+                manifest_id=manifest_id,
+                section_id=section_id or None,
+            )
+        for row in section_cache[cache_key]:
+            row_sentence_ids = frozenset(str(value) for value in (getattr(row, "sentence_ids", None) or []))
+            if row_sentence_ids != wanted_sentence_ids:
+                continue
+            identity = str(getattr(row, "chunk_id", "") or "")
+            if not identity or identity in known_ids:
+                continue
+            known_ids.add(identity)
+            augmented.append(_document_chunk_from_row(row))
+    return augmented
+
+
 def group_document_chunks(
     chunks: List[Dict[str, Any]],
     hash_to_name: Optional[Dict[str, Any]] = None,
     char_budget: Optional[int] = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
-    """Group document chunks and prepare context + source metadata."""
+    """Group document chunks into section/table passages and prepare context + source metadata."""
 
     doc_lookup = hash_to_name or {}
     document_sources: List[Dict[str, Any]] = []
-    doc_groups: Dict[str, Dict[str, Any]] = {}
+    context_parts: List[str] = []
     used_chars = 0
+    reading_groups = reassemble_document_chunks_by_reading_order(chunks)
 
-    for chunk in chunks:
-        text = chunk.get("text", "")
-        if not text:
+    for group in reading_groups:
+        combined_text = _combine_group_bodies(group)
+        if not combined_text:
             continue
-
-        if char_budget and used_chars + len(text) > char_budget:
+        if char_budget and used_chars + len(combined_text) > char_budget:
             break
 
-        fh = chunk.get("file_hash") or ""
+        first = group[0]
+        fh = first.get("file_hash") or ""
         source_type = FileSourceType.PDF.value
-        url = chunk.get("url") or ""
-        title = chunk.get("title") or ""
+        url = first.get("url") or ""
+        title = first.get("title") or ""
         raw_lookup = doc_lookup.get(fh, fh or "document")
         thread_doc_meta = raw_lookup if isinstance(raw_lookup, dict) else {}
         fallback_name = thread_doc_meta.get("file_name") or (raw_lookup if isinstance(raw_lookup, str) else fh or "document")
         name = title or fallback_name
-        chunk_meta = _merge_metadata(chunk, thread_doc_meta)
-        pages = chunk_meta.get("pages")
+        group_pages: List[Any] = []
 
-        if fh not in doc_groups:
-            doc_groups[fh] = {
-                "name": name,
+        for chunk in group:
+            chunk_meta = _merge_metadata(chunk, thread_doc_meta)
+            pages = chunk_meta.get("pages")
+            if pages:
+                group_pages.append(pages)
+            text = _chunk_body_text(chunk) or str(chunk.get("text") or "")
+            short_text = text if len(text) <= 200 else text[:200] + "..."
+            score = chunk.get("rerank_score", chunk.get("score", 0.0))
+            source_entry: Dict[str, Any] = {
+                "text": short_text,
+                "file_hash": chunk.get("file_hash"),
+                "chunk_id": chunk.get("chunk_id"),
+                "file_name": fallback_name,
+                "title": title or None,
+                "url": url or None,
                 "source_type": source_type,
-                "url": url,
-                "texts": [],
-                "pages": [],
-                "document_available_in_thread_at": chunk_meta.get("document_available_in_thread_at"),
-                "timeline_event_at": chunk_meta.get("timeline_event_at"),
-                "timeline_event_type": chunk_meta.get("timeline_event_type"),
+                "score": score,
             }
-        doc_groups[fh]["texts"].append(text)
-        if pages:
-            doc_groups[fh]["pages"].append(pages)
+            for field in (
+                "document_available_in_thread_at",
+                "page_start",
+                "page_end",
+                "pages",
+                "timeline_event_at",
+                "timeline_event_type",
+            ):
+                value = chunk_meta.get(field)
+                if value not in (None, ""):
+                    source_entry[field] = value
+            document_sources.append(source_entry)
 
-        used_chars += len(text)
-        short_text = text if len(text) <= 200 else text[:200] + "..."
-        score = chunk.get("rerank_score", chunk.get("score", 0.0))
-        source_entry: Dict[str, Any] = {
-            "text": short_text,
-            "file_hash": chunk.get("file_hash"),
-            "chunk_id": chunk.get("chunk_id"),
-            "file_name": fallback_name,
-            "title": title or None,
-            "url": url or None,
-            "source_type": source_type,
-            "score": score,
-        }
-        for field in (
-            "document_available_in_thread_at",
-            "page_start",
-            "page_end",
-            "pages",
-            "timeline_event_at",
-            "timeline_event_type",
-        ):
-            value = chunk_meta.get(field)
-            if value not in (None, ""):
-                source_entry[field] = value
-        document_sources.append(source_entry)
-
-    context_parts: List[str] = []
-    for group in doc_groups.values():
-        combined_text = "\n".join(group["texts"])
-        pages_label = _compact_page_ranges(group.get("pages", []))
+        pages_label = _compact_page_ranges(group_pages)
         label = _format_document_label(
-            group.get("source_type", FileSourceType.PDF.value),
-            group.get("name", ""),
-            group.get("url"),
+            source_type,
+            name,
+            url,
             pages_label or None,
         )
         context_parts.append(f"[Source: {label}]\n{combined_text}")
+        used_chars += len(combined_text)
 
     return "\n\n".join(context_parts), document_sources
 

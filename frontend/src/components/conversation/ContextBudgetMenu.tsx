@@ -73,7 +73,7 @@ export function ContextBudgetMenu({
           ...workbenchControlOutlineSx,
         }}
       >
-        Ctx {contextWindow > 0 ? contextWindow.toLocaleString() : '—'}
+        Context {contextWindow > 0 ? contextWindow.toLocaleString() : '—'}
       </Button>
     );
   }
@@ -83,6 +83,7 @@ export function ContextBudgetMenu({
       <Button
         size="small"
         variant="outlined"
+        title="Context window size and packing sliders (not the Deep Research call budget)"
         disabled={disabled}
         onClick={(event) => {
           onDismissHelp?.();
@@ -99,7 +100,7 @@ export function ContextBudgetMenu({
           borderWidth: highlight ? 2 : 1,
         }}
       >
-        Ctx {contextWindow > 0 ? contextWindow.toLocaleString() : '—'}
+        Context {contextWindow > 0 ? contextWindow.toLocaleString() : '—'}
       </Button>
       <Popover
         open={open}
@@ -125,7 +126,7 @@ export function ContextBudgetMenu({
         </Box>
         <TextField
           size="small"
-          label="Ctx size (tokens)"
+          label="Context window (tokens)"
           type="number"
           fullWidth
           value={contextWindow}

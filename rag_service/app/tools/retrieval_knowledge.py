@@ -11,7 +11,12 @@ from typing import Any
 
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
-from app.rag.retrieval import format_search_knowledge_content
+from app.rag.retrieval import (
+    _combine_group_bodies,
+    expand_synthetic_sentence_siblings,
+    format_search_knowledge_content,
+    reassemble_document_chunks_by_reading_order,
+)
 from app.tools.contracts import InspectDocumentRequest, ReadContextRequest, SearchKnowledgeRequest
 from app.tools.context import ToolInvocationContext
 from app.tools.services import DefaultToolServices, get_tool_services
@@ -313,8 +318,22 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
         if not raw:
             return make_tool_result(tool_name=tool_name, content="No relevant content matched the requested document filters.", context=context, started=started, warnings=[ToolWarningCode.NO_RELEVANT_CONTENT])
 
+        if request.level == "chunk" and context.embedding_model:
+            raw = await expand_synthetic_sentence_siblings(raw, embedding_model=context.embedding_model)
+
         if request.level == "chunk":
-            matches = raw[:request.max_results]
+            reading_groups = reassemble_document_chunks_by_reading_order(raw)
+            selected_groups: list[list[dict[str, Any]]] = []
+            selected_count = 0
+            for group in reading_groups:
+                if selected_count >= request.max_results:
+                    break
+                if selected_count + len(group) > request.max_results:
+                    selected_groups.append(group[: request.max_results - selected_count])
+                    break
+                selected_groups.append(group)
+                selected_count += len(group)
+            matches = [item for group in selected_groups for item in group]
         else:
             groups: dict[str, dict[str, Any]] = {}
             for item in raw:
@@ -343,19 +362,25 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
 
         sources: list[dict[str, Any]] = []
         content_parts: list[str] = []
+        content_source_indexes: list[list[int]] = []
         if request.level == "chunk":
-            for item in matches:
-                source = _source_from_chunk(item, score=item.get("rerank_score", item.get("score")))
-                sources.append(source)
-                metadata = item.get("metadata") or {}
-                # Vector search stores contextualized_text in the generic
-                # `text` property so embeddings retain heading context.  A
-                # chunk-level answer, however, needs the original body text;
-                # otherwise retrieval exposes only labels such as
-                # "Document section" and cannot support grounded synthesis.
-                body_text = str(metadata.get("body_text") or item.get("body_text") or "").strip()
-                evidence_text = body_text or str(item.get("text") or "").strip()
-                content_parts.append(f"[Source {source['source_id']} | pages {source.get('page_start') or '?'}]\n{evidence_text}")
+            for group in selected_groups:
+                group_sources: list[dict[str, Any]] = []
+                for item in group:
+                    source = _source_from_chunk(item, score=item.get("rerank_score", item.get("score")))
+                    group_sources.append(source)
+                    sources.append(source)
+                combined_text = _combine_group_bodies(group)
+                source_ids = ", ".join(str(source["source_id"]) for source in group_sources)
+                page_values = [source.get("page_start") for source in group_sources if source.get("page_start") is not None]
+                pages_label = str(page_values[0]) if page_values and len(set(page_values)) == 1 else "?"
+                if len(group_sources) == 1:
+                    header = f"[Source {source_ids} | pages {pages_label}]"
+                else:
+                    header = f"[Sources: {source_ids} | pages {pages_label}]"
+                content_parts.append(f"{header}\n{combined_text}")
+                start_index = len(sources) - len(group_sources)
+                content_source_indexes.append(list(range(start_index, len(sources))))
         else:
             section_cache: dict[tuple[str, str], Any] = {}
             file_cache: dict[str, Any] = {}
@@ -404,7 +429,11 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                 }
                 sources.append(source)
                 content_parts.append(f"[Discovery: {title}]\n{title}")
-        content, truncated = format_search_knowledge_content(sources, content_parts)
+        content, truncated = format_search_knowledge_content(
+            sources,
+            content_parts,
+            content_source_indexes=content_source_indexes if request.level == "chunk" else None,
+        )
         artifacts = {
             "matches": sources,
             "document_sources": sources,

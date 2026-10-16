@@ -3,6 +3,11 @@ import os
 import logging
 import json
 from typing import Optional
+
+# Docling 2.118 compiles layout (RT-DETR) models by default; eager inference is
+# equivalent for extraction quality and avoids torch._dynamo graph-break noise.
+os.environ.setdefault("DOCLING_INFERENCE_COMPILE_TORCH_MODELS", "false")
+
 from docling.document_converter import DocumentConverter, DocumentStream, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from docling.datamodel.base_models import InputFormat

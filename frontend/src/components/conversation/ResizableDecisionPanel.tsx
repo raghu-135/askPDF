@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, IconButton, Typography } from '@mui/material';
+import { Box, IconButton, Typography, useMediaQuery, useTheme } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { useResizablePanelRatio } from '../../hooks/useResizablePanelRatio';
 import { ResizablePanelHandle } from './ResizablePanelHandle';
@@ -7,23 +7,30 @@ import { ResizablePanelHandle } from './ResizablePanelHandle';
 export function ResizableDecisionPanel({
   title,
   children,
+  footer,
   variant = 'clarification',
   onClose,
   rootRef,
   defaultRatio = 0.3,
+  narrowDefaultRatio = 0.22,
   horizontalInset = 0,
   minHeight = 0,
 }: {
   title: React.ReactNode;
   children: React.ReactNode;
+  footer?: React.ReactNode;
   variant?: 'clarification' | 'conflict' | 'approval';
   onClose?: () => void;
   rootRef?: React.RefObject<HTMLElement | null>;
   defaultRatio?: number;
+  narrowDefaultRatio?: number;
   horizontalInset?: number;
   minHeight?: number;
 }) {
-  const { ratio, resizing, onResizeStart } = useResizablePanelRatio(rootRef || { current: null }, defaultRatio);
+  const theme = useTheme();
+  const narrow = useMediaQuery(theme.breakpoints.down('sm'));
+  const initialRatio = narrow ? narrowDefaultRatio : defaultRatio;
+  const { ratio, resizing, onResizeStart } = useResizablePanelRatio(rootRef || { current: null }, initialRatio);
 
   return (
     <Box sx={{
@@ -51,9 +58,10 @@ export function ResizableDecisionPanel({
           </IconButton>
         )}
       </Box>
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 1, pb: 1, overflowY: 'auto', minHeight: 0 }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 1, pb: footer ? 0 : 1, overflowY: 'auto', minHeight: 0, flex: 1 }}>
         {children}
       </Box>
+      {footer ? <Box sx={{ flexShrink: 0, px: 1, pb: 1 }}>{footer}</Box> : null}
     </Box>
   );
 }

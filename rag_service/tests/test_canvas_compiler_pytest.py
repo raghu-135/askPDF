@@ -109,7 +109,6 @@ async def test_compile_accepts_src_prefixed_source_id():
         "title": "Src id",
         "claims": [{"text": "Claim", "source_ids": [source_id]}],
     })
-    chunk = type("Chunk", (), {"file_hash": file_hash, "source_id": source_id})()
     with (
         patch(
             "app.services.canvas_compiler._canonicalize_draft_source_id",
@@ -122,6 +121,46 @@ async def test_compile_accepts_src_prefixed_source_id():
     ):
         spec = await compile_canvas_draft(draft, thread_file_hashes={file_hash})
     assert spec.title == "Src id"
+
+
+@pytest.mark.asyncio
+async def test_compile_resolves_src_alias_to_document_citation():
+    file_hash = "a" * 32
+    src_id = "src_abc123def4567890abcdef1234567890"
+    draft = CanvasPublishDraft.model_validate({
+        "layout": "matrix",
+        "title": "Retrieval ids",
+        "claims": [{"text": "From search", "source_ids": [src_id]}],
+    })
+    chunk = type("Chunk", (), {"chunk_id": "3", "source_id": src_id, "file_hash": file_hash})()
+    with (
+        patch(
+            "app.services.canvas_compiler.get_canonical_document_repo",
+        ) as repo_factory,
+        patch(
+            "app.services.canvas_compiler._sentence_exists",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "app.services.canvas_compiler._first_sentence_for_chunk",
+            new=AsyncMock(return_value=1),
+        ),
+    ):
+        repo = AsyncMock()
+        repo.get_chunks_by_source_id = AsyncMock(return_value=[chunk])
+        repo_factory.return_value = repo
+        spec = await compile_canvas_draft(
+            draft,
+            thread_file_hashes={file_hash},
+            embedding_model="baai/bge-base-en-v1.5",
+        )
+    sources = next(
+        block
+        for section in spec.sections
+        for block in section.blocks
+        if block.type == "sources"
+    )
+    assert sources.citations[0].file_hash == file_hash
 
 
 def test_publish_idempotency_key_differs_for_revision():

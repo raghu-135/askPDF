@@ -115,7 +115,7 @@ def format_citation_menu_section(state: Mapping[str, Any]) -> str:
     lines = [
         "## Citation menu",
         "",
-        "Use these exact source_id values in publish_canvas claims. Do not invent ids.",
+        "Use these exact source_id values in publish_canvas claims (doc:… or src_… from retrieval). Do not invent ids.",
         "",
     ]
     for item in menu:
