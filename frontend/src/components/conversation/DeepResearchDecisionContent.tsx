@@ -8,35 +8,15 @@ import {
   budgetUsageFromInterrupt,
   buildDecisionLeadLine,
   countReviewIssues,
-  formatBudgetMeterLine,
+  formatBudgetDimensionChip,
+  RESEARCH_BUDGET_DIMENSIONS,
   RESEARCH_BUDGET_TOOLTIP,
+  reviewSummaryLines,
 } from '../../lib/deep-research-decision-ui';
+import { buildCitationDisplayMap, rewriteDocCitationTokens } from '../../lib/research-citation-display';
+import type { CitationDisplaySource } from '../../lib/research-citation-display';
+import { ConversationDisclosure } from './ConversationDisclosure';
 import { ConversationMarkdown } from './ConversationMarkdown';
-
-function warningSummaryLines(pending: AgentRunPendingInterrupt): string[] {
-  const lines: string[] = [];
-  const gaps = Array.isArray(pending.gaps) ? pending.gaps.map(String) : [];
-  gaps.forEach((gap) => { if (gap.trim()) lines.push(gap.trim()); });
-  const warnings = Array.isArray(pending.warnings) ? pending.warnings : [];
-  warnings.forEach((entry) => {
-    if (!entry || typeof entry !== 'object') return;
-    const code = String((entry as { code?: string }).code || 'warning');
-    const details = (entry as { details?: Record<string, unknown> }).details;
-    const issues = details && Array.isArray(details.issues) ? details.issues : [];
-    if (issues.length) {
-      issues.forEach((issue) => {
-        if (typeof issue === 'string') lines.push(issue);
-        else if (issue && typeof issue === 'object') {
-          const message = String((issue as { message?: string }).message || (issue as { summary?: string }).summary || code);
-          lines.push(message);
-        }
-      });
-    } else {
-      lines.push(code.replaceAll('_', ' '));
-    }
-  });
-  return lines;
-}
 
 export function DeepResearchBudgetSummary({
   pending,
@@ -48,13 +28,23 @@ export function DeepResearchBudgetSummary({
   const snapshot = useMemo(() => budgetUsageFromInterrupt(pending, task), [pending, task]);
   if (!snapshot) return null;
   return (
-    <Stack direction="row" spacing={0.75} flexWrap="wrap" alignItems="center">
-      <Chip
-        size="small"
-        variant="outlined"
-        title={RESEARCH_BUDGET_TOOLTIP}
-        label={`Tranche ${snapshot.trancheIndex} · ${formatBudgetMeterLine(snapshot)}`}
-      />
+    <Stack direction="row" spacing={0.75} flexWrap="wrap" alignItems="center" useFlexGap>
+      <Chip size="small" variant="outlined" label={`Tranche ${snapshot.trancheIndex}`} title={RESEARCH_BUDGET_TOOLTIP} />
+      {RESEARCH_BUDGET_DIMENSIONS.map((key) => {
+        const limit = snapshot.trancheLimits[key];
+        if (limit == null) return null;
+        const used = snapshot.trancheUsage[key] || 0;
+        return (
+          <Chip
+            key={key}
+            size="small"
+            variant="outlined"
+            title={RESEARCH_BUDGET_TOOLTIP}
+            label={formatBudgetDimensionChip(key, used, limit)}
+            sx={{ maxWidth: '100%', height: 'auto', '& .MuiChip-label': { whiteSpace: 'normal', py: 0.25 } }}
+          />
+        );
+      })}
     </Stack>
   );
 }
@@ -66,7 +56,7 @@ export function DeepResearchIssueList({
   pending: AgentRunPendingInterrupt;
   defaultExpanded?: boolean;
 }) {
-  const lines = useMemo(() => warningSummaryLines(pending), [pending]);
+  const lines = useMemo(() => reviewSummaryLines(pending), [pending]);
   const [open, setOpen] = useState(Boolean(defaultExpanded));
   if (!lines.length) return null;
   return (
@@ -165,12 +155,30 @@ export function DeepResearchGuidanceField({
 export function DeepResearchProvisionalAnswer({
   content,
   emptyMessage,
+  citationSources,
+  defaultCollapsed = true,
 }: {
   content?: string | null;
   emptyMessage?: string;
+  citationSources?: CitationDisplaySource[];
+  defaultCollapsed?: boolean;
 }) {
-  if (content?.trim()) {
-    return <ConversationMarkdown content={String(content)} />;
+  const displayContent = useMemo(() => {
+    const raw = String(content || '');
+    if (!raw.trim()) return raw;
+    const map = buildCitationDisplayMap(citationSources);
+    return rewriteDocCitationTokens(raw, map);
+  }, [content, citationSources]);
+
+  if (displayContent?.trim()) {
+    if (defaultCollapsed) {
+      return (
+        <ConversationDisclosure label="Provisional report" defaultExpanded={false}>
+          <ConversationMarkdown content={displayContent} />
+        </ConversationDisclosure>
+      );
+    }
+    return <ConversationMarkdown content={displayContent} />;
   }
   if (emptyMessage) {
     return <Alert severity="warning">{emptyMessage}</Alert>;

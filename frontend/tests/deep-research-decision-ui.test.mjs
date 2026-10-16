@@ -38,12 +38,13 @@ test('buildDecisionLeadLine mentions budget exhaustion for result review', () =>
   assert.match(line, /more budget/i);
 });
 
-test('countReviewIssues totals warnings and gaps', () => {
+test('countReviewIssues totals structured limitation lines', () => {
   const counts = countReviewIssues({
-    warnings: [{ code: 'a' }, { code: 'b' }],
+    warnings: [{ code: 'evidence_critic_issues', details: { issues: ['issue-a', 'issue-b'] } }],
     gaps: ['gap-one'],
   });
-  assert.equal(counts.warningCount, 2);
+  assert.equal(counts.warningCount, 1);
   assert.equal(counts.gapCount, 1);
+  assert.equal(counts.limitationCount, 3);
   assert.equal(counts.total, 3);
 });

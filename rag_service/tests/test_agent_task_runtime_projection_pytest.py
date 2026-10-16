@@ -24,6 +24,8 @@ from app.services.agent_task_runtime_projection import (
     RuntimeTaskProjectionConflict,
     _merge_budget,
     _result_review_body,
+    _result_review_title,
+    _result_review_trigger,
     apply_neutral_task_completion,
     apply_runtime_task_delta,
 )
@@ -817,4 +819,7 @@ def test_result_review_body_mentions_budget_and_issues():
     body = _result_review_body(budget, [{"code": "evidence_critic_issues"}], ["gap"])
     assert "Research budget for model calls" in body
     assert "more budget" in body
+    assert _result_review_title(budget) == "Research budget reached"
+    assert _result_review_trigger(budget) == "budget"
+    assert _result_review_title({}) == "Review incomplete result"
     assert "1 unverified claim" in _result_review_body({}, [{"code": "x"}], [])
