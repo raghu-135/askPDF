@@ -79,11 +79,6 @@
           "max_concurrency": 2,
           "max_fanout": 2,
           "max_attempts_per_todo": 2,
-          "subagent_timeout_ms": 180000,
-          "max_active_runtime_ms": 3600000,
-          "max_model_calls": 10000,
-          "max_tool_calls": 100,
-          "max_model_tokens": 500000,
           "max_artifacts": 200,
           "max_artifact_bytes": 104857600,
           "max_single_artifact_bytes": 10485760

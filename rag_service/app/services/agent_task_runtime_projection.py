@@ -29,6 +29,7 @@ from app.runtime.behavior import continuation_is_linked
 from app.services.content_store import get_content_store, task_artifact_content_key
 from app.time_utils import utc_now
 from runtime_protocol.contracts import TaskOrchestrationDelta
+from app.runtime.budgets import configured_budget_value
 
 
 class RuntimeTaskProjectionConflict(RuntimeError):
@@ -868,7 +869,14 @@ async def apply_runtime_task_delta(
                 if attempt > int(todos[todo_id].max_attempts):
                     raise RuntimeTaskProjectionConflict("runtime subagent attempt exceeds the product limit")
                 timeout_ms = int(packet.get("timeout_ms") or 180_000)
-                if timeout_ms > int(limits.get("subagent_timeout_ms", 180_000)) or timeout_ms <= 0:
+                # Allow env-configured deployment budgets to define the default ceiling
+                # when the per-task limit is not explicitly set.
+                try:
+                    env_ceiling = configured_budget_value((task.config_json or {}), "subagent_timeout_ms", run.framework or "langgraph")
+                except Exception:
+                    env_ceiling = 180_000
+                allowed_timeout_ms = int(limits.get("subagent_timeout_ms", env_ceiling))
+                if timeout_ms > allowed_timeout_ms or timeout_ms <= 0:
                     raise RuntimeTaskProjectionConflict("runtime subagent timeout exceeds the product limit")
                 execution_key = tasks.canonical_hash({"task_id": task_id, "todo_id": todo_id, "plan_revision": max(1, plan_revision), "attempt": attempt})
                 subagent = (await session.execute(select(AgentTaskSubagentRun).where(AgentTaskSubagentRun.execution_key == execution_key))).scalar_one_or_none()

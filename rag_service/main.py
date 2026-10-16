@@ -73,6 +73,8 @@ from app.runtime.registry import get_runtime_registry
 from app.runtime.hermes_config import hermes_runtime_enabled, validate_hermes_model_compatibility
 from runtime_protocol.auth import valid_bearer_token
 from app.auth import authenticate, reset_principal, set_principal
+from app.runtime.budgets import deep_agent_budgets
+from app.services.agent_task_budgets import tranche_limits
 
 
 AGENT_TASK_WORKER_SHUTDOWN_GRACE_SECONDS = 30
@@ -183,6 +185,17 @@ async def lifespan(app: FastAPI):
     Performs startup tasks like database initialization.
     """
     logger.info("--- RAG Service Starting ---")
+    # Validate Deep Agent budget environment at startup so a missing or invalid
+    # deployment configuration fails the container early instead of at first use.
+    try:
+        # Require common research tranche budgets
+        tranche_limits({})
+        # Require runtime adapter budgets (framework-specific or common aliases)
+        deep_agent_budgets("langgraph")
+        deep_agent_budgets("hermes")
+    except Exception as exc:
+        logger.critical("Deep Agent budget environment invalid: %s", exc)
+        raise
     memory_maintenance_stop = None
     memory_maintenance_task = None
     embedding_job_stop = None
