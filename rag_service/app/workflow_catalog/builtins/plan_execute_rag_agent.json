@@ -17,7 +17,8 @@
         "durable_memory",
         "thread_events",
         "live_web_recon",
-        "clarify_intent"
+        "clarify_intent",
+        "research_canvas_publish"
       ],
       "context_policy": {
         "evidence_compression": "compact",
