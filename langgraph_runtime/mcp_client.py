@@ -229,7 +229,6 @@ async def _call_transport(name: str, arguments: dict[str, Any], config: Runnable
     metadata = {
         "mcp_request_id": str(configurable.get("mcp_request_id") or f"mcp-{uuid4().hex}"),
     }
-    arguments = {**arguments, "_askpdf_context_token": token}
     try:
         async with httpx.AsyncClient(
             timeout=timeout, headers={"x-askpdf-execution-context": token}
@@ -306,6 +305,7 @@ def create_mcp_langchain_tool(tool_name: str, request_model: type[Any] | None = 
         arguments = dict(kwargs)
         if args:
             arguments.update(_arguments(args[0]))
+        arguments = coerce_tool_arguments(tool_name, arguments)
         if checkpointed:
             return await _checkpointed_call(tool_name, arguments, config)
         return await _call(tool_name, arguments, config)

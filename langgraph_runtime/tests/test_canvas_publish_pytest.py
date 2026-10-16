@@ -43,6 +43,19 @@ def test_prepare_publish_canvas_tool_input_requires_claims():
         prepare_publish_canvas_tool_input({"layout": "matrix", "title": "X"})
 
 
+def test_prepare_publish_canvas_tool_input_jsonifies_pydantic_claims():
+    class Claim:
+        def model_dump(self, mode="json", exclude_none=True):
+            return {"text": "Skill", "source_ids": ["web:https://example.com"]}
+
+    payload = prepare_publish_canvas_tool_input({
+        "layout": "matrix",
+        "title": "Skills",
+        "claims": [Claim()],
+    })
+    assert payload["claims"] == [{"text": "Skill", "source_ids": ["web:https://example.com"]}]
+
+
 def test_prepare_publish_canvas_tool_input_accepts_draft():
     payload = prepare_publish_canvas_tool_input({
         "layout": "timeline",

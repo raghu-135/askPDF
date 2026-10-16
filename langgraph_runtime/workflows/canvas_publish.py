@@ -68,6 +68,14 @@ class CanvasDraftNormalizeError(ValueError):
 CanvasSpecNormalizeError = CanvasDraftNormalizeError  # tests import legacy name
 
 
+def _json_ready_claim(claim: Any) -> dict[str, Any]:
+    if hasattr(claim, "model_dump"):
+        return claim.model_dump(mode="json", exclude_none=True)
+    if isinstance(claim, Mapping):
+        return dict(claim)
+    raise CanvasDraftNormalizeError("each claim must be an object with text and source_ids")
+
+
 def prepare_publish_canvas_tool_input(args: Mapping[str, Any]) -> dict[str, Any]:
     layout = str(args.get("layout") or "").strip().lower()
     title = str(args.get("title") or "").strip()
@@ -78,7 +86,11 @@ def prepare_publish_canvas_tool_input(args: Mapping[str, Any]) -> dict[str, Any]
         raise CanvasDraftNormalizeError("title is required")
     if not isinstance(claims, list) or not claims:
         raise CanvasDraftNormalizeError("claims must be a non-empty list")
-    payload: dict[str, Any] = {"layout": layout, "title": title, "claims": claims}
+    payload: dict[str, Any] = {
+        "layout": layout,
+        "title": title,
+        "claims": [_json_ready_claim(item) for item in claims],
+    }
     summary = args.get("summary")
     if isinstance(summary, str) and summary.strip():
         payload["summary"] = summary.strip()[:400]
