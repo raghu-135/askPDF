@@ -191,7 +191,13 @@ async def test_search_knowledge_chunk_level_returns_body_text_over_structural_co
     assert "Document section: Introduction" not in payload["content"]
 
 
-def _knowledge_chunk(source_id: str, body: str, *, table_id: str | None = None) -> dict:
+def _knowledge_chunk(
+    source_id: str,
+    body: str,
+    *,
+    table_id: str | None = None,
+    chunk_index: int = 0,
+) -> dict:
     return {
         "file_hash": "file-1",
         "chunk_id": source_id,
@@ -207,8 +213,47 @@ def _knowledge_chunk(source_id: str, body: str, *, table_id: str | None = None) 
             "chunking_fingerprint": "chunk-1",
             "table_id": table_id,
             "section_id": "sec-1",
+            "chunk_index": chunk_index,
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_chunk_level_preserves_reading_order_after_rerank(monkeypatch):
+    _patch_ready_manifest(monkeypatch)
+    hits = [
+        _knowledge_chunk("src-1", "beta", chunk_index=1),
+        _knowledge_chunk("src-0", "alpha", chunk_index=0),
+        _knowledge_chunk("src-2", "gamma", chunk_index=2),
+    ]
+
+    async def rerank(_query, chunks):
+        scores = {"src-1": 0.95, "src-0": 0.2, "src-2": 0.5}
+        for chunk in chunks:
+            chunk["rerank_score"] = scores[str(chunk["source_id"])]
+        return sorted(chunks, key=lambda item: item["rerank_score"], reverse=True)
+
+    fake_db = SimpleNamespace(search_knowledge_sources=AsyncMock(return_value=hits))
+
+    class Services:
+        async def embed(self, _model, _query): return [0.1, 0.2, 0.3]
+        def vector_db(self): return fake_db
+        async def document_lookup(self, _thread_id): return {"file-1": {"file_name": "paper.pdf"}}
+        async def rerank(self, query, chunks): return await rerank(query, chunks)
+
+    raw = await neutral_knowledge(
+        SearchKnowledgeRequest(query="order", level="chunk", max_results=3),
+        _context(caller_node="retrieval_worker", use_reranker=True),
+        services=Services(),
+    )
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_knowledge")
+
+    assert payload["ok"] is True
+    alpha_pos = payload["content"].index("alpha")
+    beta_pos = payload["content"].index("beta")
+    gamma_pos = payload["content"].index("gamma")
+    assert alpha_pos < beta_pos < gamma_pos
+    assert {match["source_id"] for match in payload["artifacts"]["matches"]} == {"src-0", "src-1", "src-2"}
 
 
 @pytest.mark.asyncio

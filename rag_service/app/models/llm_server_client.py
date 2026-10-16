@@ -505,6 +505,21 @@ def should_use_local_reranker(model_name: str) -> bool:
     return bool(normalize_model_name(model_name))
 
 
+def _reranker_max_length(model_name: str) -> int:
+    """Use the model's configured context window instead of the CrossEncoder default (512)."""
+
+    try:
+        from transformers import AutoConfig
+
+        config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+        value = getattr(config, "max_position_embeddings", None)
+        if value is not None and int(value) > 0:
+            return int(value)
+    except Exception:
+        logger.warning("Could not resolve reranker max_length for %s; using 512", model_name, exc_info=True)
+    return 512
+
+
 def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerankerWrapper]:
     name = normalize_model_name(model_name or LOCAL_RERANKER_MODEL)
     if not name:
@@ -518,7 +533,8 @@ def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerank
         if _device is None:
             raise RuntimeError("RERANKER_DEVICE environment variable is required")
         device = _device.strip() or "cpu"
-        model = CrossEncoder(name, device=device, trust_remote_code=True)
+        max_length = _reranker_max_length(name)
+        model = CrossEncoder(name, device=device, max_length=max_length, trust_remote_code=True)
         _local_reranker_cache[name] = LocalRerankerWrapper(model)
     return _local_reranker_cache[name]
 
