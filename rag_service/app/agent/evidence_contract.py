@@ -103,7 +103,18 @@ def evidence_segment(*, kind: str, content: Any, source: Dict[str, Any], raw_sco
     display_url = normalized_source_url(source.get("url") or source.get("source_url") or source.get("link"))
     locator = {
         key: source.get(key)
-        for key in ("file_hash", "chunk_id", "page_start", "page_end", "pages", "message_id", "memory_id", "timeline_event_at")
+        for key in (
+            "file_hash",
+            "chunk_id",
+            "page_start",
+            "page_end",
+            "pages",
+            "message_id",
+            "memory_id",
+            "timeline_event_at",
+            "sentence_ids",
+            "sentence_id",
+        )
         if source.get(key) not in (None, "")
     }
     return {

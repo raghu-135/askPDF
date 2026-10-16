@@ -2,7 +2,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import ValidationError
 
 from app.models.canvas import admit_canvas_spec, parse_canvas_spec
 from app.services.tool_approval import invocation_policies
@@ -50,10 +49,15 @@ def test_hitl_canvas_publish_asks_before_durable_write():
 @pytest.mark.asyncio
 async def test_publish_canvas_rejects_invalid_components(monkeypatch):
     monkeypatch.setattr("app.tools.publish_canvas.get_thread_files", AsyncMock(return_value=[]))
-    with pytest.raises(ValidationError):
-        PublishCanvasRequest.model_validate(
-            {"spec": {**valid_spec(), "sections": [{"title": "Bad", "blocks": [{"type": "iframe", "src": "https://evil.example"}]}]}}
-        )
+    invalid = PublishCanvasRequest.model_validate(
+        {"spec": {**valid_spec(), "sections": [{"title": "Bad", "blocks": [{"type": "iframe", "src": "https://evil.example"}]}]}}
+    )
+    invalid_result = await invoke_publish_canvas(
+        invalid,
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1"),
+    )
+    assert invalid_result.ok is False
+    assert invalid_result.error.code == "publish_canvas_invalid_component"
     result = await invoke_publish_canvas(
         PublishCanvasRequest.model_validate({"spec": valid_spec()}),
         ToolInvocationContext(thread_id="thread-1", run_id="run-1"),
@@ -87,7 +91,12 @@ async def test_publish_canvas_rejects_missing_citations(monkeypatch):
 async def test_publish_canvas_ignores_file_hash_supersedes_id(monkeypatch):
     monkeypatch.setattr(
         "app.tools.publish_canvas.get_thread_files",
-        AsyncMock(return_value=[SimpleNamespace(file_hash="file-a")]),
+        AsyncMock(
+            return_value=[
+                SimpleNamespace(file_hash="file-a"),
+                SimpleNamespace(file_hash="file-b"),
+            ]
+        ),
     )
     create = AsyncMock(return_value={"id": "canvas-1", "title": "Skills"})
     monkeypatch.setattr("app.tools.publish_canvas.CanvasService.create", create)
@@ -100,6 +109,26 @@ async def test_publish_canvas_ignores_file_hash_supersedes_id(monkeypatch):
     assert "supersedes_id_ignored_file_hash" in (result.warnings or [])
     create.assert_awaited_once()
     assert create.await_args[0][1].supersedes_id is None
+
+
+@pytest.mark.asyncio
+async def test_publish_canvas_compiles_draft(monkeypatch):
+    monkeypatch.setattr("app.tools.publish_canvas.get_thread_files", AsyncMock(return_value=[]))
+    created = {"id": "canvas-draft-1", "title": "Evidence map"}
+    create = AsyncMock(return_value=created)
+    monkeypatch.setattr("app.tools.publish_canvas.CanvasService.create", create)
+    result = await invoke_publish_canvas(
+        PublishCanvasRequest.model_validate({
+            "layout": "matrix",
+            "title": "Evidence map",
+            "claims": [{"text": "Claim", "source_ids": ["web:https://example.com/paper"]}],
+        }),
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1"),
+    )
+    assert result.ok is True
+    create.assert_awaited_once()
+    spec = create.await_args[0][1].spec
+    assert spec.title == "Evidence map"
 
 
 @pytest.mark.asyncio

@@ -35,4 +35,5 @@ def test_apply_canvas_layout_skills_only_when_publish_is_admitted():
     assert list(CANVAS_LAYOUT_SKILL_IDS) == [item for item in admitted["skills"] if item in CANVAS_LAYOUT_SKILL_IDS]
     assert "Keep this." in admitted["system_prompt"]
     assert "canvas_compare_papers" in admitted["system_prompt"]
-    assert "stat" in admitted["system_prompt"] and "table" in admitted["system_prompt"]
+    assert "draft" in admitted["system_prompt"].casefold()
+    assert "citation menu" in admitted["system_prompt"].casefold()

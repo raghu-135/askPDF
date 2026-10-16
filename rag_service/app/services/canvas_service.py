@@ -66,11 +66,13 @@ async def resolve_publish_supersedes_id(
         warnings.append("supersedes_id_ignored_invalid_format")
         return None, warnings
     previous = await canvases.get(raw)
-    if previous is None:
+    if previous is None or previous.thread_id != thread_id:
         warnings.append("supersedes_id_ignored_not_on_thread")
         return None, warnings
-    if previous.thread_id != thread_id:
-        raise CanvasValidationError("supersedes_id must belong to this thread")
+    current_rows = await canvases.list_for_thread(thread_id, current_only=True)
+    current_ids = {row.id for row in current_rows}
+    if raw not in current_ids:
+        raise CanvasValidationError("supersedes_id must reference a current canvas on this thread")
     return raw, warnings
 
 

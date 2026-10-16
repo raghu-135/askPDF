@@ -9,16 +9,19 @@ from pydantic import ValidationError
 from langgraph_runtime.mcp_client import _PublishCanvasArguments, create_mcp_langchain_tool
 from langgraph_runtime.workflows.canvas_publish import (
     CanvasSpecNormalizeError,
-    normalize_publish_canvas_spec,
+    canvas_idempotency_key,
+    prepare_publish_canvas_tool_input,
     sanitize_supersedes_id_for_publish,
     strip_prose_publish_canvas,
     synthesize_with_canvas_publish,
 )
 
 
-def test_publish_canvas_schema_requires_spec():
+def test_publish_canvas_schema_requires_draft_fields():
     schema = create_mcp_langchain_tool("publish_canvas").args_schema.model_json_schema()
-    assert "spec" in schema.get("required", [])
+    required = set(schema.get("required", []))
+    assert {"layout", "title", "claims"}.issubset(required)
+    assert "spec" not in required
     assert "query" not in schema.get("properties", {})
 
 
@@ -29,14 +32,35 @@ async def test_publish_canvas_rejects_query_only_arguments():
         await tool.ainvoke({"query": "make a canvas"})
 
 
-def test_publish_canvas_arguments_coerce_json_string_spec():
-    body = {
-        "schema_version": 1,
-        "title": "Resume Skills Matrix",
-        "sections": [{"title": "Skills", "blocks": [{"type": "stat", "value": "4", "label": "Skills"}]}],
-    }
-    args = _PublishCanvasArguments(spec=json.dumps(body))
-    assert args.spec["title"] == "Resume Skills Matrix"
+def test_canvas_idempotency_key_distinguishes_create_and_revision():
+    state = {"agent_run_id": "run-42"}
+    assert canvas_idempotency_key(state) == "publish_canvas:run-42:create"
+    assert canvas_idempotency_key(state, supersedes_id="canvas-1") == "publish_canvas:run-42:canvas-1"
+
+
+def test_prepare_publish_canvas_tool_input_requires_claims():
+    with pytest.raises(CanvasSpecNormalizeError):
+        prepare_publish_canvas_tool_input({"layout": "matrix", "title": "X"})
+
+
+def test_prepare_publish_canvas_tool_input_accepts_draft():
+    payload = prepare_publish_canvas_tool_input({
+        "layout": "timeline",
+        "title": "Events",
+        "claims": [{"text": "Happened", "source_ids": ["web:https://example.com"], "time": "2020"}],
+    })
+    assert payload["layout"] == "timeline"
+    assert len(payload["claims"]) == 1
+
+
+def test_publish_canvas_arguments_accept_draft():
+    args = _PublishCanvasArguments(
+        layout="matrix",
+        title="Resume Skills Matrix",
+        claims=[{"text": "Skill A", "source_ids": ["web:https://example.com/a"]}],
+    )
+    assert args.title == "Resume Skills Matrix"
+    assert args.claims[0].text == "Skill A"
 
 
 def test_strip_prose_publish_canvas_removes_fake_calls():
@@ -44,249 +68,6 @@ def test_strip_prose_publish_canvas_removes_fake_calls():
     assert "publish_canvas" not in strip_prose_publish_canvas(text)
     assert "Findings." in strip_prose_publish_canvas(text)
 
-
-def test_normalize_publish_canvas_spec_wraps_a_block_as_canvas_spec_v1():
-    spec = normalize_publish_canvas_spec({"type": "markdown", "content": "Advisor models steer black-box LLMs."})
-    assert spec["schema_version"] == 1
-    assert spec["sections"][0]["blocks"][0] == {"type": "markdown", "text": "Advisor models steer black-box LLMs."}
-
-
-def test_normalize_publish_canvas_spec_splits_markdown_and_sources_extras():
-    spec = normalize_publish_canvas_spec({
-        "type": "markdown",
-        "content": "Advisor models steer black-box LLMs.",
-        "sources": [{"kind": "web", "label": "Paper", "url": "https://example.com"}],
-        "items": [{"kind": "web", "label": "ignored"}],
-    })
-    blocks = spec["sections"][0]["blocks"]
-    assert blocks[0] == {"type": "markdown", "text": "Advisor models steer black-box LLMs."}
-    assert blocks[1] == {
-        "type": "sources",
-        "title": "Sources",
-        "citations": [{"kind": "web", "label": "Paper", "url": "https://example.com"}],
-    }
-
-
-def test_normalize_publish_canvas_spec_preserves_canvas_spec_v1():
-    original = {"schema_version": 1, "title": "Advisor Models", "sections": [{"title": "Coverage", "blocks": [{"type": "stat", "value": "3", "label": "Claims"}]}]}
-    assert normalize_publish_canvas_spec({"spec": original}) == original
-
-
-def test_normalize_publish_canvas_spec_strips_unknown_envelope_fields():
-    spec = normalize_publish_canvas_spec({
-        "spec": {
-            "schema_version": 1,
-            "title": "How Humans Learn",
-            "id": "artifact-uuid",
-            "subtitle": "Report overview",
-            "version": 2,
-            "sections": [{
-                "title": "Overview",
-                "blocks": [{"type": "markdown", "text": "Summary.", "extra": "drop-me"}],
-            }],
-        },
-    })
-    assert set(spec.keys()) == {"schema_version", "title", "sections"}
-    assert "id" not in spec
-    assert "subtitle" not in spec
-    assert "version" not in spec
-    assert spec["sections"][0]["blocks"][0] == {"type": "markdown", "text": "Summary."}
-
-
-def test_normalize_publish_canvas_spec_defaults_missing_title_and_schema_version():
-    spec = normalize_publish_canvas_spec({
-        "spec": {
-            "sections": [{
-                "blocks": [{"type": "markdown", "text": "Learning happens through practice."}],
-            }],
-        },
-    })
-    assert spec["schema_version"] == 1
-    assert spec["title"] == "Findings"
-    assert spec["sections"][0]["title"] == "Findings"
-    assert spec["sections"][0]["blocks"][0]["text"] == "Learning happens through practice."
-
-
-def test_normalize_publish_canvas_spec_repairs_incomplete_blocks_and_citations():
-    spec = normalize_publish_canvas_spec({
-        "spec": {
-            "sections": [{
-                "title": "Overview",
-                "blocks": [
-                    {"type": "callout", "tone": "warning", "content": "Practice builds durable memory."},
-                    {"type": "markdown", "content": "Learning is active."},
-                    {
-                        "type": "sources",
-                        "citations": [{
-                            "kind": "document",
-                            "label": "How Humans Learn",
-                            "source_id": "3deaaae75be4cddfd0b34d7568ae5635",
-                        }],
-                    },
-                ],
-            }],
-        },
-    })
-    types = [block["type"] for block in spec["sections"][0]["blocks"]]
-    assert "callout" in types and "markdown" in types
-    callout = next(block for block in spec["sections"][0]["blocks"] if block["type"] == "callout")
-    assert callout["title"] == "Note"
-    assert callout["body"] == "Practice builds durable memory."
-    sources = next(block for block in spec["sections"][0]["blocks"] if block["type"] == "sources")
-    assert sources["citations"][0]["file_hash"] == "3deaaae75be4cddfd0b34d7568ae5635"
-    assert "source_id" not in sources["citations"][0]
-
-
-def test_normalize_citation_resolves_src_id_via_source_map():
-    file_hash = "3deaaae75be4cddfd0b34d7568ae5635"
-    src_id = "src_abc123def4567890abcdef1234567890"
-    spec = normalize_publish_canvas_spec(
-        {
-            "spec": {
-                "sections": [{
-                    "title": "Overview",
-                    "blocks": [{
-                        "type": "sources",
-                        "citations": [{
-                            "kind": "document",
-                            "label": "BERT",
-                            "source_id": src_id,
-                        }],
-                    }],
-                }],
-            },
-        },
-        source_id_to_file_hash={src_id: file_hash},
-    )
-    citations = spec["sections"][0]["blocks"][0]["citations"]
-    assert citations[0]["file_hash"] == file_hash
-
-
-def test_normalize_citation_drops_unresolved_src_id():
-    with pytest.raises(CanvasSpecNormalizeError):
-        normalize_publish_canvas_spec({
-            "spec": {
-                "sections": [{
-                    "title": "Overview",
-                    "blocks": [{
-                        "type": "sources",
-                        "citations": [{
-                            "kind": "document",
-                            "label": "BERT",
-                            "source_id": "src_unknown",
-                        }],
-                    }],
-                }],
-            },
-        })
-
-
-def test_normalize_publish_canvas_spec_wraps_string_sections():
-    spec = normalize_publish_canvas_spec({
-        "spec": {"sections": ["1. Attach prior knowledge before new concepts."]},
-    })
-    assert spec["sections"][0]["blocks"][0]["text"].startswith("1. Attach")
-
-
-def test_normalize_publish_canvas_spec_uses_subtitle_as_title_when_title_missing():
-    spec = normalize_publish_canvas_spec({
-        "spec": {
-            "subtitle": "How Humans Learn",
-            "sections": [{"title": "Overview", "blocks": [{"type": "stat", "value": "3", "label": "Ideas"}]}],
-        },
-    })
-    assert spec["title"] == "How Humans Learn"
-    assert "subtitle" not in spec
-
-
-def test_normalize_publish_canvas_spec_preserves_dag_edge_relation():
-    block = {
-        "type": "dag",
-        "nodes": [{"id": "a", "label": "Claim"}, {"id": "b", "label": "Source"}],
-        "edges": [{"source": "a", "target": "b", "relation": "contradicts"}],
-    }
-    spec = normalize_publish_canvas_spec(block)
-    edge = spec["sections"][0]["blocks"][0]["edges"][0]
-    assert edge["relation"] == "contradicts"
-
-
-def test_normalize_publish_canvas_spec_maps_dag_from_to_aliases():
-    spec = normalize_publish_canvas_spec({
-        "spec": {
-            "schema_version": 1,
-            "title": "Flow",
-            "sections": [{
-                "title": "Structure",
-                "blocks": [{
-                    "type": "dag",
-                    "nodes": [{"id": "a", "title": "Start"}, {"id": "b", "name": "End"}],
-                    "edges": [{"from": "a", "to": "b"}],
-                }],
-            }],
-        },
-    })
-    block = spec["sections"][0]["blocks"][0]
-    assert block["nodes"][0]["label"] == "Start"
-    assert block["nodes"][1]["label"] == "End"
-    assert block["edges"][0] == {"source": "a", "target": "b"}
-
-
-def test_normalize_publish_canvas_spec_repairs_type_as_key_wrappers():
-    """Matches evaluator_replanner publish_canvas payloads (markdown/stat/sources keys)."""
-    spec = normalize_publish_canvas_spec({
-        "spec": {
-            "schema_version": 1,
-            "title": "Five Core Ideas",
-            "sections": [{
-                "title": "Overview",
-                "blocks": [
-                    {"markdown": "Five core ideas from the report."},
-                    {"stat": {"label": "Core Ideas Identified", "value": "5"}},
-                    {
-                        "sources": {
-                            "citations": [{
-                                "kind": "document",
-                                "label": "how-humans-learn-report.pdf",
-                                "file_hash": "255dc7dfd217005fef041fea229249b2",
-                            }],
-                        },
-                    },
-                ],
-            }],
-        },
-    })
-    blocks = spec["sections"][0]["blocks"]
-    assert blocks[0] == {"type": "markdown", "text": "Five core ideas from the report."}
-    assert blocks[1] == {"type": "stat", "label": "Core Ideas Identified", "value": "5"}
-    assert blocks[2]["type"] == "sources"
-    assert blocks[2]["citations"][0]["file_hash"] == "255dc7dfd217005fef041fea229249b2"
-
-
-def test_normalize_publish_canvas_spec_drops_uncoercible_blocks_instead_of_passthrough():
-    with pytest.raises(CanvasSpecNormalizeError, match="no publishable sections"):
-        normalize_publish_canvas_spec({
-            "spec": {
-                "title": "Broken",
-                "sections": [{"title": "Overview", "blocks": [{"not_a_block": {"x": 1}}]}],
-            },
-        })
-
-
-def test_normalize_publish_canvas_spec_section_content_becomes_blocks():
-    spec = normalize_publish_canvas_spec({
-        "spec": {
-            "title": "Learn",
-            "sections": [{"title": "Overview", "content": "Humans learn through practice."}],
-        },
-    })
-    assert spec["sections"][0]["blocks"] == [{"type": "markdown", "text": "Humans learn through practice."}]
-
-
-def test_normalize_publish_canvas_spec_rejects_empty_sections():
-    with pytest.raises(CanvasSpecNormalizeError, match="no publishable sections"):
-        normalize_publish_canvas_spec({
-            "spec": {"schema_version": 1, "title": "Empty", "sections": []},
-        })
 
 
 @pytest.mark.asyncio
@@ -315,7 +96,7 @@ async def test_helper_skips_mcp_when_spec_normalizes_to_empty_sections(monkeypat
                 tool_calls=[{
                     "name": "publish_canvas",
                     "id": "call-1",
-                    "args": {"spec": {"schema_version": 1, "title": "X", "sections": []}},
+                    "args": {"layout": "matrix", "title": "X"},
                 }],
                 usage_metadata={},
             )
@@ -371,7 +152,7 @@ async def test_helper_does_not_invoke_publish_when_not_admitted(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_helper_invokes_publish_canvas_once_with_spec(monkeypatch):
+async def test_helper_invokes_publish_canvas_once_with_draft(monkeypatch):
     tool_calls = []
 
     async def fake_llm(func, messages, **_kwargs):
@@ -387,10 +168,10 @@ async def test_helper_invokes_publish_canvas_once_with_spec(monkeypatch):
     monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.tool_config_for_node", lambda *args, **kwargs: {})
     monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.normalize_tool_result", lambda raw, **kwargs: raw)
 
-    spec = {
-        "schema_version": 1,
+    draft = {
+        "layout": "matrix",
         "title": "Advisor Models",
-        "sections": [{"title": "Coverage", "blocks": [{"type": "stat", "value": "3", "label": "Claims"}]}],
+        "claims": [{"text": "Claim one", "source_ids": ["web:https://example.com/paper"]}],
     }
 
     class Bound:
@@ -399,7 +180,7 @@ async def test_helper_invokes_publish_canvas_once_with_spec(monkeypatch):
                 raise AssertionError("bound model should unbind after a successful publish")
             return SimpleNamespace(
                 content="",
-                tool_calls=[{"name": "publish_canvas", "id": "call-1", "args": {"spec": spec}}],
+                tool_calls=[{"name": "publish_canvas", "id": "call-1", "args": draft}],
                 usage_metadata={},
             )
 
@@ -420,64 +201,19 @@ async def test_helper_invokes_publish_canvas_once_with_spec(monkeypatch):
     )
     assert result["published"] is True
     assert result["answer"] == "See the canvas Advisor Models."
-    assert tool_calls == [("publish_canvas", {"spec": spec, "idempotency_key": "run-1"})]
+    assert tool_calls == [
+        (
+            "publish_canvas",
+            {
+                **draft,
+                "idempotency_key": "publish_canvas:run-1:create",
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio
-async def test_helper_accepts_stringified_spec_in_tool_call(monkeypatch):
-    tool_calls = []
-
-    async def fake_llm(func, messages, **_kwargs):
-        return await func(messages)
-
-    async def fake_tool(name, tool_input, **_kwargs):
-        tool_calls.append((name, tool_input))
-        return {"ok": True, "content": "published", "error": None, "trace": {"tool_name": name}}
-
-    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.invoke_llm_for_node", fake_llm)
-    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.invoke_tool_for_node", fake_tool)
-    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.append_tool_event_for_node", lambda *args, **kwargs: [])
-    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.tool_config_for_node", lambda *args, **kwargs: {})
-    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.normalize_tool_result", lambda raw, **kwargs: raw)
-
-    spec = {
-        "schema_version": 1,
-        "title": "Resume Skills Matrix",
-        "sections": [{"title": "Matrix", "blocks": [{"type": "stat", "value": "4", "label": "Skills"}]}],
-    }
-
-    class Bound:
-        async def ainvoke(self, messages):
-            if any(isinstance(item, ToolMessage) for item in messages):
-                return SimpleNamespace(content="Done.", tool_calls=[], usage_metadata={})
-            return SimpleNamespace(
-                content="",
-                tool_calls=[{"name": "publish_canvas", "id": "call-1", "args": {"spec": json.dumps(spec)}}],
-                usage_metadata={},
-            )
-
-    class LLM:
-        def bind_tools(self, _tools):
-            return Bound()
-
-        async def ainvoke(self, _messages):
-            return SimpleNamespace(content="Done.", tool_calls=[], usage_metadata={})
-
-    result = await synthesize_with_canvas_publish(
-        LLM(),
-        [HumanMessage(content="Publish")],
-        state={"allowed_tool_ids": ["research_canvas_publish"], "agent_run_id": "run-1", "llm_model": "test"},
-        config={},
-        node="synthesizer",
-        started=0.0,
-    )
-    assert result["published"] is True
-    assert isinstance(tool_calls[0][1]["spec"], dict)
-    assert tool_calls[0][1]["spec"]["title"] == "Resume Skills Matrix"
-
-
-@pytest.mark.asyncio
-async def test_helper_wraps_block_shaped_args_before_mcp(monkeypatch):
+async def test_helper_rejects_legacy_block_shaped_args(monkeypatch):
     tool_calls = []
 
     async def fake_llm(func, messages, **_kwargs):
@@ -518,10 +254,8 @@ async def test_helper_wraps_block_shaped_args_before_mcp(monkeypatch):
         node="deep_task_synthesizer",
         started=0.0,
     )
-    assert result["published"] is True
-    spec = tool_calls[0][1]["spec"]
-    assert spec["schema_version"] == 1
-    assert spec["sections"][0]["blocks"][0]["text"] == "A claim"
+    assert result["published"] is False
+    assert tool_calls == []
 
 
 @pytest.mark.asyncio
@@ -548,7 +282,15 @@ async def test_helper_strips_fake_call_after_admission_failure(monkeypatch):
                 )
             return SimpleNamespace(
                 content="",
-                tool_calls=[{"name": "publish_canvas", "id": "call-1", "args": {"spec": {"schema_version": 1, "title": "X", "sections": []}}}],
+                tool_calls=[{
+                    "name": "publish_canvas",
+                    "id": "call-1",
+                    "args": {
+                        "layout": "matrix",
+                        "title": "X",
+                        "claims": [{"text": "Claim", "source_ids": ["web:https://example.com/x"]}],
+                    },
+                }],
                 usage_metadata={},
             )
 
@@ -593,7 +335,15 @@ async def test_failed_publish_with_empty_content_reinvokes_unbound_for_prose(mon
         async def ainvoke(self, _messages):
             return SimpleNamespace(
                 content="",
-                tool_calls=[{"name": "publish_canvas", "id": "call-1", "args": {"spec": {"schema_version": 1, "title": "X", "sections": []}}}],
+                tool_calls=[{
+                    "name": "publish_canvas",
+                    "id": "call-1",
+                    "args": {
+                        "layout": "matrix",
+                        "title": "X",
+                        "claims": [{"text": "Claim", "source_ids": ["web:https://example.com/x"]}],
+                    },
+                }],
                 usage_metadata={},
             )
 
@@ -627,42 +377,3 @@ def test_sanitize_supersedes_id_drops_file_hash_and_garbage():
     canvas_id = "41a7cdc2-1234-5678-9abc-def012345678"
     assert sanitize_supersedes_id_for_publish(canvas_id) == canvas_id
 
-
-def test_normalize_publish_canvas_spec_unwraps_canvas_spec_v1_envelope():
-    spec = normalize_publish_canvas_spec({
-        "canvas_spec_v1": {
-            "schema_version": 1,
-            "title": "Nested",
-            "sections": [{"title": "Findings", "blocks": [{"type": "markdown", "text": "Body"}]}],
-        },
-    })
-    assert spec["title"] == "Nested"
-    assert spec["sections"][0]["blocks"][0]["text"] == "Body"
-
-
-def test_normalize_publish_canvas_spec_repairs_dag_ids_and_labels():
-    long_label = "x" * 60
-    spec = normalize_publish_canvas_spec({
-        "schema_version": 1,
-        "title": "DAG",
-        "sections": [{
-            "title": "Graph",
-            "blocks": [
-                {
-                    "type": "dag",
-                    "nodes": [{"id": "Node One", "label": long_label}],
-                    "edges": [{"from": "Node One", "to": "Node One", "relation": "supports"}],
-                },
-                {
-                    "type": "sources",
-                    "citations": [{"kind": "web", "label": "Example", "url": "https://example.com/paper"}],
-                },
-            ],
-        }],
-    })
-    dag = spec["sections"][0]["blocks"][0]
-    node_id = dag["nodes"][0]["id"]
-    assert " " not in node_id
-    assert len(dag["nodes"][0]["label"]) == 48
-    assert dag["edges"][0]["source"] == node_id
-    assert dag["edges"][0]["target"] == node_id

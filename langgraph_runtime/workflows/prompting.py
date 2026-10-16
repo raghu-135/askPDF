@@ -16,6 +16,7 @@ from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW
 from langgraph_runtime.workflows.evidence import corrective_evidence_context, corrective_evidence_packets
 from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER
 from langgraph_runtime.agent.canvas_layout_skills import canvas_layout_skills_section
+from langgraph_runtime.workflows.canvas_citation_menu import canvas_prompt_sections
 from langgraph_runtime.prompts.loaders import get_web_search_mandate, load_runtime_prompt
 from runtime_protocol.evidence import usable_context_chars
 
@@ -153,6 +154,7 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
     if use_web_search:
         web_search_mandate = "## Web Search Mandate\n\n" + get_web_search_mandate()
     layout_skills = canvas_layout_skills_section(state_or_settings.get("allowed_tool_ids"))
+    canvas_context = canvas_prompt_sections(state_or_settings) if layout_skills else ""
 
     return {
         "RUNTIME_DATETIME_CONTEXT": format_runtime_datetime_context(
@@ -163,6 +165,7 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
         "TOOL_REGISTRY_SECTION": "\n".join(registry_lines),
         "TOOL_PLAYBOOK_SECTION": "\n".join(playbook_lines),
         "CANVAS_LAYOUT_SKILLS_SECTION": layout_skills,
+        "CANVAS_PUBLISH_CONTEXT_SECTION": canvas_context,
         "WEB_SEARCH_MANDATE_SECTION": web_search_mandate,
         "USE_WEB_SEARCH": str(use_web_search),
         "CONTEXT_WINDOW": state_or_settings.get("context_window", ""),

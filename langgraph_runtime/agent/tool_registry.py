@@ -517,16 +517,12 @@ TOOL_FRIENDLY_CONFIG = {
     TOOL_NAME_PUBLISH_CANVAS: {
         "id": TOOL_RESEARCH_CANVAS_PUBLISH,
         "display_name": "Publish Canvas",
-        "description": "Publish a durable research canvas for this thread using the first-party canvas_spec_v1 document. Use after you have cited evidence; do not invent components or citations.",
+        "description": "Publish a durable research canvas draft for this thread; the server compiles it to canvas_spec_v1.",
         "default_prompt": (
             "Call publish_canvas when a structured comparison, timeline, or evidence map would help more than prose. "
-            "When layout skills are present, pick canvas_compare_papers, canvas_evidence_matrix, or canvas_timeline and reuse canvas_spec_v1 blocks only. "
-            "Pass canvas_spec_v1 with schema_version, title, sections[].blocks (not content). "
-            "DAG nodes use id and label; DAG edges use source and target (not from/to). Stats use value and label. "
-            "Pass only blocks: stat, table, callout, markdown, sources, dag, quote, timeline, claim_pair. "
-            "Table cells may use {text, tone}; dag edges may use relation; quote blocks use file_hash and sentence_id only (text is resolved server-side). "
-            "Every canvas must cite evidence via sources, timeline, claim_pair, and/or quote blocks whose document file_hash values are attached to this thread. "
-            "Do not emit unknown block types, scripts, or javascript URLs. After a successful publish, mention the canvas title in the answer."
+            "Pass layout compare|matrix|timeline, title, and claims with source_ids from the Citation menu. "
+            "Map canvas_compare_papers to compare, canvas_evidence_matrix to matrix, canvas_timeline to timeline. "
+            "After a successful publish, mention the canvas title in the answer."
         ),
         "mcp_server": "first_party_context",
         "mcp_tool": "publish_canvas",
