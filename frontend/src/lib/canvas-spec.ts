@@ -135,6 +135,8 @@ export type CanvasRef = {
 export type DocumentCanvasCitationTarget = {
   fileHash: string;
   sentenceId: number | null;
+  /** Highlight every cited catalog id (e.g. retrieval chunk members). */
+  sentenceIds?: number[];
   /** When false, open and highlight the sentence without starting TTS. */
   play?: boolean;
 };
@@ -143,9 +145,11 @@ export const documentCitationTarget = (
   citation: CanvasCitation,
 ): DocumentCanvasCitationTarget | null => {
   if (citation.kind !== 'document' || !citation.file_hash) return null;
+  const sentenceId = Number.isInteger(citation.sentence_id) ? Number(citation.sentence_id) : null;
   return {
     fileHash: citation.file_hash,
-    sentenceId: Number.isInteger(citation.sentence_id) ? Number(citation.sentence_id) : null,
+    sentenceId,
+    sentenceIds: sentenceId != null ? [sentenceId] : undefined,
   };
 };
 

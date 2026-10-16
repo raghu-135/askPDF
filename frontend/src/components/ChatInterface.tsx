@@ -119,7 +119,8 @@ import {
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
-import type { CanvasRef } from '../lib/canvas-spec';
+import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
+import type { DocumentSource } from '../lib/api';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -128,6 +129,7 @@ interface ChatMessage extends Message {
     reasoning_format?: ReasoningFormatValue;
     rewritten_query?: string;
     web_sources?: WebSource[];
+    document_sources?: DocumentSource[];
     agent_run_id?: string;
     agent_run_turn_kind?: string;
     agent_run_sequence?: number | null;
@@ -402,6 +404,7 @@ type ChatMessageItemProps = {
     onDeleteMessage: (messageId: string, event: React.MouseEvent) => void;
     onOpenAgentRun: (msg: ChatMessage) => void;
     onOpenCanvas?: (canvas: CanvasRef) => void;
+    onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
     formatAgentWorkflowLabel: (msg: ChatMessage) => string;
 };
 
@@ -425,6 +428,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
     onDeleteMessage,
     onOpenAgentRun,
     onOpenCanvas,
+    onOpenDocumentCitation,
     formatAgentWorkflowLabel,
 }: ChatMessageItemProps) {
     const theme = useTheme();
@@ -625,7 +629,32 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                     </Alert>
                 )}
                 {msg.role === MessageRole.Assistant && (
+                    <>
                     <SourceList label="Web sources used" sources={msg.web_sources || []} />
+                    <SourceList
+                        label="Document sources used"
+                        sources={(msg.document_sources || []).map((source, sourceIndex) => ({
+                            id: `document-source-${sourceIndex}`,
+                            kind: 'document',
+                            title: source.file_name || source.title || 'Document evidence',
+                            text: source.text,
+                            file_hash: source.file_hash,
+                            sentence_ids: source.sentence_ids,
+                        }))}
+                        onDocumentSourceClick={onOpenDocumentCitation ? (source) => {
+                            if (!source.file_hash) return;
+                            const sentenceIds = (source.sentence_ids || [])
+                                .map((value) => Number.parseInt(String(value), 10))
+                                .filter((value) => Number.isInteger(value));
+                            onOpenDocumentCitation({
+                                fileHash: source.file_hash,
+                                sentenceId: sentenceIds[0] ?? null,
+                                sentenceIds: sentenceIds.length ? sentenceIds : undefined,
+                                play: false,
+                            });
+                        } : undefined}
+                    />
+                    </>
                 )}
                 </>
             )}
@@ -685,6 +714,7 @@ export interface ChatInterfaceProps {
     isPanelResizing?: boolean;
     onOpenTrace?: (trace: ChatTraceDescriptor) => void;
     onOpenCanvas?: (canvas: CanvasRef) => void;
+    onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
     onOpenMemoryReview?: (draftContent?: string) => void;
     testRuntime?: BuilderTestConversationRuntime;
 }
@@ -724,6 +754,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     isPanelResizing = false,
     onOpenTrace,
     onOpenCanvas,
+    onOpenDocumentCitation,
     onOpenMemoryReview,
     testRuntime,
 }) => {
@@ -1051,6 +1082,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 isRecollected: false,
                 rewritten_query: m.role === MessageRole.User ? m.context_compact : undefined,
                 web_sources: m.role === MessageRole.Assistant ? (m.web_sources || []) : undefined,
+                document_sources: m.role === MessageRole.Assistant ? (m.document_sources || []) : undefined,
                 agent_run_id: m.agent_run_id,
                 agent_run_turn_kind: m.agent_run_turn_kind,
                 agent_run_sequence: m.agent_run_sequence,
@@ -2204,6 +2236,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             reasoning_available: !!response.reasoning_available,
                             reasoning_format: response.reasoning_format || ReasoningFormat.None,
                             web_sources: response.web_sources || [],
+                            document_sources: response.document_sources || [],
                             agent_run_id: response.agent_run_id,
                             agent_run_turn_kind: response.agent_run_turn_kind,
                             agent_run_sequence: response.agent_run_sequence,
@@ -2848,6 +2881,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                     onDeleteMessage={handleDeleteMessage}
                                     onOpenAgentRun={handleOpenAgentRun}
                                     onOpenCanvas={onOpenCanvas}
+                                    onOpenDocumentCitation={onOpenDocumentCitation}
                                     formatAgentWorkflowLabel={formatAgentWorkflowLabel}
                                 />
                             </Box>

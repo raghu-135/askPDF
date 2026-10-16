@@ -16,9 +16,9 @@ from functools import lru_cache
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-EXTRACTION_PIPELINE_VERSION = "docling-pdf-v5"
+EXTRACTION_PIPELINE_VERSION = "docling-pdf-v6"
 CANONICAL_SCHEMA_VERSION = "docling-canonical-v2"
-RETRIEVAL_CHUNKING_VERSION = "table-pack-v6"
+RETRIEVAL_CHUNKING_VERSION = "table-pack-v7"
 RETRIEVAL_SOURCE_VERSION = "document-retrieval-v3"
 READING_EXCLUDED_LABELS = frozenset({
     "page_header",
@@ -708,14 +708,13 @@ def project_sentences(
 ) -> list[dict[str, Any]]:
     """Project canonical text into stable, provenance-bearing sentences.
 
-    The default is the reading policy. Retrieval callers pass ``None`` to
-    retain every canonical text element, including captions and footnotes.
+    Every text element receives a dense catalog ``id``. ``readable`` reflects
+    ``reading_element_policy``; TTS skips non-readable rows without renumbering.
+    ``element_policy`` is retained for tests only and no longer drops elements.
     """
     splitter = sentence_splitter or _default_sentence_split
     sentences: list[dict[str, Any]] = []
     for element in payload.get("elements") or []:
-        if element_policy is not None and not element_policy(element):
-            continue
         text = str(element.get("text") or "").strip()
         if not text:
             continue
@@ -764,9 +763,13 @@ def project_sentences(
             if start >= 0:
                 search_cursor = start + len(sentence_text)
             sentence_id = len(sentences)
+            readable = reading_element_policy(element)
+            if element_policy is not None and element_policy is not reading_element_policy:
+                readable = bool(element_policy(element))
             sentences.append(
                 {
                     "id": sentence_id,
+                    "readable": readable,
                     "text": sentence_text,
                     "label": element.get("label") or element.get("element_type") or "text",
                     "element_type": element_type,

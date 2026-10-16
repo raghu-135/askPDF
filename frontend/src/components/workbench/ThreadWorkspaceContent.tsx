@@ -51,6 +51,7 @@ export default function ThreadWorkspaceContent({
   isResizing = false,
   darkMode = false,
   currentDocumentSentenceId = null,
+  highlightSentenceIds = null,
   onDocumentJump,
   autoScroll = false,
   highlightEnabled = true,
@@ -109,6 +110,7 @@ export default function ThreadWorkspaceContent({
   isResizing?: boolean;
   darkMode?: boolean;
   currentDocumentSentenceId?: number | null;
+  highlightSentenceIds?: number[] | null;
   onDocumentJump: (id: number) => void;
   autoScroll?: boolean;
   highlightEnabled?: boolean;
@@ -222,6 +224,7 @@ export default function ThreadWorkspaceContent({
           cachedSentences={cachedSentences}
           cachedDownloadUrl={cachedDownloadUrl}
           currentDocumentSentenceId={currentDocumentSentenceId}
+          highlightSentenceIds={highlightSentenceIds}
           onDocumentJump={onDocumentJump}
           autoScroll={autoScroll}
           highlightEnabled={highlightEnabled}

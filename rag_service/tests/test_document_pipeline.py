@@ -204,8 +204,8 @@ def test_table_projection_does_not_invent_headers_for_native_cells():
 def test_pipeline_versions_are_extraction_v5_and_table_pack_v6():
     from app.services.document_pipeline import EXTRACTION_PIPELINE_VERSION, RETRIEVAL_CHUNKING_VERSION
 
-    assert EXTRACTION_PIPELINE_VERSION == "docling-pdf-v5"
-    assert RETRIEVAL_CHUNKING_VERSION == "table-pack-v6"
+    assert EXTRACTION_PIPELINE_VERSION == "docling-pdf-v6"
+    assert RETRIEVAL_CHUNKING_VERSION == "table-pack-v7"
 
 
 def test_oversized_table_rows_prefix_headers_once_and_preserve_synthetic_provenance():
@@ -400,7 +400,7 @@ def test_source_ids_are_schema_safe_and_model_independent():
     assert "BAAI" not in source_id
 
 
-def test_reading_projection_excludes_furniture_and_repeated_sentences_keep_offsets():
+def test_shared_catalog_marks_non_readable_elements_without_renumbering():
     from app.services.document_pipeline import project_sentences
 
     payload = {
@@ -411,12 +411,35 @@ def test_reading_projection_excludes_furniture_and_repeated_sentences_keep_offse
         ]
     }
 
-    reading = project_sentences(payload, sentence_splitter=lambda value: ["Repeat.", "Repeat."] if value.startswith("Repeat") else [value])
-    assert [item["text"] for item in reading] == ["Repeat.", "Repeat."]
-    assert [item["source_spans"][0]["start"] for item in reading] == [0, 8]
+    catalog = project_sentences(payload, sentence_splitter=lambda value: ["Repeat.", "Repeat."] if value.startswith("Repeat") else [value])
+    assert catalog[0]["text"] == "Header"
+    assert catalog[0]["readable"] is False
+    assert catalog[1]["text"] == "Repeat."
+    assert catalog[1]["readable"] is True
+    assert catalog[1]["id"] == 1
+    assert catalog[2]["text"] == "Repeat."
+    assert [item["source_spans"][0]["start"] for item in catalog[1:3]] == [0, 8]
+    assert catalog[3]["text"] == "Caption"
+    assert catalog[3]["readable"] is False
+    chunks = pack_retrieval_chunks(catalog, token_counter=_counter(), embedding_token_limit=32)
+    packed_ids = [sentence_id for chunk in chunks for sentence_id in chunk["sentence_ids"]]
+    assert packed_ids.count("1") == 1 and packed_ids.count("2") == 1
 
-    retrieval = project_sentences(payload, sentence_splitter=lambda value: [value], element_policy=None)
-    assert [item["element_type"] for item in retrieval] == ["page_header", "text", "caption"]
+
+def test_header_before_body_keeps_body_sentence_id_in_retrieval_chunks():
+    from app.services.document_pipeline import project_sentences
+
+    payload = {
+        "elements": [
+            {"element_id": "header", "element_type": "page_header", "label": "page_header", "text": "Header", "raw": {}},
+            {"element_id": "body", "element_type": "text", "label": "text", "text": "Body.", "raw": {}},
+        ]
+    }
+    catalog = project_sentences(payload, sentence_splitter=lambda value: [value])
+    assert catalog[1]["id"] == 1
+    chunks = pack_retrieval_chunks(catalog, token_counter=_counter(), embedding_token_limit=32)
+    packed_ids = [sentence_id for chunk in chunks for sentence_id in chunk["sentence_ids"]]
+    assert "1" in packed_ids
 
 
 def test_oversized_nonfirst_sentence_translates_fragment_offsets_to_element_coordinates():
