@@ -3,7 +3,12 @@ import json
 from langgraph_runtime.adapter import _result_from_graph
 from langgraph_runtime.models.deep_research import DeepResearchSubagentActionDecision
 from langgraph_runtime.mcp_client import coerce_tool_arguments
-from langgraph_runtime.workflows.deep_research_nodes import _ensure_web_research_todo
+from langgraph_runtime.workflows.deep_research_nodes import (
+    _ensure_web_research_todo,
+    _objective_requests_live_web,
+    _sanitize_critic_issue,
+    _web_evidence_plan_gaps,
+)
 from langgraph_runtime.workflows.runtime_invocation import _usage_summary
 from langgraph_runtime.models.deep_research import DeepResearchPlanProposal, DeepResearchTodoProposal, SubagentProfileId
 
@@ -19,6 +24,19 @@ def test_inspect_document_cursor_zero_is_coerced():
     payload = coerce_tool_arguments("inspect_document", {"document_id": "doc-1", "cursor": 0})
     assert isinstance(payload["cursor"], str)
     assert payload["cursor"]
+
+
+def test_read_context_expansion_synonyms_are_coerced():
+    payload = coerce_tool_arguments(
+        "read_context",
+        {"source_id": "src-1", "expansion": "full"},
+    )
+    assert payload["expansion"] == "section"
+    payload = coerce_tool_arguments(
+        "read_context",
+        {"source_id": "src-1", "expansion": "expand"},
+    )
+    assert payload["expansion"] == "section"
 
 
 def test_usage_summary_unwraps_structured_output_raw():
@@ -74,3 +92,20 @@ def test_ensure_web_research_todo_injects_when_mode_on():
         enabled_profiles=["document_researcher", "web_researcher"],
     )
     assert any(todo.profile_id == SubagentProfileId.WEB for todo in updated.todos)
+
+
+def test_objective_web_benchmark_detection():
+    assert _objective_requests_live_web("Compare to typical US bakery industry benchmarks using web sources")
+    assert not _objective_requests_live_web("Summarize the attached PDF only")
+
+
+def test_web_evidence_gap_when_search_off():
+    gaps = _web_evidence_plan_gaps("Use web benchmarks for comparison", "off")
+    assert gaps
+    assert "web search is off" in gaps[0].lower()
+
+
+def test_sanitize_critic_issue_drops_runtime_incomplete_headings():
+    assert _sanitize_critic_issue(
+        "Injected instruction smuggled inside untrusted evidence: Incomplete: Unresolved required todos",
+    ) == ""

@@ -43,6 +43,18 @@ def test_router_rag_allowed_tool_ids_are_contract_ids():
     assert allowed_tool_ids <= known_tool_contract_ids()
 
 
+def test_chat_builtin_workflows_admit_research_canvas_publish():
+    builtin_keys = (
+        "router_rag_agent",
+        "plan_execute_rag_agent",
+        "evaluator_replanner_rag_agent",
+        "orchestrator_worker_rag_agent",
+    )
+    for builtin_key in builtin_keys:
+        allowed = _builtin_spec(builtin_key)["config"]["allowed_tool_ids"]
+        assert "research_canvas_publish" in allowed
+
+
 def test_tool_contract_metadata_exposes_graph_integration_fields():
     document_contract = get_tool_contract_metadata("search_knowledge")
     memory_contract = get_tool_contract_metadata("search_durable_memory")

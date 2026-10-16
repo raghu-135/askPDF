@@ -84,14 +84,58 @@ export function budgetUsageFromInterrupt(
   return budgetUsageFromTask(task);
 }
 
+export function reviewSummaryLines(pending: AgentRunPendingInterrupt | null | undefined): string[] {
+  if (!pending) return [];
+  const lines: string[] = [];
+  const gaps = Array.isArray(pending.gaps) ? pending.gaps.map(String) : [];
+  gaps.forEach((gap) => {
+    if (gap.trim()) lines.push(gap.trim());
+  });
+  const warnings = Array.isArray(pending.warnings) ? pending.warnings : [];
+  warnings.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    const code = String((entry as { code?: string }).code || 'warning');
+    const details = (entry as { details?: Record<string, unknown> }).details;
+    const issues = details && Array.isArray(details.issues) ? details.issues : [];
+    if (issues.length) {
+      issues.forEach((issue) => {
+        if (typeof issue === 'string') lines.push(issue);
+        else if (issue && typeof issue === 'object') {
+          const message = String(
+            (issue as { message?: string }).message
+            || (issue as { summary?: string }).summary
+            || code,
+          );
+          lines.push(message);
+        }
+      });
+    } else {
+      lines.push(code.replaceAll('_', ' '));
+    }
+  });
+  return lines;
+}
+
 export function countReviewIssues(
   pending: AgentRunPendingInterrupt | null | undefined,
-): { warningCount: number; gapCount: number; total: number } {
+): { warningCount: number; gapCount: number; limitationCount: number; total: number } {
+  const lines = reviewSummaryLines(pending);
+  const gaps = Array.isArray(pending?.gaps) ? pending!.gaps.map(String).filter((gap) => gap.trim()) : [];
   const warnings = Array.isArray(pending?.warnings) ? pending!.warnings : [];
-  const gaps = Array.isArray(pending?.gaps) ? pending!.gaps.map(String) : [];
-  const warningCount = warnings.length;
-  const gapCount = gaps.filter((gap) => gap.trim()).length;
-  return { warningCount, gapCount, total: warningCount + gapCount };
+  return {
+    warningCount: warnings.length,
+    gapCount: gaps.length,
+    limitationCount: lines.length,
+    total: lines.length,
+  };
+}
+
+export function formatBudgetDimensionChip(
+  dimension: string,
+  used: number,
+  limit: number,
+): string {
+  return `${researchBudgetDimensionLabel(dimension)} ${used}/${limit}`;
 }
 
 export function formatBudgetMeterLine(snapshot: BudgetUsageSnapshot): string {

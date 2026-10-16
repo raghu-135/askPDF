@@ -55,6 +55,7 @@ def normalize_product_event_kind(kind: str, *, source_metadata: Mapping[str, Any
         "task.pausing": "runtime.event",
         "task.awaiting_approval": "run.paused",
         "task.cancelling": "run.cancel_requested",
+        "task.cancel_rolled_back": "runtime.event",
         "task.recovery_required": "runtime.event",
         "task.start_requested": "run.queued",
         "task.retry_requested": "run.queued",

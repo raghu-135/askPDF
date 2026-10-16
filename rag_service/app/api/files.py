@@ -218,6 +218,25 @@ async def _document_processing_payload(file_hash: str, embedding_model: str) -> 
     }
 
 
+def _validate_browser_capture_url(capture_url: str) -> None:
+    if capture_url.casefold().startswith("about:"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "browser_capture_blank_page",
+                "message": "Browser capture cannot index a blank or internal about: page. Open a web page first.",
+            },
+        )
+    if not capture_url.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "browser_capture_invalid_url",
+                "message": "Browser capture did not return a capturable http(s) page. Open a web page before capturing.",
+            },
+        )
+
+
 async def _capture_current_page() -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
         response = await client.post(f"{CAPTURE_SERVICE_URL}/capture", timeout=60.0)
@@ -778,11 +797,7 @@ async def capture_browser_page_endpoint(
         
         capture = await _capture_current_page()
         capture_url = str(capture.get("url") or "").strip()
-        if not capture_url.startswith(("http://", "https://")):
-            raise HTTPException(
-                status_code=400,
-                detail="Browser capture did not return a capturable http(s) page. Open a web page before capturing.",
-            )
+        _validate_browser_capture_url(capture_url)
 
         # Queue for processing (similar to web sources)
         await queue_file_processing(
@@ -1069,6 +1084,7 @@ async def capture_project_browser_page_endpoint(project_id: str, background_task
     try:
         project = await _require_ready_project(project_id)
         capture = await _capture_current_page()
+        _validate_browser_capture_url(str(capture.get("url") or "").strip())
         await queue_project_file_processing(
             background_tasks,
             project,

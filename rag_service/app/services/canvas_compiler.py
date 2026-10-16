@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.agent.evidence_contract import (
     RECORD_IDENTIFIER_PATTERN,
@@ -53,8 +53,14 @@ async def _first_sentence_for_chunk(file_hash: str, locator: str) -> int | None:
                 select(DocumentChunk)
                 .where(
                     DocumentChunk.file_hash == file_hash,
-                    (DocumentChunk.chunk_id == locator) | (DocumentChunk.source_id == locator),
+                    or_(
+                        DocumentChunk.chunk_id == locator,
+                        DocumentChunk.source_id == locator,
+                        DocumentChunk.section_id == locator,
+                        DocumentChunk.table_id == locator,
+                    ),
                 )
+                .order_by(DocumentChunk.chunk_order)
                 .limit(1)
             )
             row = result.scalar_one_or_none()
@@ -81,6 +87,45 @@ async def _sentence_exists(file_hash: str, sentence_id: int) -> bool:
         except (TypeError, ValueError):
             continue
     return False
+
+
+async def _canonicalize_draft_source_id(
+    source_id: str,
+    *,
+    thread_file_hashes: set[str],
+) -> str:
+    normalized = normalized_canonical_source_id(source_id)
+    if normalized:
+        return normalized
+    raw = str(source_id or "").strip()
+    if not raw:
+        return ""
+    async with async_session_maker() as session:
+        async with session.begin():
+            if raw.startswith("src_"):
+                row = (
+                    await session.execute(
+                        select(DocumentChunk)
+                        .where(DocumentChunk.source_id == raw)
+                        .order_by(DocumentChunk.chunk_order)
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if row is not None and row.file_hash in thread_file_hashes:
+                    return f"doc:{row.file_hash}:{row.source_id}"
+            row = (
+                await session.execute(
+                    select(DocumentChunk)
+                    .where(
+                        or_(DocumentChunk.section_id == raw, DocumentChunk.table_id == raw),
+                    )
+                    .order_by(DocumentChunk.chunk_order)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if row is not None and row.file_hash in thread_file_hashes:
+                return f"doc:{row.file_hash}:{row.source_id}"
+    return ""
 
 
 async def _citation_for_document_locator(
@@ -158,7 +203,8 @@ async def _resolve_source_id(
     if src_resolved is not None:
         return src_resolved
 
-    normalized = normalized_canonical_source_id(source_id)
+    canonical = await _canonicalize_draft_source_id(source_id, thread_file_hashes=thread_file_hashes)
+    normalized = canonical or normalized_canonical_source_id(source_id)
     if not normalized:
         raise CanvasCompileError("invalid_source_id", f"source_id is not valid: {source_id}")
 

@@ -152,6 +152,20 @@ class _ReadContextArguments(BaseModel):
     token_budget: int = Field(default=2000, ge=1, le=8000)
     cursor: str | None = None
 
+    @field_validator("expansion", mode="before")
+    @classmethod
+    def _coerce_expansion(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        key = value.strip().lower()
+        aliases = {
+            "expand": "section",
+            "expanded": "section",
+            "full": "section",
+            "tables": "table",
+        }
+        return aliases.get(key, value)
+
 
 class _TimelineArguments(_QueryArguments):
     sources: str = "all"

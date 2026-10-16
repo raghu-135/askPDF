@@ -25,6 +25,8 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   decision?: React.ReactNode;
   composer: React.ReactNode;
   footer?: React.ReactNode;
+  transcriptSx?: SxProps<Theme>;
+  decisionSx?: SxProps<Theme>;
   sx?: SxProps<Theme>;
 }>(function ConversationPanelTemplate({
   header,
@@ -33,6 +35,8 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   decision,
   composer,
   footer,
+  transcriptSx,
+  decisionSx,
   sx,
 }, ref) {
   return (
@@ -51,8 +55,8 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
     >
       {header}
       {status}
-      {transcript}
-      {decision}
+      <Box sx={{ flexShrink: 0, minHeight: 0, ...transcriptSx }}>{transcript}</Box>
+      {decision ? <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', ...decisionSx }}>{decision}</Box> : null}
       {composer}
       {footer}
     </Paper>

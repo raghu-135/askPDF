@@ -471,19 +471,29 @@ def create_app(*, execution_store: ExecutionStore | None = None, require_auth: b
 
     @app.exception_handler(DependencyUnavailable)
     async def dependency_unavailable_handler(request: Request, exc: DependencyUnavailable) -> JSONResponse:
+        details = dict(exc.details)
+        missing = details.get("missing_capability_ids") or []
+        safe_message = str(exc)
+        error_code = "runtime_dependency_unavailable"
+        if details.get("dependency") == "provider" and missing:
+            error_code = "runtime_model_unknown"
+            safe_message = (
+                "The selected chat model is not available from the configured provider: "
+                + ", ".join(str(item) for item in missing)
+            )
         return JSONResponse(
             json_envelope(
                 status="failed",
                 request_id=request.headers.get("x-request-id"),
                 error={
-                    "code": "runtime_dependency_unavailable",
-                    "safe_message": str(exc),
-                    "retryable": True,
-                    "details": exc.details,
+                    "code": error_code,
+                    "safe_message": safe_message,
+                    "retryable": error_code == "runtime_dependency_unavailable",
+                    "details": details,
                 },
                 runtime_metadata={"framework": "langgraph", "builder_id": "langgraph_graph"},
             ),
-            status_code=503,
+            status_code=503 if error_code == "runtime_dependency_unavailable" else 409,
         )
 
     @app.exception_handler(HTTPException)

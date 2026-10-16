@@ -101,6 +101,29 @@ async def test_compile_resolves_chunk_locator_to_sentence_quote():
 
 
 @pytest.mark.asyncio
+async def test_compile_accepts_src_prefixed_source_id():
+    file_hash = "b" * 32
+    source_id = "src_chunk_alpha"
+    draft = CanvasPublishDraft.model_validate({
+        "layout": "matrix",
+        "title": "Src id",
+        "claims": [{"text": "Claim", "source_ids": [source_id]}],
+    })
+    with (
+        patch(
+            "app.services.canvas_compiler._canonicalize_draft_source_id",
+            new=AsyncMock(return_value=f"doc:{file_hash}:{source_id}"),
+        ),
+        patch(
+            "app.services.canvas_compiler._first_sentence_for_chunk",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        spec = await compile_canvas_draft(draft, thread_file_hashes={file_hash})
+    assert spec.title == "Src id"
+
+
+@pytest.mark.asyncio
 async def test_compile_resolves_src_alias_to_document_citation():
     file_hash = "a" * 32
     src_id = "src_abc123def4567890abcdef1234567890"

@@ -11,14 +11,14 @@
         "thread_shape",
         "wikipedia_reference",
         "document_search_knowledge",
-        "research_canvas_publish",
         "document_inspection",
         "document_context",
         "thread_conversation_history",
         "durable_memory",
         "thread_events",
         "live_web_recon",
-        "clarify_intent"
+        "clarify_intent",
+        "research_canvas_publish"
       ],
       "context_policy": {
         "evidence_compression": "compact",
@@ -103,9 +103,6 @@
         "enabled": true,
         "max_concurrency": 4,
         "max_work_items": 8,
-        "dispatch_timeout_ms": 60000,
-        "default_worker_timeout_ms": 30000,
-        "web_worker_timeout_ms": 45000,
         "max_attempts": 2,
         "minimum_successes": 1,
         "continue_on_partial_failure": true

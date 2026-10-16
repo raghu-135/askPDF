@@ -47,6 +47,7 @@ UNIT_TEST_FILES = [
     "test_canvas_spec_pytest.py",
     "test_canvas_service_pytest.py",
     "test_deep_research_controls_pytest.py",
+    "test_budget_env_resolution_pytest.py",
     "test_context_budget_pytest.py",
     "test_content_store_pytest.py",
     "test_external_research_tools.py",
@@ -73,6 +74,7 @@ UNIT_TEST_FILES = [
     "test_runtime_contracts_neutral_pytest.py",
     "test_provider_clients.py",
     "test_first_party_tool_contracts.py",
+    "test_llm_reranker_cancellation_pytest.py",
     "test_llm_server_client_pytest.py",
     "test_runtime_model_errors_pytest.py",
     "test_search_skips_failed_files_pytest.py",
@@ -100,7 +102,8 @@ HERMES_TEST_FILES = [
     "test_hermes_grounding_policy_pytest.py",
     "test_hermes_mcp_execution_context_pytest.py",
     "test_hermes_profile_manager_pytest.py",
-    "test_hermes_runtime_adapter_pytest.py"
+    "test_hermes_runtime_adapter_pytest.py",
+    "test_hermes_thread_linkage_pytest.py",
 ]
 
 MCP_TEST_FILES = [
@@ -184,6 +187,20 @@ def _approved_test_exclusions() -> dict[str, str]:
     return excluded
 
 
+def _suggest_test_group(filename: str) -> str:
+    if filename.startswith("test_hermes_"):
+        return "hermes"
+    if "_api_" in filename:
+        return "api"
+    if "_mcp_" in filename:
+        return "mcp"
+    if "integration" in filename:
+        return "integration"
+    if "schema" in filename or "migration" in filename:
+        return "schema"
+    return "unit"
+
+
 def _declared_control_plane_test_names() -> set[str]:
     return {
         name
@@ -221,6 +238,12 @@ def _validate_test_inventory() -> None:
             details.append("assigned and excluded: " + ", ".join(overlap))
         if missing:
             details.append("unassigned: " + ", ".join(missing))
+            suggestions = {name: _suggest_test_group(name) for name in missing}
+            print(
+                "Suggested test groups (add to rag_service/scripts/run_tests.py lists): "
+                + ", ".join(f"{name} -> {group}" for name, group in sorted(suggestions.items())),
+                flush=True,
+            )
         raise SystemExit("Test inventory is incomplete; " + "; ".join(details))
 
 

@@ -509,6 +509,7 @@ async def rerank_document_chunks(
     chunks: List[Dict[str, Any]],
     model_name: Optional[str] = None,
     top_k: Optional[int] = None,
+    cancellation_checker: Any = None,
 ) -> List[Dict[str, Any]]:
     if not chunks:
         return chunks
@@ -518,7 +519,7 @@ async def rerank_document_chunks(
         return chunks
 
     passages = [c.get("text", "") for c in chunks]
-    scores = await reranker.ascore(query, passages)
+    scores = await reranker.ascore(query, passages, cancellation_checker=cancellation_checker)
     for chunk, score in zip(chunks, scores):
         chunk["rerank_score"] = float(score)
 
