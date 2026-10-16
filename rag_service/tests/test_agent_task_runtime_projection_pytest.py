@@ -23,6 +23,7 @@ from app.services.agent_task_budgets import initial_budget_state
 from app.services.agent_task_runtime_projection import (
     RuntimeTaskProjectionConflict,
     _merge_budget,
+    _result_review_body,
     apply_neutral_task_completion,
     apply_runtime_task_delta,
 )
@@ -808,3 +809,12 @@ def test_timeline_run_error_falls_back_to_debug_diagnostics():
     error = timeline_run_error(run)
     assert error["code"] == "hermes_upstream_error"
     assert "OpenRouter" in error["safe_message"]
+
+
+def test_result_review_body_mentions_budget_and_issues():
+    budget = initial_budget_state({"max_model_calls": 3, "max_model_tokens": 1000, "max_tool_calls": 10, "max_active_runtime_ms": 60000})
+    budget["tranche_usage"]["model_calls"] = 3
+    body = _result_review_body(budget, [{"code": "evidence_critic_issues"}], ["gap"])
+    assert "Research budget for model calls" in body
+    assert "more budget" in body
+    assert "1 unverified claim" in _result_review_body({}, [{"code": "x"}], [])

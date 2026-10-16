@@ -47,7 +47,26 @@ logger = logging.getLogger(__name__)
 class DependencyUnavailable(Exception):
     def __init__(self, details: Mapping[str, Any]) -> None:
         self.details = dict(details)
-        super().__init__("A dependency required by this agent is unavailable")
+        dependency = str(details.get("dependency") or "runtime")
+        reason = str(details.get("reason") or "unavailable")
+        missing = details.get("missing_capability_ids") or []
+        if reason == "stale":
+            message = (
+                f"The runtime dependency monitor marked {dependency} as stale because health checks stopped updating. "
+                "This does not necessarily mean the service is down. Retry the run, or ask an administrator to "
+                "review AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS and dependency probe logs."
+            )
+        elif missing:
+            message = (
+                f"Dependency {dependency} is missing required capabilities: {', '.join(str(item) for item in missing)}. "
+                "Retry after MCP or provider registration is restored."
+            )
+        else:
+            message = (
+                f"Dependency {dependency} is unavailable ({reason}). "
+                "Retry after the dependency recovers or check runtime dependency configuration."
+            )
+        super().__init__(message)
 
 
 def _definition_http_error(exc: Exception) -> HTTPException:

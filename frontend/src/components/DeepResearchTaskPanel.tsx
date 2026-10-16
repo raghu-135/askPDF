@@ -2,13 +2,14 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Box, Button, Chip,
   Divider, IconButton, LinearProgress, ListItemIcon, ListItemText,
-  Menu, MenuItem, Stack, TextField, Tooltip, Typography,
+  Menu, MenuItem, Stack, TextField, Tooltip, Typography, useMediaQuery, useTheme,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteIcon from '@mui/icons-material/Delete';
 import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import BugReportIcon from '@mui/icons-material/BugReport';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { packingBudgetPayload, type ContextBudgetRatios } from '../lib/context-budget';
 import {
@@ -71,6 +72,16 @@ import {
   ResizableDecisionPanel,
   SourceList,
 } from './conversation';
+import {
+  DeepResearchBudgetSummary,
+  DeepResearchDecisionLead,
+  DeepResearchDecisionStickyFooter,
+  DeepResearchGuidanceField,
+  DeepResearchIssueList,
+  DeepResearchProvisionalAnswer,
+} from './conversation/DeepResearchDecisionContent';
+import { budgetUsageFromTask, countReviewIssues, formatBudgetMeterLine, RESEARCH_BUDGET_TOOLTIP } from '../lib/deep-research-decision-ui';
+import { formatAgentTaskStatus, formatTimelineItemStatus } from '../lib/deep-research-task-status';
 import { WorkbenchSelect } from './workbench/WorkbenchToolbar';
 
 export function DeepResearchTaskPicker({
@@ -104,7 +115,7 @@ export function DeepResearchTaskPicker({
   };
 
   return <>
-    <Tooltip title="Deep Research">
+    <Tooltip title="Deep Research tasks (long-running objectives separate from thread agent chat)">
       <IconButton
         size="small"
         color="inherit"
@@ -181,7 +192,7 @@ function TimelineBubble({
     content={item.primary_content}
     active={active}
     wide={!isObjective}
-    badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${item.status}`} sx={{ mb: 1 }} color={['todo_failure', 'run_failure'].includes(item.type) ? 'error' : item.type === 'final_report' ? 'success' : 'default'} />}
+    badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${formatTimelineItemStatus(item.status)}`} sx={{ mb: 1 }} color={['todo_failure', 'run_failure'].includes(item.type) ? 'error' : item.type === 'final_report' ? 'success' : 'default'} />}
     actions={<ConversationMessageActions copied={copied} readActive={active} onCopy={onCopy} onReadAloud={onReadAloud}>
       {onSaveToMemory && ['todo_result', 'final_report'].includes(item.type) && <Button size="small" onClick={() => onSaveToMemory(item.primary_content)}>Save to memory</Button>}
       {item.type === 'final_report' && onAddToChat && (
@@ -526,6 +537,9 @@ export default function DeepResearchTaskPanel({
 
   const command = async (action: 'start' | 'pause' | 'resume' | 'cancel' | 'retry') => {
     if (!task) return;
+    if (action === 'cancel' && !window.confirm('Stop this Deep Research task? In-progress work on the current attempt will be cancelled.')) {
+      return;
+    }
     setBusy(true); setError('');
     try { setTask(await commandAgentTask(task.id, threadId, action, task.version)); await refresh(); }
     catch (value) { setError(value instanceof Error ? value.message : String(value)); await refresh(); }
@@ -536,7 +550,7 @@ export default function DeepResearchTaskPanel({
     if (!selectedRun || !onOpenTrace) return;
     const run = selectedRun;
     const taskId = task?.id;
-    const running = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(run.status);
+    const running = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required', 'awaiting_human'].includes(run.status);
     const descriptor = {
       id: run.id,
       threadId,
@@ -547,7 +561,7 @@ export default function DeepResearchTaskPanel({
     };
     onOpenTrace(descriptor);
     const details = await getAgentRun(run.id, threadId);
-    const detailsRunning = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(details.status);
+    const detailsRunning = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required', 'awaiting_human'].includes(details.status);
     onOpenTrace({
       ...descriptor,
       status: details.status,
@@ -596,6 +610,9 @@ export default function DeepResearchTaskPanel({
     ...control,
     availability: runtimeOperationAvailability(activeTaskCapabilities, control.operation),
   })).filter((control) => control.availability.visible), [activeTaskCapabilities]);
+  const theme = useTheme();
+  const compactLifecycle = useMediaQuery(theme.breakpoints.down('md'));
+  const [lifecycleMenuAnchor, setLifecycleMenuAnchor] = useState<HTMLElement | null>(null);
   const frozen = Boolean(selectedRun);
   const displayedContextWindow = frozen
     ? Number(task?.configuration?.context_window || contextWindow)
@@ -622,6 +639,8 @@ export default function DeepResearchTaskPanel({
   const webSearchField = definitionFields.find((field) => field.id === 'web_search_mode');
   const requestedWebUnavailable = webSearchMode !== 'off' && webSearchField?.enabled === false;
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
+  const liveBudgetSnapshot = useMemo(() => budgetUsageFromTask(task), [task]);
+  const reviewIssueCounts = useMemo(() => countReviewIssues(pendingInterrupt), [pendingInterrupt]);
   const isTaskPauseInterrupt = pendingInterrupt?.type === 'task_pause' || pendingInterrupt?.node_id === 'task_pause_gate';
   const approvalTodoIds = Array.isArray(pendingInterrupt?.approval_scope?.todo_ids)
     ? pendingInterrupt.approval_scope.todo_ids.map(String)
@@ -742,6 +761,17 @@ export default function DeepResearchTaskPanel({
       {task?.status === 'recovery_required' && <Alert severity="warning" sx={{ mb: 1 }}>
         Runtime execution finished, but its product-state update could not be applied safely. Retry the task or ask an administrator to reconcile this run.
       </Alert>}
+      {frozen && task && <Alert severity="info" sx={{ mb: 1 }} icon={false}>
+        Model, agent, and context window are locked for this task. Start a new Deep Research task to change them.
+      </Alert>}
+      {liveBudgetSnapshot && task && !pendingInterrupt && <Box sx={{ mb: 1 }}>
+        <Chip
+          size="small"
+          variant="outlined"
+          title={RESEARCH_BUDGET_TOOLTIP}
+          label={`Research tranche ${liveBudgetSnapshot.trancheIndex} · ${formatBudgetMeterLine(liveBudgetSnapshot)}`}
+        />
+      </Box>}
     </>}
     transcript={<ConversationTranscriptFrame>{items.map((item) => <TimelineBubble
       key={item.id}
@@ -770,32 +800,70 @@ export default function DeepResearchTaskPanel({
       variant="approval"
       rootRef={panelRef}
       horizontalInset={1}
+      footer={<DeepResearchDecisionStickyFooter>
+        <DeepResearchGuidanceField
+          label="Optional guidance for the next tranche"
+          helperText="Continue and steer start another research tranche and use more budget."
+          value={reviewGuidance}
+          onChange={setReviewGuidance}
+        />
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+          <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !pendingInterrupt.provisional_answer || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('accept_partial')}>Finish with partial answer</Button>
+          <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !budgetReviewAvailability.enabled} title="Uses another research tranche" onClick={() => void respondToBudgetReview('continue')}>Continue research (more budget)</Button>
+          <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !budgetReviewAvailability.enabled} title="Uses another research tranche" onClick={() => void respondToBudgetReview('steer')}>Steer and continue (more budget)</Button>
+        </Box>
+        {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
+      </DeepResearchDecisionStickyFooter>}
     >
-      <Typography variant="body2">{pendingInterrupt.prompt || 'Review the provisional answer or grant another research tranche.'}</Typography>
-      {pendingInterrupt.provisional_answer
-        ? <ConversationMarkdown content={String(pendingInterrupt.provisional_answer)} />
-        : <Alert severity="warning">No usable provisional answer was produced. Continue or steer the research.</Alert>}
-      <TextField fullWidth multiline minRows={2} maxRows={6} label="Optional guidance for the next tranche" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} />
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-        <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !pendingInterrupt.provisional_answer || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('accept_partial')}>Accept partial answer</Button>
-        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('continue')}>Continue research</Button>
-        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('steer')}>Steer and continue</Button>
-      </Box>
-      {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
+      <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
+      <DeepResearchDecisionLead pending={pendingInterrupt} task={task} isBudgetReview />
+      <DeepResearchIssueList pending={pendingInterrupt} />
+      <DeepResearchProvisionalAnswer
+        content={pendingInterrupt.provisional_answer}
+        emptyMessage="No usable provisional answer was produced. Continue or steer the research."
+      />
     </ResizableDecisionPanel> : pendingInterrupt && isResultReview ? <ResizableDecisionPanel
       title={pendingInterrupt.title || 'Review incomplete result'}
       variant="approval"
       rootRef={panelRef}
       horizontalInset={1}
+      footer={<DeepResearchDecisionStickyFooter>
+        <DeepResearchGuidanceField
+          label="Guidance for the next research tranche"
+          helperText="Continuing with guidance spends more research budget and may start a linked attempt."
+          value={reviewGuidance}
+          onChange={setReviewGuidance}
+          required
+        />
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+          <Button
+            size="small"
+            variant="contained"
+            disabled={Boolean(decisionSubmitting) || !resultReviewAvailability.enabled}
+            title={resultReviewAvailability.disabledReason}
+            onClick={() => void respondToResultReview('accept')}
+          >
+            {reviewIssueCounts.total > 0
+              ? `Finish with this result (${reviewIssueCounts.warningCount} unverified)`
+              : 'Finish with this result'}
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !resultReviewAvailability.enabled}
+            title={resultReviewAvailability.disabledReason}
+            onClick={() => void respondToResultReview('retry_with_input')}
+          >
+            Continue with guidance (more budget)
+          </Button>
+        </Box>
+        {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
+      </DeepResearchDecisionStickyFooter>}
     >
-      <Typography variant="body2">{pendingInterrupt.body || 'The agent returned usable output with warnings or unresolved gaps.'}</Typography>
-      {pendingInterrupt.provisional_answer ? <ConversationMarkdown content={String(pendingInterrupt.provisional_answer)} /> : null}
-      <TextField fullWidth multiline minRows={2} maxRows={6} label="Guidance for retry" value={reviewGuidance} onChange={(event) => setReviewGuidance(event.target.value)} />
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-        <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('accept')}>Accept with warnings</Button>
-        <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !resultReviewAvailability.enabled} title={resultReviewAvailability.disabledReason} onClick={() => void respondToResultReview('retry_with_input')}>Retry with input</Button>
-      </Box>
-      {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
+      <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
+      <DeepResearchDecisionLead pending={pendingInterrupt} task={task} isBudgetReview={false} />
+      <DeepResearchIssueList pending={pendingInterrupt} />
+      {pendingInterrupt.provisional_answer ? <DeepResearchProvisionalAnswer content={pendingInterrupt.provisional_answer} /> : null}
     </ResizableDecisionPanel> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
       interrupt={pendingInterrupt}
       submitting={decisionSubmitting}
@@ -809,22 +877,45 @@ export default function DeepResearchTaskPanel({
     composer={<Box sx={{ pb: 1 }}>
       {task && <Box sx={{ borderTop: 1, borderColor: 'divider', py: 0.75, px: 1, mb: 1 }}>
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
-          <Chip size="small" label={task.status.replaceAll('_', ' ')} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : task.status === 'recovery_required' ? 'warning' : 'primary'} />
+          <Chip size="small" label={formatAgentTaskStatus(task.status)} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : task.status === 'recovery_required' ? 'warning' : 'primary'} />
           <Typography variant="caption">Attempt {selectedRun?.attempt || 0} of {runs.length}</Typography>
-          <IconButton size="small" disabled={runIndex <= 0} onClick={() => setRunIndex((value) => value - 1)}><NavigateBeforeIcon fontSize="small" /></IconButton>
-          <IconButton size="small" disabled={runIndex < 0 || runIndex >= runs.length - 1} onClick={() => setRunIndex((value) => value + 1)}><NavigateNextIcon fontSize="small" /></IconButton>
+          <IconButton size="small" aria-label="Previous attempt" disabled={runIndex <= 0} onClick={() => setRunIndex((value) => value - 1)}><NavigateBeforeIcon fontSize="small" /></IconButton>
+          <IconButton size="small" aria-label="Next attempt" disabled={runIndex < 0 || runIndex >= runs.length - 1} onClick={() => setRunIndex((value) => value + 1)}><NavigateNextIcon fontSize="small" /></IconButton>
           <Box sx={{ flex: 1 }} />
-          {taskControls.map(({ action, label, availability }) => {
-            return <Button
-              key={action}
+          {compactLifecycle ? <>
+            <Button
               size="small"
-              color={action === 'cancel' ? 'error' : 'primary'}
-              disabled={busy || !availability.enabled}
-              title={availability.disabledReason}
-              onClick={() => void command(action)}
-            >{label}</Button>;
-          })}
-          <Button size="small" startIcon={<BugReportIcon />} disabled={!selectedRun || !onOpenTrace} onClick={() => void openTrace()}>Debug Trace</Button>
+              startIcon={<MoreVertIcon />}
+              onClick={(event) => setLifecycleMenuAnchor(event.currentTarget)}
+            >
+              Actions
+            </Button>
+            <Menu anchorEl={lifecycleMenuAnchor} open={Boolean(lifecycleMenuAnchor)} onClose={() => setLifecycleMenuAnchor(null)}>
+              {taskControls.map(({ action, label, availability }) => (
+                <MenuItem
+                  key={action}
+                  disabled={busy || !availability.enabled}
+                  title={availability.disabledReason}
+                  onClick={() => { setLifecycleMenuAnchor(null); void command(action); }}
+                >
+                  {label}
+                </MenuItem>
+              ))}
+              <MenuItem disabled={!selectedRun || !onOpenTrace} onClick={() => { setLifecycleMenuAnchor(null); void openTrace(); }}>Debug Trace</MenuItem>
+            </Menu>
+          </> : <>
+            {taskControls.map(({ action, label, availability }) => (
+              <Button
+                key={action}
+                size="small"
+                color={action === 'cancel' ? 'error' : 'primary'}
+                disabled={busy || !availability.enabled}
+                title={availability.disabledReason}
+                onClick={() => void command(action)}
+              >{label}</Button>
+            ))}
+            <Button size="small" startIcon={<BugReportIcon />} disabled={!selectedRun || !onOpenTrace} onClick={() => void openTrace()}>Debug Trace</Button>
+          </>}
         </Stack>
         <LinearProgress variant="determinate" value={task.progress} sx={{ mt: 0.75 }} />
       </Box>}
@@ -901,7 +992,23 @@ export default function DeepResearchTaskPanel({
       </> : (
         <Box sx={{ px: 2, py: 1 }}>
           <Typography variant="body2" color="text.secondary">
-            {task.status === 'running' || task.status === 'queued' ? 'Research is running. You can pause or cancel it above.' : task.status === 'awaiting_approval' ? 'Review the approval request above to continue.' : task.status === 'paused' ? 'Research is paused. Resume or cancel it above.' : task.status === 'recovery_required' ? 'Runtime execution stopped at a product-state recovery boundary. Retry or cancel the task above.' : task.status === 'completed' ? 'This run is complete. Select New Deep Research task for a follow-up objective.' : 'Use the available lifecycle action above.'}
+            {task.status === 'cancelled'
+              ? 'This task was cancelled. Start a new Deep Research task for a new objective.'
+              : task.status === 'running' || task.status === 'queued'
+                ? (taskControls.some((control) => control.action === 'pause' && control.availability.enabled)
+                  ? 'Research is running. Use Actions above to pause or cancel.'
+                  : 'Research is running. Use Actions above to cancel if needed.')
+                : task.status === 'awaiting_approval'
+                  ? 'Review the request above to continue or finish.'
+                  : task.status === 'paused'
+                    ? 'Research is paused. Resume or cancel from Actions above.'
+                    : task.status === 'recovery_required'
+                      ? 'Runtime execution stopped at a recovery boundary. Retry or cancel from Actions above.'
+                      : task.status === 'completed'
+                        ? 'This run is complete. Select New Deep Research task for a follow-up objective.'
+                        : taskControls.length
+                          ? 'Use Actions above for the next step.'
+                          : 'No further actions are available for this task.'}
           </Typography>
         </Box>
       )}
