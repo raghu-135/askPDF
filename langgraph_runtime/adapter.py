@@ -44,6 +44,13 @@ def _public_value(value: Any) -> Any:
     return value
 
 
+def _normalize_task_todo_change(todo: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(todo)
+    if str(payload.get("status") or "") == "completed_with_warnings":
+        payload["status"] = "completed"
+    return _public_value(payload)
+
+
 def _is_private_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
     if normalized == "checkpoint_resume":
@@ -234,7 +241,11 @@ def _result_from_graph(
         ]
         changes = {
             "plan_changes": [value.to_dict() for value in plan_changes],
-            "todo_changes": [_public_value(dict(value)) for value in result.get("task_todos") or [] if isinstance(value, Mapping)],
+            "todo_changes": [
+                _normalize_task_todo_change(value)
+                for value in result.get("task_todos") or []
+                if isinstance(value, Mapping)
+            ],
             "subagent_changes": [_public_value(dict(value)) for value in result.get("task_result_packets") or [] if isinstance(value, Mapping)],
             "budget_usage": _public_value(dict(result.get("task_budget_usage") or {})),
             "artifacts": [_public_value(dict(value)) for value in result.get("runtime_artifacts") or [] if isinstance(value, Mapping)],

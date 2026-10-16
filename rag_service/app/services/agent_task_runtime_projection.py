@@ -836,6 +836,8 @@ async def apply_runtime_task_delta(
                 if todo is None:
                     raise RuntimeTaskProjectionConflict(f"runtime delta references unknown todo {todo_id!r}")
                 status = str(change.get("status") or todo.status)
+                if status == "completed_with_warnings":
+                    status = "completed"
                 if status not in allowed_statuses:
                     raise RuntimeTaskProjectionConflict(f"runtime delta contains invalid todo status {status!r}")
                 if todo.status == "completed" and status != "completed":

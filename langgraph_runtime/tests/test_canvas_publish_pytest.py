@@ -10,6 +10,7 @@ from langgraph_runtime.mcp_client import _PublishCanvasArguments, create_mcp_lan
 from langgraph_runtime.workflows.canvas_publish import (
     CanvasSpecNormalizeError,
     normalize_publish_canvas_spec,
+    sanitize_supersedes_id_for_publish,
     strip_prose_publish_canvas,
     synthesize_with_canvas_publish,
 )
@@ -526,3 +527,51 @@ async def test_helper_strips_fake_call_after_admission_failure(monkeypatch):
     assert "publish_canvas" not in result["answer"]
     assert "Fallback." in result["answer"]
     assert "could not be published" in result["answer"]
+
+
+def test_sanitize_supersedes_id_drops_file_hash_and_garbage():
+    file_hash = "3deaaae75be4cddfd0b34d7568ae5635"
+    assert sanitize_supersedes_id_for_publish(file_hash) is None
+    assert sanitize_supersedes_id_for_publish("Resume Skills Matrix") is None
+    canvas_id = "41a7cdc2-1234-5678-9abc-def012345678"
+    assert sanitize_supersedes_id_for_publish(canvas_id) == canvas_id
+
+
+def test_normalize_publish_canvas_spec_unwraps_canvas_spec_v1_envelope():
+    spec = normalize_publish_canvas_spec({
+        "canvas_spec_v1": {
+            "schema_version": 1,
+            "title": "Nested",
+            "sections": [{"title": "Findings", "blocks": [{"type": "markdown", "text": "Body"}]}],
+        },
+    })
+    assert spec["title"] == "Nested"
+    assert spec["sections"][0]["blocks"][0]["text"] == "Body"
+
+
+def test_normalize_publish_canvas_spec_repairs_dag_ids_and_labels():
+    long_label = "x" * 60
+    spec = normalize_publish_canvas_spec({
+        "schema_version": 1,
+        "title": "DAG",
+        "sections": [{
+            "title": "Graph",
+            "blocks": [
+                {
+                    "type": "dag",
+                    "nodes": [{"id": "Node One", "label": long_label}],
+                    "edges": [{"from": "Node One", "to": "Node One", "relation": "supports"}],
+                },
+                {
+                    "type": "sources",
+                    "citations": [{"kind": "web", "label": "Example", "url": "https://example.com/paper"}],
+                },
+            ],
+        }],
+    })
+    dag = spec["sections"][0]["blocks"][0]
+    node_id = dag["nodes"][0]["id"]
+    assert " " not in node_id
+    assert len(dag["nodes"][0]["label"]) == 48
+    assert dag["edges"][0]["source"] == node_id
+    assert dag["edges"][0]["target"] == node_id

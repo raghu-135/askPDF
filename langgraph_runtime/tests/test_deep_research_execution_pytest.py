@@ -239,7 +239,7 @@ async def test_scheduler_persists_claimed_attempt_and_stops_at_max_attempts():
         "retryable": True, "summary": "final failure",
     }])
     assert services.state["task_todos"][0]["status"] == "failed"
-    assert services.state["task_todos"][0]["result_summary"] == "max_attempts_exhausted"
+    assert services.state["task_todos"][0]["result_summary"] == "final failure"
     assert await services.schedule_ready("task-1", limit=1) == []
 
 

@@ -17,7 +17,7 @@ from app.models.canvas import (
     admit_canvas_spec,
     parse_canvas_spec,
 )
-from app.services.canvas_service import CanvasService, CanvasValidationError
+from app.services.canvas_service import CanvasService, CanvasValidationError, resolve_publish_supersedes_id
 from app.tools.context import ToolInvocationContext
 
 
@@ -69,12 +69,30 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
             code=f"publish_canvas_{exc.code}",
             user_message=str(exc),
         )
+    service = CanvasService()
+    supersedes_warnings: list[str] = []
+    resolved_supersedes_id = request.supersedes_id
     try:
-        created = await CanvasService().create(
+        resolved_supersedes_id, supersedes_warnings = await resolve_publish_supersedes_id(
+            service._canvases,
+            context.thread_id,
+            request.supersedes_id,
+        )
+    except CanvasValidationError as exc:
+        return make_tool_error_result(
+            tool_name="publish_canvas",
+            error=exc,
+            context=context,
+            started=started,
+            code="publish_canvas_persist_failed",
+            user_message=str(exc),
+        )
+    try:
+        created = await service.create(
             context.thread_id,
             CanvasCreateRequest(
                 spec=spec,
-                supersedes_id=request.supersedes_id,
+                supersedes_id=resolved_supersedes_id,
                 idempotency_key=_idempotency_key(spec, request.idempotency_key),
             ),
             agent_run_id=context.run_id,
@@ -95,4 +113,5 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
         context=context,
         started=started,
         artifacts={"canvas": created},
+        warnings=supersedes_warnings,
     )

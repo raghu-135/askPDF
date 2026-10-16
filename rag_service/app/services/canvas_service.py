@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from typing import Any, Optional
 
@@ -34,6 +35,43 @@ class CanvasNotFoundError(LookupError):
 
 class CanvasValidationError(ValueError):
     pass
+
+
+_CANVAS_ARTIFACT_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_FILE_HASH_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
+
+
+def is_canvas_artifact_id(value: str) -> bool:
+    return bool(_CANVAS_ARTIFACT_ID_RE.fullmatch(str(value or "").strip()))
+
+
+async def resolve_publish_supersedes_id(
+    canvases: CanvasRepository,
+    thread_id: str,
+    supersedes_id: str | None,
+) -> tuple[str | None, list[str]]:
+    """Drop mistaken supersedes_id values; keep strict checks for cross-thread canvas ids."""
+
+    warnings: list[str] = []
+    raw = str(supersedes_id or "").strip()
+    if not raw:
+        return None, warnings
+    if _FILE_HASH_RE.fullmatch(raw):
+        warnings.append("supersedes_id_ignored_file_hash")
+        return None, warnings
+    if not is_canvas_artifact_id(raw):
+        warnings.append("supersedes_id_ignored_invalid_format")
+        return None, warnings
+    previous = await canvases.get(raw)
+    if previous is None:
+        warnings.append("supersedes_id_ignored_not_on_thread")
+        return None, warnings
+    if previous.thread_id != thread_id:
+        raise CanvasValidationError("supersedes_id must belong to this thread")
+    return raw, warnings
 
 
 def _canvas_title(artifact: AgentTaskArtifact, spec: dict[str, Any] | None = None) -> str:

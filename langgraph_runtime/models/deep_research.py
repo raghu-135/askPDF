@@ -238,6 +238,13 @@ class DeepResearchPlanProposal(BaseModel):
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+class DeepResearchSubagentActionDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["tool", "finish"]
+    tool: Optional[str] = Field(default=None, max_length=128)
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
 class DeepResearchSubagentResult(BaseModel):
     status: Literal["completed", "failed", "timed_out", "cancelled"]
     summary: str = Field(default="", max_length=12_000)

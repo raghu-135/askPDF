@@ -7,7 +7,12 @@ from langgraph_runtime.prompts.loaders import (
     runtime_prompt_path,
     validate_runtime_prompt_assets,
 )
-from langgraph_runtime.workflows.deep_research_nodes import DEEP_RESEARCH_POLICY, _deep_system
+from langgraph_runtime.graph import documents_from_thread_shape_payload
+from langgraph_runtime.workflows.deep_research_nodes import (
+    DEEP_RESEARCH_POLICY,
+    _attached_documents_for_subagent,
+    _deep_system,
+)
 from langgraph_runtime.workflows.prompting import (
     build_agent_workflow_prompt_preview,
     build_evaluator_prompt,
@@ -133,3 +138,21 @@ def test_all_runtime_prompt_builders_resolve_runtime_owned_assets():
     final_messages = build_final_answer_messages(state, "Evidence context")
     assert final_messages["system"]
     assert final_messages["human"]
+
+
+def test_thread_shape_documents_populate_subagent_attachment():
+    file_hash = "3deaaae75be4cddfd0b34d7568ae5635"
+    shape_payload = {
+        "artifacts": {
+            "thread_shape": {
+                "documents": {
+                    file_hash: {"file_name": "resume.pdf", "chunk_count": 12},
+                }
+            }
+        }
+    }
+    documents = documents_from_thread_shape_payload(shape_payload)
+    assert documents[0]["file_hash"] == file_hash
+    attached = _attached_documents_for_subagent({"pre_fetch_bundle": {"documents": documents}})
+    assert attached[0]["document_id"] == file_hash
+    assert attached[0]["file_name"] == "resume.pdf"

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, Dict, List, Literal, Mapping
 
 from langchain_core.messages import ToolMessage
@@ -22,6 +24,7 @@ from langgraph_runtime.workflows.runtime_invocation import (
     append_tool_event_for_node,
     invoke_llm_for_node,
     invoke_tool_for_node,
+    llm_result_metadata,
     llm_retry_observer,
     tool_config_for_node,
 )
@@ -61,8 +64,27 @@ _SPEC_COACHING = (
     "Do not use from/to on dag edges, content instead of sections[].blocks, or title on dag nodes (use label). "
     "Every canvas needs a sources block: {\"type\": \"sources\", \"citations\": [{\"kind\": \"document\", \"label\": \"...\", \"file_hash\": \"...\"}]} "
     "or at least one quote block. Blocks must use type (not markdown/stat/sources wrapper keys). "
-    "Include citations in sources, timeline events, claim_pair sides, or quote blocks."
+    "Include citations in sources, timeline events, claim_pair sides, or quote blocks. "
+    "Omit supersedes_id unless superseding a canvas id returned by a prior successful publish_canvas on this thread; "
+    "never use file_hash or document titles as supersedes_id."
 )
+
+_CANVAS_ARTIFACT_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_FILE_HASH_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
+
+
+def sanitize_supersedes_id_for_publish(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if _FILE_HASH_RE.fullmatch(raw):
+        return None
+    if not _CANVAS_ARTIFACT_ID_RE.fullmatch(raw):
+        return None
+    return raw
 
 
 class CanvasSpecNormalizeError(ValueError):
@@ -71,6 +93,89 @@ class CanvasSpecNormalizeError(ValueError):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+_DAG_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_MAX_DAG_LABEL_CHARS = 48
+
+
+def _slug_dag_node_id(raw_id: str, *, used: dict[str, str]) -> str:
+    original = str(raw_id or "").strip()
+    if original in used:
+        return used[original]
+    candidate = re.sub(r"[^A-Za-z0-9._-]+", "_", original).strip("._-")
+    if not candidate or not candidate[0].isalnum():
+        candidate = f"n_{candidate}" if candidate else "node"
+    candidate = candidate[:64]
+    if not _DAG_ID_PATTERN.fullmatch(candidate):
+        candidate = f"n_{hashlib.sha256(original.encode()).hexdigest()[:8]}"
+    base = candidate
+    suffix = 1
+    while candidate in used.values():
+        suffix += 1
+        candidate = f"{base[: max(1, 60 - len(str(suffix)))]}_{suffix}"
+    used[original] = candidate
+    return candidate
+
+
+def _unwrap_canvas_spec_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    envelope = dict(body)
+    nested = _parse_json_object(envelope.get("canvas_spec_v1"))
+    if isinstance(nested, Mapping):
+        return dict(nested)
+    return envelope
+
+
+def _repair_dag_block(block: dict[str, Any]) -> None:
+    nodes = block.get("nodes")
+    if not isinstance(nodes, list):
+        return
+    id_map: dict[str, str] = {}
+    repaired_nodes: list[Any] = []
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            repaired_nodes.append(node)
+            continue
+        node_dict = dict(node)
+        raw_id = str(node_dict.get("id") or node_dict.get("label") or f"node_{len(repaired_nodes) + 1}")
+        node_dict["id"] = _slug_dag_node_id(raw_id, used=id_map)
+        label = node_dict.get("label")
+        if not isinstance(label, str) or not label.strip():
+            for key in ("title", "name"):
+                candidate = node_dict.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    label = candidate.strip()
+                    break
+            if not isinstance(label, str) or not label.strip():
+                label = raw_id
+        node_dict["label"] = str(label).strip()[:_MAX_DAG_LABEL_CHARS]
+        repaired_nodes.append(node_dict)
+    block["nodes"] = repaired_nodes
+    edges = block.get("edges")
+    if not isinstance(edges, list):
+        return
+    repaired_edges: list[Any] = []
+    for edge in edges:
+        if not isinstance(edge, Mapping):
+            repaired_edges.append(edge)
+            continue
+        edge_dict = dict(edge)
+        if not edge_dict.get("source") and edge_dict.get("from") is not None:
+            edge_dict["source"] = edge_dict.pop("from")
+        else:
+            edge_dict.pop("from", None)
+        if not edge_dict.get("target") and edge_dict.get("to") is not None:
+            edge_dict["target"] = edge_dict.pop("to")
+        else:
+            edge_dict.pop("to", None)
+        source = str(edge_dict.get("source") or "")
+        target = str(edge_dict.get("target") or "")
+        if source in id_map:
+            edge_dict["source"] = id_map[source]
+        if target in id_map:
+            edge_dict["target"] = id_map[target]
+        repaired_edges.append(edge_dict)
+    block["edges"] = repaired_edges
 
 
 def strip_prose_publish_canvas(text: str) -> str:
@@ -237,40 +342,7 @@ def _coerce_block(value: Any) -> Any | None:
     if block_type == "markdown" and "text" not in block and block.get("content"):
         block["text"] = str(block.pop("content"))
     if block_type == "dag":
-        nodes = block.get("nodes")
-        if isinstance(nodes, list):
-            repaired_nodes: list[Any] = []
-            for node in nodes:
-                if isinstance(node, Mapping):
-                    node_dict = dict(node)
-                    if not node_dict.get("label"):
-                        for key in ("title", "name"):
-                            candidate = node_dict.get(key)
-                            if isinstance(candidate, str) and candidate.strip():
-                                node_dict["label"] = candidate.strip()[:48]
-                                break
-                    repaired_nodes.append(node_dict)
-                else:
-                    repaired_nodes.append(node)
-            block["nodes"] = repaired_nodes
-        edges = block.get("edges")
-        if isinstance(edges, list):
-            repaired_edges: list[Any] = []
-            for edge in edges:
-                if isinstance(edge, Mapping):
-                    edge_dict = dict(edge)
-                    if not edge_dict.get("source") and edge_dict.get("from") is not None:
-                        edge_dict["source"] = edge_dict.pop("from")
-                    else:
-                        edge_dict.pop("from", None)
-                    if not edge_dict.get("target") and edge_dict.get("to") is not None:
-                        edge_dict["target"] = edge_dict.pop("to")
-                    else:
-                        edge_dict.pop("to", None)
-                    repaired_edges.append(edge_dict)
-                else:
-                    repaired_edges.append(edge)
-            block["edges"] = repaired_edges
+        _repair_dag_block(block)
     allowed = _BLOCK_FIELDS.get(block_type)
     if allowed is None:
         return block
@@ -429,7 +501,7 @@ def normalize_publish_canvas_spec(args: Any) -> Any:
         return envelope
     if not isinstance(spec, Mapping):
         return spec
-    body = dict(spec)
+    body = _unwrap_canvas_spec_body(spec)
     if isinstance(body.get("sections"), list):
         return _sanitize_canvas_spec_envelope(body, payload=payload)
     lifted = _blocks_from_payload(body)
@@ -484,6 +556,7 @@ async def synthesize_with_canvas_publish(
     node: str,
     started: float,
     failure_data: Dict[str, Any] | None = None,
+    consume_usage: Callable[..., Awaitable[Any] | Any] | None = None,
 ) -> Dict[str, Any]:
     """Invoke the answer LLM, optionally binding publish_canvas for one persist."""
 
@@ -493,12 +566,21 @@ async def synthesize_with_canvas_publish(
     published = False
     failed_attempts = 0
     publish_calls = 0
+    model_calls = 0
+    model_tokens = 0
     last_publish_error: str | None = None
     last_response: Any = None
     bound = llm.bind_tools([create_mcp_langchain_tool(_PUBLISH_TOOL)]) if emit_enabled else llm
 
-    for _round in range(_MAX_ROUNDS):
-        model = llm if (published or not emit_enabled) else bound
+    async def _meter(**usage: int) -> None:
+        if consume_usage is None:
+            return
+        result = consume_usage(**usage)
+        if hasattr(result, "__await__"):
+            await result
+
+    async def _invoke_model(model: Any) -> Any:
+        nonlocal last_response, model_calls, model_tokens
         last_response = await invoke_llm_for_node(
             model.ainvoke,
             conversation,
@@ -511,6 +593,17 @@ async def synthesize_with_canvas_publish(
             model_name=state.get("llm_model"),
             failure_data=failure_data,
         )
+        model_calls += 1
+        metadata = llm_result_metadata(last_response, model_name=state.get("llm_model"), retry_attempts=retry_attempts)
+        token_counts = metadata.get("token_counts") if isinstance(metadata.get("token_counts"), dict) else {}
+        tokens = int(token_counts.get("total") or 0)
+        model_tokens += tokens
+        await _meter(model_calls=1, model_tokens=tokens)
+        return last_response
+
+    for _round in range(_MAX_ROUNDS):
+        model = llm if (published or not emit_enabled) else bound
+        await _invoke_model(model)
         calls = _tool_calls(last_response) if emit_enabled else []
         if not calls or published:
             break
@@ -522,6 +615,7 @@ async def synthesize_with_canvas_publish(
                 continue
             args = _tool_call_args(call)
             publish_calls += 1
+            await _meter(tool_calls=1)
             tool_started = time.perf_counter()
             tool_runtime = tool_config_for_node(
                 state, config, caller_node=node, tool_name=_PUBLISH_TOOL, started=tool_started
@@ -561,8 +655,9 @@ async def synthesize_with_canvas_publish(
             key = canvas_idempotency_key(state)
             if key:
                 tool_input["idempotency_key"] = key
-            if args.get("supersedes_id"):
-                tool_input["supersedes_id"] = str(args.get("supersedes_id"))
+            sanitized_supersedes = sanitize_supersedes_id_for_publish(args.get("supersedes_id"))
+            if sanitized_supersedes:
+                tool_input["supersedes_id"] = sanitized_supersedes
             try:
                 raw = await invoke_tool_for_node(
                     _PUBLISH_TOOL,
@@ -605,6 +700,10 @@ async def synthesize_with_canvas_publish(
 
     normalized = normalize_ai_response(last_response)
     answer = strip_prose_publish_canvas(normalized["answer"])
+    if emit_enabled and publish_calls > 0 and not published and not str(answer or "").strip():
+        await _invoke_model(llm)
+        normalized = normalize_ai_response(last_response)
+        answer = strip_prose_publish_canvas(normalized["answer"])
     if emit_enabled and publish_calls > 0 and not published:
         notice = "The research canvas could not be published for this answer."
         if last_publish_error:
@@ -618,4 +717,7 @@ async def synthesize_with_canvas_publish(
         "reasoning_available": normalized["reasoning_available"],
         "reasoning_format": normalized["reasoning_format"],
         "retry_attempts": retry_attempts,
+        "model_calls": model_calls,
+        "model_tokens": model_tokens,
+        "publish_tool_calls": publish_calls,
     }

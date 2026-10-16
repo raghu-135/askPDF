@@ -207,6 +207,14 @@ def _arguments(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
+def coerce_tool_arguments(tool_name: str, raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize MCP tool arguments against the first-party schema."""
+
+    model = _ARGUMENT_MODELS.get(tool_name, _OpenArguments)
+    validated = model.model_validate(dict(raw))
+    return validated.model_dump(mode="json", exclude_none=True)
+
+
 async def _call_transport(name: str, arguments: dict[str, Any], config: RunnableConfig | None) -> str:
     url = os.getenv("MCP_LOOPBACK_URL", "").strip()
     if not url:

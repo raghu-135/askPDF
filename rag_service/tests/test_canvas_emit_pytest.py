@@ -84,6 +84,25 @@ async def test_publish_canvas_rejects_missing_citations(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_publish_canvas_ignores_file_hash_supersedes_id(monkeypatch):
+    monkeypatch.setattr(
+        "app.tools.publish_canvas.get_thread_files",
+        AsyncMock(return_value=[SimpleNamespace(file_hash="file-a")]),
+    )
+    create = AsyncMock(return_value={"id": "canvas-1", "title": "Skills"})
+    monkeypatch.setattr("app.tools.publish_canvas.CanvasService.create", create)
+    file_hash = "3deaaae75be4cddfd0b34d7568ae5635"
+    result = await invoke_publish_canvas(
+        PublishCanvasRequest.model_validate({"spec": valid_spec(), "supersedes_id": file_hash}),
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1"),
+    )
+    assert result.ok is True
+    assert "supersedes_id_ignored_file_hash" in (result.warnings or [])
+    create.assert_awaited_once()
+    assert create.await_args[0][1].supersedes_id is None
+
+
+@pytest.mark.asyncio
 async def test_publish_canvas_persists_admitted_spec(monkeypatch):
     monkeypatch.setattr(
         "app.tools.publish_canvas.get_thread_files",

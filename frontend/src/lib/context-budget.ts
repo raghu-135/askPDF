@@ -41,7 +41,14 @@ export function normalizeStoredContextBudget(raw: unknown): ContextBudgetRatios 
   for (const key of PACKING_RATIO_KEYS) {
     if (!isOpenUnitRatio(candidate[key])) return null;
   }
-  const ratios = contextBudgetFromDefaults(candidate as ContextBudgetDefaults);
+  const ratios: ContextBudgetRatios = {
+    usable_ratio: candidate.usable_ratio as number,
+    recent_ratio: candidate.recent_ratio as number,
+    semantic_ratio: candidate.semantic_ratio as number,
+    durable_memory_ratio: candidate.durable_memory_ratio as number,
+    document_ratio: candidate.document_ratio as number,
+    memory_expanded_ratio: candidate.memory_expanded_ratio as number,
+  };
   if (prefetchSliceSum(ratios) > 1) return null;
   return ratios;
 }

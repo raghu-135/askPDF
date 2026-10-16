@@ -1258,8 +1258,22 @@ async def run_task_worker(
                 # tokens. Its runtime-owned safe boundary creates budget review;
                 # a product wall-clock timer must not cancel that continuation.
                 await execute_claimed_task(task.id, worker_id)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Task runner failed before task execution could be contained | task_id=%s", task.id)
+                terminal_error = {
+                    "code": "deep_research_runner_failed",
+                    "type": type(exc).__name__,
+                    "raw_message": str(exc)[:1000],
+                    "retryable": True,
+                }
+                with suppress(Exception):
+                    active_run = await tasks.get_task_run(task.id)
+                    if active_run is not None:
+                        await AgentWorkflowRepository().complete_run(
+                            active_run.id,
+                            status=AgentRunStatus.FAILED.value,
+                            error_json=terminal_error,
+                        )
                 with suppress(Exception):
                     await tasks.complete_task(
                         task.id,

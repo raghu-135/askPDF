@@ -187,6 +187,37 @@ def web_prefetch_allowed(state: Mapping[str, Any]) -> bool:
     return mode == "on"
 
 
+def documents_from_thread_shape_payload(shape_payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    artifacts = shape_payload.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        return []
+    thread_shape = artifacts.get("thread_shape")
+    if not isinstance(thread_shape, Mapping):
+        return []
+    docs_map = thread_shape.get("documents")
+    if not isinstance(docs_map, Mapping):
+        return []
+    documents: list[dict[str, Any]] = []
+    for index, (file_hash, meta) in enumerate(docs_map.items(), start=1):
+        if not isinstance(meta, Mapping):
+            continue
+        documents.append({
+            "index": index,
+            "file_name": str(meta.get("file_name") or file_hash),
+            "file_hash": str(file_hash),
+            "source_type": meta.get("source_type"),
+            "document_available_in_thread_at": meta.get("document_available_in_thread_at"),
+            "chunk_count": meta.get("chunk_count"),
+            "total_chars": meta.get("total_chars"),
+            "word_count": meta.get("word_count"),
+            "page_count": meta.get("page_count"),
+            "sentence_count": meta.get("sentence_count"),
+            "languages": meta.get("languages"),
+            "filetype": meta.get("filetype"),
+        })
+    return documents
+
+
 async def _emit_corrective_event(config: RunnableConfig, event: str, data: Dict[str, Any]) -> None:
     sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
     studio_queue = ((config or {}).get("configurable") or {}).get("studio_event_queue")
@@ -519,6 +550,11 @@ class NodeRegistry:
                 web = {}
                 if web_prefetch_allowed(state):
                     web = await retrieve(ToolName.SEARCH_WEB.value, {"query": question})
+                from langgraph_runtime.workflows.deep_research_execution import RuntimeBudgetMeter
+
+                meter = (config.get("configurable") or {}).get("runtime_budget_meter")
+                if isinstance(meter, RuntimeBudgetMeter):
+                    await meter.consume(tool_calls=3 + (1 if web else 0))
                 bundle = {
                     "recent_history_text": "",
                     "semantic_history_text": conversation.get("content", ""),
@@ -558,11 +594,11 @@ class NodeRegistry:
 
             tool_events = list(state.get("tool_events") or [])
             allowed_tool_ids = state.get("allowed_tool_ids")
-            thread_shape_enabled = (
+            fetch_thread_shape = bool(state.get("runtime_execution_mode")) or (
                 isinstance(allowed_tool_ids, list)
                 and get_tool_contract_id(ToolName.GET_THREAD_SHAPE.value) in allowed_tool_ids
             )
-            if thread_shape_enabled:
+            if fetch_thread_shape:
                 shape_started = time.perf_counter()
                 shape_config = _tool_config_for_node(
                     state,
@@ -585,12 +621,21 @@ class NodeRegistry:
                     config=shape_config,
                 )
                 bundle["thread_shape_text"] = shape_payload.get("content", "")
+                shape_documents = documents_from_thread_shape_payload(shape_payload)
+                if shape_documents:
+                    bundle["documents"] = shape_documents
                 tool_events = _append_tool_event(
                     state,
                     shape_payload,
                     tool_input={},
                     config=shape_config,
                 )
+                if state.get("runtime_execution_mode"):
+                    from langgraph_runtime.workflows.deep_research_execution import RuntimeBudgetMeter
+
+                    meter = (config.get("configurable") or {}).get("runtime_budget_meter")
+                    if isinstance(meter, RuntimeBudgetMeter):
+                        await meter.consume(tool_calls=1)
         except GraphBubbleUp:
             raise
         except Exception as exc:

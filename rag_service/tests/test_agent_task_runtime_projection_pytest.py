@@ -314,6 +314,27 @@ async def test_projection_applies_multiple_boundaries_and_exact_replay(
 
 
 @pytest.mark.asyncio
+async def test_projection_normalizes_completed_with_warnings_todo_status(
+    test_session_maker, sample_thread,
+):
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    delta = _delta(
+        run_id=run.id,
+        operation_id="warnings-todo",
+        event_id=f"{run.id}:attempt:1:operation:warnings-todo:result",
+        task_version=task.version,
+        plan_revision=0,
+        plan=_plan("evidence-a"),
+        todos=({"id": "evidence-a", "status": "completed_with_warnings", "progress": 100},),
+        budget_calls=1,
+        interrupt={"operation": "clear"},
+    )
+    await apply_runtime_task_delta(task_id=task.id, agent_run_id=run.id, delta=delta)
+    todos = await repository.list_todos(task.id)
+    assert todos[0].status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_projection_rejects_conflicting_identity_without_partial_state(
     test_session_maker, sample_thread,
 ):

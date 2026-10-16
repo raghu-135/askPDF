@@ -317,8 +317,15 @@ class RuntimeBudgetMeter:
 
 
 class RuntimeExecutionServices(DeepResearchExecutionServices):
-    _SUCCESS_STATUSES = {"completed", "skipped"}
+    _SUCCESS_STATUSES = {"completed", "skipped", "completed_with_warnings"}
     _FAILED_STATUSES = {"failed", "blocked", "cancelled", "timed_out"}
+
+    @staticmethod
+    def _normalize_todo_status(status: str | None) -> str:
+        value = str(status or "").strip() or "failed"
+        if value == "completed_with_warnings":
+            return "completed"
+        return value
 
     def _task_todos_state(self) -> list[dict[str, Any]]:
         if not isinstance(self.state, MutableMapping):
@@ -576,17 +583,20 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
                     "A result packet has an invalid execution identity.",
                     details={"todo_id": todo_id},
                 )
-            if packet.get("status") == "completed":
+            packet_status = self._normalize_todo_status(packet.get("status"))
+            if packet_status == "completed":
                 todo["status"] = "completed"
             elif bool(packet.get("retryable")) and expected_attempt < int(todo.get("max_attempts") or 2):
                 todo["status"] = "ready"
             else:
-                todo["status"] = packet.get("status") or "failed"
+                todo["status"] = self._normalize_todo_status(packet.get("status") or "failed")
                 if bool(packet.get("retryable")):
                     todo["status"] = "failed"
-                    todo["result_summary"] = "max_attempts_exhausted"
-            if todo.get("result_summary") != "max_attempts_exhausted":
-                todo["result_summary"] = str(packet.get("summary") or "")[:4000]
+            packet_summary = str(packet.get("summary") or "").strip()
+            if packet_summary:
+                todo["result_summary"] = packet_summary[:4000]
+            elif todo.get("status") == "failed" and bool(packet.get("retryable")):
+                todo["result_summary"] = "max_attempts_exhausted"
             todo["artifact_ids"] = list(dict.fromkeys([*(todo.get("artifact_ids") or []), *(packet.get("artifact_ids") or [])]))
             todo["progress"] = 100 if todo["status"] == "completed" else todo.get("progress", 0)
         self._write_task_todos(todos)

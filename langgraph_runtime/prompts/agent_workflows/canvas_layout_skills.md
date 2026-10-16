@@ -4,6 +4,8 @@ These skills apply only when `publish_canvas` is available. They are prompt reci
 
 After a successful publish, mention the canvas title in the answer. If evidence is too thin for the chosen layout, say so instead of fabricating rows.
 
+Do not set `supersedes_id` unless you are explicitly updating an existing research canvas and you have that canvas's id from a prior successful `publish_canvas` result on this thread. Default to a new publish without `supersedes_id`. Never use `file_hash`, document names, or invented ids as `supersedes_id`.
+
 ## canvas_compare_papers
 
 Use when the user wants to compare, contrast, or overlap two or more papers, PDFs, or named documents.

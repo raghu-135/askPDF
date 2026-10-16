@@ -1838,6 +1838,7 @@ async def mark_runtime_projection_recovery_required(
                 agent_run_id=run_id,
                 payload={
                     "code": error.get("code"),
+                    "message": str(error.get("message") or "")[:2000] or None,
                     "retryable": bool(error.get("retryable")),
                     "delta_event_id": projection_value.get("delta_event_id"),
                     "operation_id": projection_value.get("operation_id"),
