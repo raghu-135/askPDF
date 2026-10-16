@@ -132,7 +132,7 @@ export function ContextBudgetMenu({
           disabled={disabled}
           onChange={(event) => onContextWindowChange(Number.parseInt(event.target.value, 10) || 0)}
           slotProps={{
-            htmlInput: { min: 1, step: 1 },
+            htmlInput: { min: 256, step: 1 },
             input: {
               endAdornment: (
                 <ContextBudgetHelpTip text={CONTEXT_SIZE_HELP} ariaLabel="Ctx size help" />

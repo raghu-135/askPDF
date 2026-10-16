@@ -79,6 +79,9 @@ def test_run_profile_renders_exact_context_and_header(monkeypatch, tmp_path: Pat
     assert "base_url: \"http://provider.test/v1\"" in config
     assert "api_server:\n    enabled: false" in config
     assert "title_generation:\n    enabled: false" in config
+    assert "free_only: true" in config
+    assert "tool_search:\n    enabled: off" in config
+    assert "disabled_toolsets:" in config
     assert "X-AskPDF-Execution-Context" in config
     assert f"  {profile.mcp_server_name}:" in config
     assert f'name: "{profile.name}"' in config

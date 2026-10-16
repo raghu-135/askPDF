@@ -28,6 +28,11 @@ TOKEN_HEADER = "X-AskPDF-Execution-Context"
 TOMBSTONE_FILE = ".askpdf-retired.json"
 
 
+def mcp_server_name_for_run(run_id: str) -> str:
+    suffix = hashlib.sha256(run_id.encode()).hexdigest()[:20]
+    return "askpdf_" + suffix
+
+
 @dataclass(frozen=True)
 class RunProfile:
     name: str
@@ -202,7 +207,7 @@ class RunProfileManager:
         # Pinned Hermes keeps MCP connections in a process-global registry keyed
         # only by server name. A stable `askpdf` key would reuse another run's
         # connection and its headers, so every run requires its own namespace.
-        mcp_server_name = "askpdf_" + suffix
+        mcp_server_name = mcp_server_name_for_run(run_id)
         tools = json.dumps(sorted(set(allowed_tools)))
         activation_material = {
             "managed_profile": policy,
@@ -230,8 +235,17 @@ class RunProfileManager:
             "  api_server:\n"
             "    enabled: false\n"
             "auxiliary:\n"
+            "  free_only: true\n"
             "  title_generation:\n"
             "    enabled: false\n"
+            "tools:\n"
+            "  tool_search:\n"
+            "    enabled: off\n"
+            "agent:\n"
+            "  disabled_toolsets:\n"
+            "    - terminal\n"
+            "    - skills\n"
+            "    - file\n"
             "mcp_servers:\n"
             f"  {mcp_server_name}:\n"
             f"    url: {mcp_url}\n"

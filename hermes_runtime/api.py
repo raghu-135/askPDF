@@ -33,6 +33,7 @@ from runtime_protocol.hermes_contract import HERMES_APPROVAL_CHOICES, HERMES_REV
 from hermes_runtime.profile_manager import (
     RunProfile,
     RunProfileManager,
+    mcp_server_name_for_run,
     configured_mcp_url,
     configured_context_length,
 )
@@ -74,9 +75,10 @@ def _runtime_usage_snapshot(
     usage["measured_dimensions"] = measured
     return RuntimeUsageSnapshot.from_mapping(usage, operation_id=operation_id).to_dict()
 
-_DOCUMENT_TOOL_DISCOVERY_DIRECTIVE = """Hermes bridge requirement for this document task:
+def _document_tool_discovery_directive(mcp_server_name: str) -> str:
+    return f"""Hermes bridge requirement for this document task:
 - AskPDF document tools are already exposed directly in the model-facing MCP tool list.
-- Call the exact namespaced AskPDF document-retrieval tool directly with schema-valid arguments (for example, `askpdf_<server>__search_knowledge`, `askpdf_<server>__inspect_document`, or `askpdf_<server>__read_context`).
+- Call the exact Hermes MCP tool names with schema-valid arguments (for example, `mcp__{mcp_server_name}__search_knowledge`, `mcp__{mcp_server_name}__inspect_document`, or `mcp__{mcp_server_name}__read_context`).
 - Do not route an already-listed AskPDF tool through `tool_search`, `tool_describe`, or `tool_call`; those APIs are only for genuinely deferred tools.
 - Only a successful document-retrieval tool result is evidence. Tool-discovery failures do not mean the documents contain no evidence."""
 
@@ -123,11 +125,11 @@ def _upstream_timeout() -> httpx.Timeout:
     )
 
 
-def _task_input_with_context(question: str, task_context: Mapping[str, Any]) -> str:
+def _task_input_with_context(question: str, task_context: Mapping[str, Any], *, run_id: str) -> str:
     sections = [question.strip()]
     documents = task_context.get("documents")
     if isinstance(documents, list) and documents:
-        sections.append(_DOCUMENT_TOOL_DISCOVERY_DIRECTIVE)
+        sections.append(_document_tool_discovery_directive(mcp_server_name_for_run(run_id)))
     corrections = [
         value for value in task_context.get("active_corrections") or []
         if isinstance(value, Mapping)
@@ -858,7 +860,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
         }
         context_token = str(input_data.get("mcp_execution_context_token") or "").strip()
         if isinstance(task_context, Mapping):
-            question = _task_input_with_context(question, task_context)
+            question = _task_input_with_context(question, task_context, run_id=run_id)
         active_corrections = [
             dict(value) for value in (task_context or {}).get("active_corrections") or []
             if isinstance(value, Mapping)

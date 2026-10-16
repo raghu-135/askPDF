@@ -859,20 +859,30 @@ async def _handle_compiled_rag_chat(
             )
         parallel_unauthorized = str(exc) == "parallel runtime is not authorized for this workflow"
         classified = classify_model_error_message(str(exc))
-        error_payload = {
-            "code": (
-                "workflow_budget_exhausted"
-                if budget_exhausted
-                else "agent_workflow_parallel_unauthorized"
-                if parallel_unauthorized
-                else str(classified.get("code") or failure_code)
-            ),
-            "raw_message": str(exc),
-            "retryable": False if budget_exhausted or parallel_unauthorized else bool(classified.get("retryable", False)),
-            "partial": budget_exhausted,
-        }
-        if classified.get("http_status_code") is not None:
-            error_payload["http_status_code"] = classified["http_status_code"]
+        if budget_exhausted:
+            error_payload = {
+                "code": "workflow_budget_exhausted",
+                "safe_message": "The workflow exceeded its visit budget.",
+                "retryable": False,
+                "partial": True,
+            }
+        elif parallel_unauthorized:
+            error_payload = {
+                "code": "agent_workflow_parallel_unauthorized",
+                "safe_message": "Parallel runtime is not authorized for this workflow.",
+                "retryable": False,
+                "partial": False,
+            }
+        else:
+            from runtime_protocol.model_errors import user_facing_model_error
+
+            error_payload = {
+                **user_facing_model_error(str(exc), classified),
+                "partial": False,
+            }
+            if not error_payload.get("code"):
+                error_payload["code"] = str(classified.get("code") or failure_code)
+        error_payload.setdefault("raw_message", error_payload.get("safe_message"))
         if budget_exhausted:
             error_payload["workflow_budget"] = exc.as_dict()
         node_events = merge_parallel_deltas(

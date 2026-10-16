@@ -39,7 +39,7 @@ Never fabricate citations.
 
 {CANVAS_LAYOUT_SKILLS_SECTION}
 
-When the canvas layout skills section is present, call the `publish_canvas` tool with a `canvas_spec_v1` spec. Do not write a `publish_canvas(...)` call in the answer.
+When the canvas layout skills section is present, call the `publish_canvas` tool with a `canvas_spec_v1` spec only when the user request clearly matches one of those layout skills (for example comparison, timeline, or evidence matrix). For straightforward factual questions that prose can answer, respond in prose without publishing a canvas. Do not write a `publish_canvas(...)` call in the answer.
 
 ### Documents
 

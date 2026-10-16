@@ -244,6 +244,12 @@ class DeepResearchSubagentActionDecision(BaseModel):
     tool: Optional[str] = Field(default=None, max_length=128)
     arguments: Dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _require_tool_when_action_is_tool(self) -> "DeepResearchSubagentActionDecision":
+        if self.action == "tool" and not str(self.tool or "").strip():
+            raise ValueError("tool is required when action is tool")
+        return self
+
 
 class DeepResearchSubagentResult(BaseModel):
     status: Literal["completed", "failed", "timed_out", "cancelled"]

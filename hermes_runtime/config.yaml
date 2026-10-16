@@ -19,10 +19,21 @@ model:
   context_length: __HERMES_MODEL_CONTEXT_LENGTH__
 
 auxiliary:
+  free_only: true
   # askPDF owns task/report titles. Hermes title generation runs outside the
   # per-run secret scope in multiplex mode and is intentionally unused.
   title_generation:
     enabled: false
+
+tools:
+  tool_search:
+    enabled: off
+
+agent:
+  disabled_toolsets:
+    - terminal
+    - skills
+    - file
 
 # MCP servers are registered only by isolated generated run profiles, where a
 # signed execution-context header is available.

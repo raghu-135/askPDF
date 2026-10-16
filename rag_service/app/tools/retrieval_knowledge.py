@@ -190,20 +190,19 @@ async def _schedule_document_repair(
     embedding_model: str,
     thread_id: str,
     readiness: dict[str, Any],
-) -> None:
+) -> bool:
     from app.services.embedding_materialization_service import enqueue_document_embedding_if_needed
 
     job = readiness.get("thread_job")
     if job is not None and job.status == "failed" and readiness.get("reason") == "thread_job_failed":
-        raise RuntimeError(
-            f"Document indexing failed for {file_hash}: {job.error or 'retry limit exhausted'}"
-        )
+        return False
     await enqueue_document_embedding_if_needed(
         file_hash=file_hash,
         thread_id=thread_id,
         embedding_model=embedding_model,
         readiness=readiness,
     )
+    return True
 
 
 async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocationContext, *, services: DefaultToolServices | None = None):
@@ -220,6 +219,7 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
         from app.services.document_projection_service import evaluate_retrieval_readiness
         ready_manifests = []
         repair_scheduled = False
+        skipped_failed_files: list[str] = []
         for file_hash in file_hashes:
             readiness = await evaluate_retrieval_readiness(
                 file_hash,
@@ -229,12 +229,15 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
             if readiness.get("ready") and readiness.get("manifest") is not None:
                 ready_manifests.append(readiness["manifest"])
                 continue
-            await _schedule_document_repair(
+            scheduled = await _schedule_document_repair(
                 file_hash=file_hash,
                 embedding_model=context.embedding_model,
                 thread_id=context.thread_id,
                 readiness=readiness,
             )
+            if not scheduled:
+                skipped_failed_files.append(file_hash)
+                continue
             repair_scheduled = True
         if not ready_manifests:
             return make_tool_result(tool_name=tool_name, content="Document index is not ready for this thread.", context=context, started=started, warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.INDEXING_IN_PROGRESS], artifacts={"readiness": "indexing", "repair_scheduled": repair_scheduled})
@@ -397,6 +400,8 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
             "repair_scheduled": repair_scheduled,
             "truncated": truncated,
         }
+        if skipped_failed_files:
+            artifacts["skipped_failed_file_hashes"] = skipped_failed_files
         return make_tool_result(tool_name=tool_name, content=content, context=context, started=started, sources=sources, artifacts=artifacts, warnings=[ToolWarningCode.RESPONSE_TRUNCATED] if truncated else [])
     except EmbeddingTokenizerUnavailableError as exc:
         return make_tool_error_result(

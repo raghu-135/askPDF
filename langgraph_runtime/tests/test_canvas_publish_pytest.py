@@ -120,7 +120,7 @@ def test_normalize_publish_canvas_spec_repairs_incomplete_blocks_and_citations()
                         "citations": [{
                             "kind": "document",
                             "label": "How Humans Learn",
-                            "source_id": "abc123def456",
+                            "source_id": "3deaaae75be4cddfd0b34d7568ae5635",
                         }],
                     },
                 ],
@@ -133,8 +133,52 @@ def test_normalize_publish_canvas_spec_repairs_incomplete_blocks_and_citations()
     assert callout["title"] == "Note"
     assert callout["body"] == "Practice builds durable memory."
     sources = next(block for block in spec["sections"][0]["blocks"] if block["type"] == "sources")
-    assert sources["citations"][0]["file_hash"] == "abc123def456"
+    assert sources["citations"][0]["file_hash"] == "3deaaae75be4cddfd0b34d7568ae5635"
     assert "source_id" not in sources["citations"][0]
+
+
+def test_normalize_citation_resolves_src_id_via_source_map():
+    file_hash = "3deaaae75be4cddfd0b34d7568ae5635"
+    src_id = "src_abc123def4567890abcdef1234567890"
+    spec = normalize_publish_canvas_spec(
+        {
+            "spec": {
+                "sections": [{
+                    "title": "Overview",
+                    "blocks": [{
+                        "type": "sources",
+                        "citations": [{
+                            "kind": "document",
+                            "label": "BERT",
+                            "source_id": src_id,
+                        }],
+                    }],
+                }],
+            },
+        },
+        source_id_to_file_hash={src_id: file_hash},
+    )
+    citations = spec["sections"][0]["blocks"][0]["citations"]
+    assert citations[0]["file_hash"] == file_hash
+
+
+def test_normalize_citation_drops_unresolved_src_id():
+    with pytest.raises(CanvasSpecNormalizeError):
+        normalize_publish_canvas_spec({
+            "spec": {
+                "sections": [{
+                    "title": "Overview",
+                    "blocks": [{
+                        "type": "sources",
+                        "citations": [{
+                            "kind": "document",
+                            "label": "BERT",
+                            "source_id": "src_unknown",
+                        }],
+                    }],
+                }],
+            },
+        })
 
 
 def test_normalize_publish_canvas_spec_wraps_string_sections():
@@ -526,6 +570,53 @@ async def test_helper_strips_fake_call_after_admission_failure(monkeypatch):
     assert result["published"] is False
     assert "publish_canvas" not in result["answer"]
     assert "Fallback." in result["answer"]
+    assert "could not be published" in result["answer"]
+
+
+@pytest.mark.asyncio
+async def test_failed_publish_with_empty_content_reinvokes_unbound_for_prose(monkeypatch):
+    unbound_calls = 0
+
+    async def fake_llm(func, messages, **_kwargs):
+        return await func(messages)
+
+    async def fake_tool(_name, _tool_input, **_kwargs):
+        return {"ok": False, "content": "invalid spec", "error": {"code": "publish_canvas_invalid_spec"}, "trace": {}}
+
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.invoke_llm_for_node", fake_llm)
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.invoke_tool_for_node", fake_tool)
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.append_tool_event_for_node", lambda *args, **kwargs: [])
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.tool_config_for_node", lambda *args, **kwargs: {})
+    monkeypatch.setattr("langgraph_runtime.workflows.canvas_publish.normalize_tool_result", lambda raw, **kwargs: raw)
+
+    class Bound:
+        async def ainvoke(self, _messages):
+            return SimpleNamespace(
+                content="",
+                tool_calls=[{"name": "publish_canvas", "id": "call-1", "args": {"spec": {"schema_version": 1, "title": "X", "sections": []}}}],
+                usage_metadata={},
+            )
+
+    class LLM:
+        def bind_tools(self, _tools):
+            return Bound()
+
+        async def ainvoke(self, _messages):
+            nonlocal unbound_calls
+            unbound_calls += 1
+            return SimpleNamespace(content="Factual answer from recovery.", tool_calls=[], usage_metadata={})
+
+    result = await synthesize_with_canvas_publish(
+        LLM(),
+        [HumanMessage(content="What year was BERT published?")],
+        state={"allowed_tool_ids": ["research_canvas_publish"], "agent_run_id": "run-1", "llm_model": "test"},
+        config={},
+        node="synthesizer",
+        started=0.0,
+    )
+    assert result["published"] is False
+    assert unbound_calls == 1
+    assert "Factual answer from recovery." in result["answer"]
     assert "could not be published" in result["answer"]
 
 

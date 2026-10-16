@@ -218,15 +218,6 @@ def documents_from_thread_shape_payload(shape_payload: Mapping[str, Any]) -> lis
     return documents
 
 
-async def _emit_corrective_event(config: RunnableConfig, event: str, data: Dict[str, Any]) -> None:
-    sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
-    studio_queue = ((config or {}).get("configurable") or {}).get("studio_event_queue")
-    if sink is not None:
-        await sink.emit(event, data)
-    elif studio_queue is not None:
-        await studio_queue.put({"event": event, "data": data})
-
-
 class NodeRegistry:
     """Registry of safe backend node implementations for compiled v2 workflows."""
 
@@ -831,17 +822,30 @@ class NodeRegistry:
         if not allowed_routes:
             raise ValueError("Router has no configured route that is enabled for this test run")
         requested_route = parsed.get("route")
+        fallback_order = [
+            RouterRoute.DIRECT.value if bypass_clarification else RouterRoute.DOCUMENT.value,
+            RouterRoute.DOCUMENT.value if bypass_clarification else RouterRoute.DIRECT.value,
+            RouterRoute.CLARIFY.value,
+            RouterRoute.THREAD_CONVERSATION_HISTORY.value,
+            RouterRoute.DURABLE_MEMORY.value,
+            RouterRoute.THREAD_EVENTS.value,
+            RouterRoute.WEB.value,
+        ]
+        fallback_route = next((item for item in fallback_order if item in allowed_routes), None)
         if requested_route not in allowed_routes:
-            raise AgentRuntimeError(
-                "router_output_invalid",
-                "The router returned an unavailable route",
-                retryable=True,
-                details={
-                    "requested_route": requested_route if requested_route is not None else "",
-                    "allowed_routes": sorted(allowed_routes),
-                },
-            )
-        route = requested_route
+            if fallback_route is None:
+                raise AgentRuntimeError(
+                    "router_output_invalid",
+                    "The router returned an unavailable route",
+                    retryable=True,
+                    details={
+                        "requested_route": requested_route if requested_route is not None else "",
+                        "allowed_routes": sorted(allowed_routes),
+                    },
+                )
+            route = fallback_route
+        else:
+            route = requested_route
         clarification_options = parsed.get("clarification_options")
         if route == RouterRoute.CLARIFY.value:
             clarification_options = _normalize_clarification_options(clarification_options)
@@ -1304,25 +1308,13 @@ class NodeRegistry:
         if sink is not None:
             await sink.emit(ParallelEventName.DISPATCH_PLANNED, summary)
             await sink.emit(ParallelEventName.DISPATCH_STARTED, summary)
-            if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
-                await sink.emit(CorrectiveEventName.WAVE_STARTED, {**summary, "event_id": stable_corrective_identity("event", dispatch=dispatch_id, name=CorrectiveEventName.WAVE_STARTED)})
             for item in work_items:
                 await sink.emit(ParallelEventName.WORKER_QUEUED, dict(item))
-                if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and int(item.get("wave_id") or 0) > 0:
-                    await sink.emit(CorrectiveEventName.QUERY_REWRITE, {**dict(item), "event_id": stable_corrective_identity("event", dispatch=dispatch_id, query=item["query_id"], name=CorrectiveEventName.QUERY_REWRITE)})
-                    if item.get("source_expansion"):
-                        await sink.emit(CorrectiveEventName.SOURCE_EXPANSION, {**dict(item), "event_id": stable_corrective_identity("event", dispatch=dispatch_id, query=item["query_id"], name=CorrectiveEventName.SOURCE_EXPANSION)})
         elif studio_queue is not None:
             await studio_queue.put({"event": ParallelEventName.DISPATCH_PLANNED, "data": summary})
             await studio_queue.put({"event": ParallelEventName.DISPATCH_STARTED, "data": summary})
-            if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
-                await studio_queue.put({"event": CorrectiveEventName.WAVE_STARTED, "data": {**summary, "event_id": stable_corrective_identity("event", dispatch=dispatch_id, name=CorrectiveEventName.WAVE_STARTED)}})
             for item in work_items:
                 await studio_queue.put({"event": ParallelEventName.WORKER_QUEUED, "data": dict(item)})
-                if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and int(item.get("wave_id") or 0) > 0:
-                    await studio_queue.put({"event": CorrectiveEventName.QUERY_REWRITE, "data": {**dict(item), "event_id": stable_corrective_identity("event", dispatch=dispatch_id, query=item["query_id"], name=CorrectiveEventName.QUERY_REWRITE)}})
-                    if item.get("source_expansion"):
-                        await studio_queue.put({"event": CorrectiveEventName.SOURCE_EXPANSION, "data": {**dict(item), "event_id": stable_corrective_identity("event", dispatch=dispatch_id, query=item["query_id"], name=CorrectiveEventName.SOURCE_EXPANSION)}})
         update = {
             "dispatch_id": dispatch_id,
             "dispatch_node_id": node_id,
@@ -1451,15 +1443,11 @@ class NodeRegistry:
                 ParallelEventName.AGGREGATION_PARTIAL if summary.get("partial_evidence") else ParallelEventName.AGGREGATION_COMPLETED,
                 summary,
             )
-            if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
-                await sink.emit(CorrectiveEventName.WAVE_COMPLETED, {**summary, "event_id": stable_corrective_identity("event", dispatch=summary.get("dispatch_id"), name=CorrectiveEventName.WAVE_COMPLETED)})
         elif is_parallel and studio_queue is not None:
             await studio_queue.put({
                 "event": ParallelEventName.AGGREGATION_PARTIAL if summary.get("partial_evidence") else ParallelEventName.AGGREGATION_COMPLETED,
                 "data": summary,
             })
-            if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID:
-                await studio_queue.put({"event": CorrectiveEventName.WAVE_COMPLETED, "data": {**summary, "event_id": stable_corrective_identity("event", dispatch=summary.get("dispatch_id"), name=CorrectiveEventName.WAVE_COMPLETED)}})
         return update
 
     async def answer_evaluator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -1680,17 +1668,6 @@ class NodeRegistry:
             output_refs=_state_evidence_refs(state),
             output_preview={"verdict": report["verdict"], "route": route, "unresolved_gaps": gaps},
         )
-        event_key = stable_corrective_identity(
-            "retrieval_grade", run=state.get("agent_run_id"), wave=state.get("corrective_wave", 0)
-        )
-        await _emit_corrective_event(config, CorrectiveEventName.RETRIEVAL_GRADED, {**data, "event_id": event_key})
-        await _emit_corrective_event(config, CorrectiveEventName.DECISION, {**data, "event_id": f"{event_key}:decision"})
-        for index, contradiction in enumerate(report["material_contradictions"]):
-            await _emit_corrective_event(config, CorrectiveEventName.CONTRADICTION, {"event_id": f"{event_key}:contradiction:{index}", "wave_id": state.get("corrective_wave", 0), "contradiction": contradiction})
-        for index, gap in enumerate(gaps):
-            await _emit_corrective_event(config, CorrectiveEventName.UNRESOLVED_GAP, {"event_id": f"{event_key}:gap:{index}", "wave_id": state.get("corrective_wave", 0), "gap": gap})
-        if exhausted_reason:
-            await _emit_corrective_event(config, CorrectiveEventName.BUDGET_EXHAUSTED, {"event_id": f"{event_key}:budget:{exhausted_reason}", "wave_id": state.get("corrective_wave", 0), "budget": exhausted_reason})
         _log_node_end(state, WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value, started, data)
         return {
             "retrieval_quality_report": report,
@@ -1751,18 +1728,6 @@ class NodeRegistry:
             output_refs=_state_evidence_refs(state),
             output_preview={"route": route, "support_ratio": report["supported_claim_ratio"], "issues": issues[:10]},
         )
-        event_key = stable_corrective_identity(
-            "grounding", run=state.get("agent_run_id"), wave=state.get("corrective_wave", 0), revision=state.get("answer_revision_count", 0)
-        )
-        await _emit_corrective_event(config, CorrectiveEventName.SUPPORT_VERIFIED, {**data, "event_id": event_key})
-        for index, violation in enumerate(report["citation_violations"]):
-            await _emit_corrective_event(config, CorrectiveEventName.CITATION_VIOLATION, {"event_id": f"{event_key}:citation:{index}", "wave_id": state.get("corrective_wave", 0), "violation": violation})
-        for index, contradiction in enumerate(report["contradictions"]):
-            await _emit_corrective_event(config, CorrectiveEventName.CONTRADICTION, {"event_id": f"{event_key}:contradiction:{index}", "wave_id": state.get("corrective_wave", 0), "contradiction": contradiction})
-        for index, gap in enumerate(report["unresolved_gaps"]):
-            await _emit_corrective_event(config, CorrectiveEventName.UNRESOLVED_GAP, {"event_id": f"{event_key}:gap:{index}", "wave_id": state.get("corrective_wave", 0), "gap": gap})
-        if exhausted_reason:
-            await _emit_corrective_event(config, CorrectiveEventName.BUDGET_EXHAUSTED, {"event_id": f"{event_key}:budget:{exhausted_reason}", "wave_id": state.get("corrective_wave", 0), "budget": exhausted_reason})
         _log_node_end(state, WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value, started, data)
         return {
             "grounding_report": report,

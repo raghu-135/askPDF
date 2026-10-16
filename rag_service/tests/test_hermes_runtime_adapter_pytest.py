@@ -260,15 +260,19 @@ def test_hermes_continuation_binding_is_opaque():
 
 
 def test_document_task_context_reinforces_progressive_tool_disclosure():
+    run_id = "run-doc-tools"
     value = hermes_api._task_input_with_context(
         "Summarize the acknowledgement.",
         {
             "objective": "Summarize the acknowledgement.",
             "documents": [{"file_hash": "file-1", "name": "paper.pdf"}],
         },
+        run_id=run_id,
     )
+    server = hermes_api.mcp_server_name_for_run(run_id)
 
     assert "already exposed directly in the model-facing MCP tool list" in value
+    assert f"mcp__{server}__search_knowledge" in value
     assert "Do not route an already-listed AskPDF tool through" in value
     assert "tool_search" in value
     assert "`limit`" not in value
@@ -279,6 +283,7 @@ def test_task_context_without_documents_does_not_require_document_discovery():
     value = hermes_api._task_input_with_context(
         "Research a topic.",
         {"objective": "Research a topic.", "documents": []},
+        run_id="run-no-docs",
     )
 
     assert "Hermes bridge requirement" not in value
@@ -408,7 +413,7 @@ def test_hermes_task_input_makes_multiple_redirects_authoritative():
             {"correction_id": "c-1", "operation_id": "o-1", "instruction": "Compare security."},
             {"correction_id": "c-2", "operation_id": "o-2", "instruction": "Compare pricing."},
         ],
-    })
+    }, run_id="run-corrections")
 
     assert "AUTHORITATIVE USER REDIRECTS" in rendered
     assert "c-1" in rendered and "Compare security" in rendered

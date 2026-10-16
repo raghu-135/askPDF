@@ -46,6 +46,39 @@ def is_context_length_error(message: str) -> bool:
     return any(pattern.search(text) for pattern in _CONTEXT_LENGTH_PATTERNS)
 
 
+def redact_provider_error_text(message: str) -> str:
+    text = str(message or "").strip()
+    text = re.sub(r'"user_id"\s*:\s*"[^"]*"', '"user_id": "<redacted>"', text, flags=re.IGNORECASE)
+    text = re.sub(r'"organization_id"\s*:\s*"[^"]*"', '"organization_id": "<redacted>"', text, flags=re.IGNORECASE)
+    text = re.sub(r'"api_key"\s*:\s*"[^"]*"', '"api_key": "<redacted>"', text, flags=re.IGNORECASE)
+    return text
+
+
+def user_facing_model_error(message: str, classified: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    metadata = dict(classified or classify_model_error_message(message))
+    code = str(metadata.get("code") or "model_call_failed")
+    redacted = redact_provider_error_text(message)
+    if code == CONTEXT_LENGTH_EXCEEDED:
+        safe_message = (
+            "The model rejected this prompt because it exceeded the model context window. "
+            "Lower the context size or reduce attached documents and history, then try again."
+        )
+    elif code == "provider_request_rejected":
+        safe_message = "The model provider rejected this request. Check the model name and try again."
+    elif not redacted:
+        safe_message = "The model call failed."
+    else:
+        safe_message = redacted[:700]
+    payload: dict[str, Any] = {
+        "code": code,
+        "safe_message": safe_message,
+        "retryable": bool(metadata.get("retryable", False)),
+    }
+    if metadata.get("http_status_code") is not None:
+        payload["http_status_code"] = metadata["http_status_code"]
+    return payload
+
+
 def classify_model_error_message(message: str) -> Mapping[str, Any]:
     """Return stable error metadata for provider failures."""
 

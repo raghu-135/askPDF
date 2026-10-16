@@ -4,7 +4,19 @@ from langgraph_runtime.workflows.deep_research_nodes import (
     _proposal_work_signature,
     _required_work_signature,
 )
-from langgraph_runtime.models.deep_research import DeepResearchPlanProposal, DeepResearchTodoProposal
+import pytest
+from pydantic import ValidationError
+
+from langgraph_runtime.models.deep_research import (
+    DeepResearchPlanProposal,
+    DeepResearchSubagentActionDecision,
+    DeepResearchTodoProposal,
+)
+
+
+def test_subagent_action_decision_requires_tool_name_when_action_is_tool():
+    with pytest.raises(ValidationError):
+        DeepResearchSubagentActionDecision(action="tool")
 
 
 def test_subagent_action_accepts_tool_name_as_action():

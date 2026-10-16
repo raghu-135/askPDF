@@ -127,9 +127,9 @@ export function contextWindowBreakdown(
 }
 
 export function formatContextLengthUserMessage(error: unknown): { title: string; detail?: string } {
-  const payload = error && typeof error === 'object' ? error as { code?: string; raw_message?: string; message?: string } : {};
+  const payload = error && typeof error === 'object' ? error as { code?: string; safe_message?: string; raw_message?: string; message?: string } : {};
   const code = String(payload.code || '');
-  const detail = String(payload.raw_message || payload.message || error || '').trim();
+  const detail = String(payload.safe_message || payload.message || payload.raw_message || error || '').trim();
   if (code === CONTEXT_LENGTH_EXCEEDED) {
     return {
       title: 'The model rejected this prompt because it exceeded the model context window. Lower Ctx size or reduce the document and history sliders, then try again.',

@@ -350,14 +350,14 @@ class ContextBudgetOverride(BaseModel):
 class ThreadChatRequest(BaseModel):
     """Request body for thread-based chat."""
 
-    thread_id: str
-    question: str
-    llm_model: str
+    thread_id: str = Field(min_length=1)
+    question: str = Field(min_length=1, max_length=20_000)
+    llm_model: str = Field(min_length=1, max_length=300)
     use_web_search: bool = False
     hitl_web_approval: Optional[bool] = None
     use_reranker: Optional[bool] = None
     bypass_clarification: bool = False
-    context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size
+    context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
     context_budget: Optional[ContextBudgetOverride] = None
     replans: Optional[int] = Field(default=None, ge=1, le=REPLANS_LIMIT)
     system_role_override: Optional[str] = Field(
@@ -370,6 +370,13 @@ class ThreadChatRequest(BaseModel):
     client_timezone: Optional[str] = Field(default=None, max_length=100)
     client_locale: Optional[str] = Field(default=None, max_length=50)
     client_now_iso: Optional[str] = Field(default=None, max_length=80)
+
+    @field_validator("question", "llm_model", mode="before")
+    @classmethod
+    def _strip_required_chat_text(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip()
+        return value
 
 
 class ThreadMemorySettings(BaseModel):

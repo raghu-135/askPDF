@@ -777,7 +777,13 @@ async def capture_browser_page_endpoint(
         thread = await _require_ready_thread(thread_id)
         
         capture = await _capture_current_page()
-        
+        capture_url = str(capture.get("url") or "").strip()
+        if not capture_url.startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=400,
+                detail="Browser capture did not return a capturable http(s) page. Open a web page before capturing.",
+            )
+
         # Queue for processing (similar to web sources)
         await queue_file_processing(
             background_tasks=background_tasks,
@@ -794,13 +800,13 @@ async def capture_browser_page_endpoint(
         )
         
         return {
-            "status": EmbeddingReadinessStatus.READY.value,
+            "status": EmbeddingReadinessStatus.NOT_READY.value,
             "thread_id": thread_id,
             "file_hash": capture["file_hash"],
             "url": capture["url"],
             "title": capture["title"],
             "indexing": INDEXING_IN_PROGRESS,
-            "ready": True,
+            "ready": False,
         }
         
     except httpx.HTTPError as e:

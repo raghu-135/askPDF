@@ -13,6 +13,7 @@ from unittest.mock import patch, AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.api import threads as threads_api
 from app.models.requests import (
@@ -916,6 +917,29 @@ class TestThreadEndpoints:
 
         assert response.status_code == 404
         assert response.json()["detail"] == {"code": "agent_workflow_not_found"}
+
+    def test_thread_chat_request_rejects_blank_question_and_tiny_context(self):
+        with pytest.raises(ValidationError):
+            ThreadChatRequest(
+                thread_id="thread-1",
+                question="   ",
+                llm_model="test-model",
+                context_window=8192,
+            )
+        with pytest.raises(ValidationError):
+            ThreadChatRequest(
+                thread_id="thread-1",
+                question="hello",
+                llm_model="",
+                context_window=8192,
+            )
+        with pytest.raises(ValidationError):
+            ThreadChatRequest(
+                thread_id="thread-1",
+                question="hello",
+                llm_model="test-model",
+                context_window=100,
+            )
 
     def test_reasoning_mode_removed_from_request_models(self):
         """Reasoning-mode compatibility should not be exposed by API schemas."""

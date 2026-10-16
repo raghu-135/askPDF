@@ -259,7 +259,65 @@ def _lift_wrapped_block(block: Mapping[str, Any]) -> dict[str, Any]:
     return dict(block)
 
 
-def _normalize_citation(value: Any) -> dict[str, Any] | None:
+def _resolve_document_file_hash(
+    candidate: str,
+    source_id_to_file_hash: Mapping[str, str] | None,
+) -> str | None:
+    raw = str(candidate or "").strip()
+    if not raw:
+        return None
+    if _FILE_HASH_RE.fullmatch(raw):
+        return raw.lower()
+    if raw.startswith("src_") and source_id_to_file_hash:
+        resolved = source_id_to_file_hash.get(raw)
+        if resolved and _FILE_HASH_RE.fullmatch(resolved):
+            return resolved.lower()
+    if raw.startswith("doc:") and source_id_to_file_hash:
+        resolved = source_id_to_file_hash.get(raw)
+        if resolved and _FILE_HASH_RE.fullmatch(resolved):
+            return resolved.lower()
+        parts = raw.split(":", 2)
+        if len(parts) == 3 and _FILE_HASH_RE.fullmatch(parts[1]):
+            return parts[1].lower()
+    return None
+
+
+def source_id_to_file_hash_from_state(state: Mapping[str, Any]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+
+    def absorb(source: Mapping[str, Any]) -> None:
+        file_hash = str(source.get("file_hash") or source.get("document_id") or source.get("file_id") or "").strip().lower()
+        if not _FILE_HASH_RE.fullmatch(file_hash):
+            return
+        for key in ("source_id", "src_id"):
+            sid = source.get(key)
+            if isinstance(sid, str) and sid.strip():
+                mapping[sid.strip()] = file_hash
+        canonical = str(source.get("source_id") or "").strip()
+        if canonical.startswith("doc:"):
+            mapping.setdefault(canonical, file_hash)
+
+    for collection_key in ("evidence_packets", "document_sources"):
+        collection = state.get(collection_key)
+        if not isinstance(collection, list):
+            continue
+        for item in collection:
+            if not isinstance(item, Mapping):
+                continue
+            nested = item.get("sources") or item.get("matches") or item.get("document_sources")
+            if isinstance(nested, list):
+                for source in nested:
+                    if isinstance(source, Mapping):
+                        absorb(source)
+            absorb(item)
+    return mapping
+
+
+def _normalize_citation(
+    value: Any,
+    *,
+    source_id_to_file_hash: Mapping[str, str] | None = None,
+) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     citation = dict(value)
@@ -267,8 +325,15 @@ def _normalize_citation(value: Any) -> dict[str, Any] | None:
         for key in ("source_id", "file_id", "document_id", "src_id"):
             candidate = citation.get(key)
             if isinstance(candidate, str) and candidate.strip():
-                citation["file_hash"] = candidate.strip()
-                break
+                resolved = _resolve_document_file_hash(candidate.strip(), source_id_to_file_hash)
+                if resolved:
+                    citation["file_hash"] = resolved
+                    break
+    elif citation.get("kind") == "document" and citation.get("file_hash"):
+        resolved = _resolve_document_file_hash(str(citation.get("file_hash")), source_id_to_file_hash)
+        if not resolved:
+            return None
+        citation["file_hash"] = resolved
     label = citation.get("label")
     if not isinstance(label, str) or not label.strip():
         for key in ("title", "name", "file_name"):
@@ -286,10 +351,18 @@ def _normalize_citation(value: Any) -> dict[str, Any] | None:
             return None
     if not isinstance(citation.get("label"), str) or not str(citation.get("label")).strip():
         return None
+    if citation.get("kind") == "document":
+        file_hash = str(citation.get("file_hash") or "")
+        if not _FILE_HASH_RE.fullmatch(file_hash):
+            return None
     return {key: citation[key] for key in _CITATION_FIELDS if key in citation}
 
 
-def _coerce_block(value: Any) -> Any | None:
+def _coerce_block(
+    value: Any,
+    *,
+    source_id_to_file_hash: Mapping[str, str] | None = None,
+) -> Any | None:
     if isinstance(value, str):
         text = value.strip()
         return {"type": "markdown", "text": text} if text else None
@@ -333,7 +406,14 @@ def _coerce_block(value: Any) -> Any | None:
                 block["citations"] = citations
         raw_citations = block.get("citations")
         if isinstance(raw_citations, list):
-            citations = [item for item in (_normalize_citation(c) for c in raw_citations) if item]
+            citations = [
+                item
+                for item in (
+                    _normalize_citation(c, source_id_to_file_hash=source_id_to_file_hash)
+                    for c in raw_citations
+                )
+                if item
+            ]
             if not citations:
                 return None
             block["citations"] = citations
@@ -343,6 +423,11 @@ def _coerce_block(value: Any) -> Any | None:
         block["text"] = str(block.pop("content"))
     if block_type == "dag":
         _repair_dag_block(block)
+    if block_type == "quote":
+        resolved = _resolve_document_file_hash(str(block.get("file_hash") or ""), source_id_to_file_hash)
+        if not resolved:
+            return None
+        block["file_hash"] = resolved
     allowed = _BLOCK_FIELDS.get(block_type)
     if allowed is None:
         return block
@@ -350,23 +435,43 @@ def _coerce_block(value: Any) -> Any | None:
     return coerced if coerced.get("type") else None
 
 
-def _coerce_blocks(blocks: list[Any]) -> list[Any]:
-    repaired = [_coerce_block(block) for block in blocks]
+def _coerce_blocks(
+    blocks: list[Any],
+    *,
+    source_id_to_file_hash: Mapping[str, str] | None = None,
+) -> list[Any]:
+    repaired = [
+        _coerce_block(block, source_id_to_file_hash=source_id_to_file_hash)
+        for block in blocks
+    ]
     return [block for block in repaired if isinstance(block, Mapping) and block.get("type")]
 
 
-def _blocks_from_payload(body: Mapping[str, Any]) -> list[Any] | None:
+def _blocks_from_payload(
+    body: Mapping[str, Any],
+    *,
+    source_id_to_file_hash: Mapping[str, str] | None = None,
+) -> list[Any] | None:
     block_type = str(body.get("type") or "")
     citations = _citation_list(body) if block_type != "sources" else None
     if block_type in _BLOCK_TYPES:
-        blocks = _coerce_blocks([body])
+        blocks = _coerce_blocks([body], source_id_to_file_hash=source_id_to_file_hash)
         if citations:
-            blocks.extend(_coerce_blocks([{"type": "sources", "citations": citations}]))
+            blocks.extend(_coerce_blocks(
+                [{"type": "sources", "citations": citations}],
+                source_id_to_file_hash=source_id_to_file_hash,
+            ))
         return blocks or None
     if body.get("text") or body.get("content"):
-        blocks = _coerce_blocks([{**dict(body), "type": "markdown"}])
+        blocks = _coerce_blocks(
+            [{**dict(body), "type": "markdown"}],
+            source_id_to_file_hash=source_id_to_file_hash,
+        )
         if citations:
-            blocks.extend(_coerce_blocks([{"type": "sources", "citations": citations}]))
+            blocks.extend(_coerce_blocks(
+                [{"type": "sources", "citations": citations}],
+                source_id_to_file_hash=source_id_to_file_hash,
+            ))
         return blocks or None
     return None
 
@@ -400,7 +505,12 @@ def _resolve_schema_version(body: Mapping[str, Any]) -> Literal[1]:
     return 1
 
 
-def _normalize_section(section: Any, *, index: int) -> Any:
+def _normalize_section(
+    section: Any,
+    *,
+    index: int,
+    source_id_to_file_hash: Mapping[str, str] | None = None,
+) -> Any:
     if isinstance(section, str):
         text = section.strip()
         if not text:
@@ -420,13 +530,13 @@ def _normalize_section(section: Any, *, index: int) -> Any:
     blocks = section.get("blocks")
     coerced: list[Any] = []
     if isinstance(blocks, list):
-        coerced = _coerce_blocks(blocks)
+        coerced = _coerce_blocks(blocks, source_id_to_file_hash=source_id_to_file_hash)
     content = section.get("content")
     if not coerced:
         if isinstance(content, str) and content.strip():
             coerced = [{"type": "markdown", "text": content.strip()}]
         elif isinstance(content, list):
-            coerced = _coerce_blocks(content)
+            coerced = _coerce_blocks(content, source_id_to_file_hash=source_id_to_file_hash)
     if coerced:
         normalized["blocks"] = coerced
     if not normalized.get("blocks"):
@@ -434,7 +544,12 @@ def _normalize_section(section: Any, *, index: int) -> Any:
     return normalized
 
 
-def _sanitize_canvas_spec_envelope(body: Mapping[str, Any], *, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _sanitize_canvas_spec_envelope(
+    body: Mapping[str, Any],
+    *,
+    payload: Mapping[str, Any] | None = None,
+    source_id_to_file_hash: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     spec: dict[str, Any] = {}
     if "summary" in body and body.get("summary") is not None:
         summary = body.get("summary")
@@ -446,7 +561,11 @@ def _sanitize_canvas_spec_envelope(body: Mapping[str, Any], *, payload: Mapping[
         normalized_sections = [
             section
             for index, section in enumerate(sections)
-            for section in [_normalize_section(section, index=index)]
+            for section in [_normalize_section(
+                section,
+                index=index,
+                source_id_to_file_hash=source_id_to_file_hash,
+            )]
             if section is not None and section.get("blocks")
         ]
         spec["sections"] = normalized_sections
@@ -472,18 +591,31 @@ def _sanitize_canvas_spec_envelope(body: Mapping[str, Any], *, payload: Mapping[
     return spec
 
 
-def _canvas_envelope(*, title: str, summary: Any, blocks: list[Any]) -> dict[str, Any]:
+def _canvas_envelope(
+    *,
+    title: str,
+    summary: Any,
+    blocks: list[Any],
+    source_id_to_file_hash: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     spec: dict[str, Any] = {
         "schema_version": 1,
         "title": (title or "Research canvas").strip()[:160] or "Research canvas",
-        "sections": [{"title": "Findings", "blocks": _coerce_blocks(blocks)}],
+        "sections": [{
+            "title": "Findings",
+            "blocks": _coerce_blocks(blocks, source_id_to_file_hash=source_id_to_file_hash),
+        }],
     }
     if isinstance(summary, str) and summary.strip():
         spec["summary"] = summary.strip()[:400]
     return spec
 
 
-def normalize_publish_canvas_spec(args: Any) -> Any:
+def normalize_publish_canvas_spec(
+    args: Any,
+    *,
+    source_id_to_file_hash: Mapping[str, str] | None = None,
+) -> Any:
     """Lift common model mistakes into canvas_spec_v1 before MCP validation."""
 
     payload = dict(args or {}) if isinstance(args, Mapping) else {}
@@ -493,7 +625,12 @@ def normalize_publish_canvas_spec(args: Any) -> Any:
         spec = leftover or None
     spec = _parse_json_object(spec)
     if isinstance(spec, list):
-        envelope = _canvas_envelope(title=str(payload.get("title") or ""), summary=payload.get("summary"), blocks=spec)
+        envelope = _canvas_envelope(
+            title=str(payload.get("title") or ""),
+            summary=payload.get("summary"),
+            blocks=spec,
+            source_id_to_file_hash=source_id_to_file_hash,
+        )
         if not envelope.get("sections") or not envelope["sections"][0].get("blocks"):
             raise CanvasSpecNormalizeError(
                 "Canvas spec has no publishable blocks. Use sections[].blocks with valid block types."
@@ -503,13 +640,18 @@ def normalize_publish_canvas_spec(args: Any) -> Any:
         return spec
     body = _unwrap_canvas_spec_body(spec)
     if isinstance(body.get("sections"), list):
-        return _sanitize_canvas_spec_envelope(body, payload=payload)
-    lifted = _blocks_from_payload(body)
+        return _sanitize_canvas_spec_envelope(
+            body,
+            payload=payload,
+            source_id_to_file_hash=source_id_to_file_hash,
+        )
+    lifted = _blocks_from_payload(body, source_id_to_file_hash=source_id_to_file_hash)
     if lifted is not None:
         envelope = _canvas_envelope(
             title=str(payload.get("title") or body.get("title") or ""),
             summary=body.get("summary"),
             blocks=lifted,
+            source_id_to_file_hash=source_id_to_file_hash,
         )
         if not envelope.get("sections") or not envelope["sections"][0].get("blocks"):
             raise CanvasSpecNormalizeError(
@@ -522,6 +664,7 @@ def normalize_publish_canvas_spec(args: Any) -> Any:
             title=str(body.get("title") or payload.get("title") or ""),
             summary=body.get("summary"),
             blocks=blocks,
+            source_id_to_file_hash=source_id_to_file_hash,
         )
         if not envelope.get("sections") or not envelope["sections"][0].get("blocks"):
             raise CanvasSpecNormalizeError(
@@ -563,6 +706,7 @@ async def synthesize_with_canvas_publish(
     conversation = list(messages)
     retry_attempts, retry_observer = llm_retry_observer()
     emit_enabled = canvas_emit_enabled(state.get("allowed_tool_ids")) and hasattr(llm, "bind_tools")
+    citation_source_map = source_id_to_file_hash_from_state(state)
     published = False
     failed_attempts = 0
     publish_calls = 0
@@ -621,7 +765,10 @@ async def synthesize_with_canvas_publish(
                 state, config, caller_node=node, tool_name=_PUBLISH_TOOL, started=tool_started
             )
             try:
-                normalized_spec = normalize_publish_canvas_spec(args)
+                normalized_spec = normalize_publish_canvas_spec(
+                    args,
+                    source_id_to_file_hash=citation_source_map,
+                )
                 if isinstance(normalized_spec, str):
                     normalized_spec = _parse_json_object(normalized_spec)
                 if not isinstance(normalized_spec, Mapping):
