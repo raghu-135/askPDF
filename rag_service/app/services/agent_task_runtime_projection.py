@@ -236,6 +236,18 @@ _BUDGET_DIMENSION_LABELS = {
 }
 
 
+def _result_review_trigger(budget: Mapping[str, Any]) -> str:
+    if budget and exhausted_dimensions(budget):
+        return "budget"
+    return "incomplete"
+
+
+def _result_review_title(budget: Mapping[str, Any]) -> str:
+    if _result_review_trigger(budget) == "budget":
+        return "Research budget reached"
+    return "Review incomplete result"
+
+
 def _result_review_body(
     budget: Mapping[str, Any],
     warnings: list[Mapping[str, Any]],
@@ -540,7 +552,8 @@ async def apply_neutral_task_completion(
                         "interrupt_id": f"result-review:{agent_run_id}:{operation_id}",
                         "type": "incomplete_result_review", "kind": "approval", "status": "pending",
                         "response_operation": "task.result_review.respond",
-                        "title": "Review incomplete result",
+                        "title": _result_review_title(budget),
+                        "trigger": _result_review_trigger(budget),
                         "body": _result_review_body(budget, warnings, gaps),
                         "allowed_actions": ["accept", "retry_with_input"],
                         "provisional_artifact_id": final_artifact_id,
@@ -1038,13 +1051,15 @@ async def apply_runtime_task_delta(
                     policy, max_rounds, review_round = _incomplete_disposition(run, task_result)
                     needs_review = bool(warnings or gaps or task_result.get("status") == "completed_with_warnings")
                     if needs_review and policy == "review" and review_round <= max_rounds:
+                        review_budget = task.budgets_json if isinstance(task.budgets_json, Mapping) else {}
                         pending = {
                             "interrupt_id": f"result-review:{run.id}:{delta.operation_id}",
                             "type": "incomplete_result_review",
                             "kind": "approval",
                             "status": "pending",
-                            "title": "Review incomplete result",
-                            "body": _result_review_body(task.budgets_json if isinstance(task.budgets_json, Mapping) else {}, warnings, gaps),
+                            "title": _result_review_title(review_budget),
+                            "trigger": _result_review_trigger(review_budget),
+                            "body": _result_review_body(review_budget, warnings, gaps),
                             "response_operation": "task.result_review.respond",
                             "allowed_actions": ["accept", "retry_with_input"],
                             "response_schema": {"type": "object", "properties": {"followup_input": {"type": "string", "maxLength": 20000}}},

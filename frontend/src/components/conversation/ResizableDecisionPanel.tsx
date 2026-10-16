@@ -12,7 +12,7 @@ export function ResizableDecisionPanel({
   onClose,
   rootRef,
   defaultRatio = 0.3,
-  narrowDefaultRatio = 0.22,
+  narrowDefaultRatio = 0.32,
   horizontalInset = 0,
   minHeight = 0,
 }: {
@@ -36,6 +36,7 @@ export function ResizableDecisionPanel({
     <Box sx={{
       display: 'flex',
       flexDirection: 'column',
+      flex: 1,
       mb: 1,
       mx: horizontalInset,
       bgcolor: 'background.default',

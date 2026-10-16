@@ -680,6 +680,22 @@ export default function DeepResearchTaskPanel({
   );
   const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
+  const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
+  const reviewCitationSources = useMemo(
+    () => items.flatMap((item) => (item.sources || []).map((source) => {
+      const locator = source.page ?? 0;
+      const docId = source.file_hash ? `doc:${source.file_hash}:${locator}` : undefined;
+      return {
+        kind: source.kind,
+        label: source.title,
+        file_name: source.title,
+        page: source.page,
+        source_id: docId,
+        origins: source.origins,
+      };
+    })),
+    [items],
+  );
   const respondToResultReview = async (decision: 'accept' | 'retry_with_input') => {
     if (!task || !selectedRun || !pendingInterrupt) return;
     const followup = decision === 'retry_with_input' ? reviewGuidance : undefined;
@@ -721,6 +737,7 @@ export default function DeepResearchTaskPanel({
   return <ConversationPanelTemplate
     ref={panelRef}
     sx={{ p: 1 }}
+    transcriptSx={reviewPanelOpen ? { flexGrow: 0, maxHeight: 160, overflow: 'hidden' } : undefined}
     header={<ConversationHeader
       models={models}
       model={frozen ? String(task?.configuration?.llm_model || model) : model}
@@ -821,6 +838,7 @@ export default function DeepResearchTaskPanel({
       <DeepResearchProvisionalAnswer
         content={pendingInterrupt.provisional_answer}
         emptyMessage="No usable provisional answer was produced. Continue or steer the research."
+        citationSources={reviewCitationSources}
       />
     </ResizableDecisionPanel> : pendingInterrupt && isResultReview ? <ResizableDecisionPanel
       title={pendingInterrupt.title || 'Review incomplete result'}
@@ -843,8 +861,8 @@ export default function DeepResearchTaskPanel({
             title={resultReviewAvailability.disabledReason}
             onClick={() => void respondToResultReview('accept')}
           >
-            {reviewIssueCounts.total > 0
-              ? `Finish with this result (${reviewIssueCounts.warningCount} unverified)`
+            {reviewIssueCounts.limitationCount > 0
+              ? `Finish with this result (${reviewIssueCounts.limitationCount} limitation${reviewIssueCounts.limitationCount === 1 ? '' : 's'})`
               : 'Finish with this result'}
           </Button>
           <Button
@@ -863,7 +881,12 @@ export default function DeepResearchTaskPanel({
       <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
       <DeepResearchDecisionLead pending={pendingInterrupt} task={task} isBudgetReview={false} />
       <DeepResearchIssueList pending={pendingInterrupt} />
-      {pendingInterrupt.provisional_answer ? <DeepResearchProvisionalAnswer content={pendingInterrupt.provisional_answer} /> : null}
+      {pendingInterrupt.provisional_answer ? (
+        <DeepResearchProvisionalAnswer
+          content={pendingInterrupt.provisional_answer}
+          citationSources={reviewCitationSources}
+        />
+      ) : null}
     </ResizableDecisionPanel> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
       interrupt={pendingInterrupt}
       submitting={decisionSubmitting}
