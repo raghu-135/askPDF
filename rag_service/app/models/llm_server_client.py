@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import BaseModel as OpenAIBaseModel
