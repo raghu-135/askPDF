@@ -159,6 +159,7 @@ function CitationChip({
     <Chip
       icon={citationIcon(citation.kind)}
       label={`${KIND_LABEL[citation.kind]} · ${citation.label}`}
+      data-canvas-citation={documentTarget ? 'document' : undefined}
       clickable={clickable}
       component={citation.kind === 'web' && citation.url ? 'a' : 'div'}
       href={citation.kind === 'web' && citation.url ? citation.url : undefined}

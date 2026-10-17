@@ -132,7 +132,7 @@ async def _repair_stale_chunk_locator(
             candidate_row = rows[0]
     repaired_locator = format_document_source_locator({"chunk_id": candidate_row.chunk_id or candidate_row.source_id})
     repaired_token = parse_document_source_locator(repaired_locator)[1]
-    if not repaired_token or not await _chunk_locator_exists(file_hash, repaired_token):
+    if not repaired_token:
         return None
     if repaired_token != token:
         logger.info(

@@ -1466,8 +1466,30 @@ class NodeRegistry:
 
     async def answer_evaluator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        llm = get_llm(state["llm_model"], http_async_client=execution_model_client(config))
+        from runtime_protocol.research_gaps import (
+            canvas_absence_limitations_suppressed,
+            filter_false_canvas_absence_limitations,
+        )
+
         revision_count = max(0, int(state.get("answer_revision_count") or 0))
+        canvas_context = ""
+        if canvas_absence_limitations_suppressed(state):
+            draft = state.get("task_canvas_draft")
+            draft_title = ""
+            claim_count = 0
+            if isinstance(draft, Mapping):
+                draft_title = str(draft.get("title") or "").strip()
+                claims = draft.get("claims")
+                if isinstance(claims, list):
+                    claim_count = len(claims)
+            canvas_context = (
+                "\n\nCanvas deliverable context: a research canvas was published or drafted for this run"
+                f"{f' (title: {draft_title})' if draft_title else ''}"
+                f"{f' with {claim_count} claims' if claim_count else ''}. "
+                "Do not flag missing inline citations, absent canvas prose in the chat answer, or failure to "
+                "use the publish canvas tool when the canvas deliverable satisfies the request."
+            )
+        llm = get_llm(state["llm_model"], http_async_client=execution_model_client(config))
         prompt = (
             "Review the draft answer against the user's request and the available evidence. "
             "Evaluate completeness, factual grounding, citation/source alignment, uncertainty, and instruction following. "
@@ -1476,6 +1498,7 @@ class NodeRegistry:
             f"Question:\n{compact_preview(state.get('question'), limit=3000)}\n\n"
             f"Draft answer:\n{compact_preview(state.get('final_answer'), limit=10000)}\n\n"
             f"Evidence:\n{compact_preview(state.get('evidence') or _format_prefetch_summary(state.get('pre_fetch_bundle') or {}), limit=12000)}"
+            f"{canvas_context}"
         )
         response, parsed, prompt_details, retry_attempts, contract_repair = await invoke_validated_json_decision_node(
             state,
@@ -1508,11 +1531,6 @@ class NodeRegistry:
             for item in parsed.get("issues") or []
             if str(item).strip()
         ][:MAX_ANSWER_QUALITY_ISSUES]
-        from runtime_protocol.research_gaps import (
-            canvas_absence_limitations_suppressed,
-            filter_false_canvas_absence_limitations,
-        )
-
         if canvas_absence_limitations_suppressed(state):
             issues = filter_false_canvas_absence_limitations(issues)
         report = {

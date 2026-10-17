@@ -52,7 +52,6 @@ export default function ThreadWorkspaceContent({
   darkMode = false,
   currentDocumentSentenceId = null,
   highlightSentenceIds = null,
-  documentCitationScrollToken = 0,
   onDocumentJump,
   autoScroll = false,
   highlightEnabled = true,
@@ -112,7 +111,6 @@ export default function ThreadWorkspaceContent({
   darkMode?: boolean;
   currentDocumentSentenceId?: number | null;
   highlightSentenceIds?: number[] | null;
-  documentCitationScrollToken?: number;
   onDocumentJump: (id: number) => void;
   autoScroll?: boolean;
   highlightEnabled?: boolean;
@@ -227,7 +225,6 @@ export default function ThreadWorkspaceContent({
           cachedDownloadUrl={cachedDownloadUrl}
           currentDocumentSentenceId={currentDocumentSentenceId}
           highlightSentenceIds={highlightSentenceIds}
-          documentCitationScrollToken={documentCitationScrollToken}
           onDocumentJump={onDocumentJump}
           autoScroll={autoScroll}
           highlightEnabled={highlightEnabled}

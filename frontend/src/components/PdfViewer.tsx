@@ -32,6 +32,7 @@ import {
   ScrollPluginPackage,
   ScrollStrategy,
   useScroll,
+  useScrollCapability,
 } from "@embedpdf/plugin-scroll/react";
 import {
   RenderLayer,
@@ -137,7 +138,6 @@ type Props = {
   sentences: Sentence[] | null;
   currentId: number | null;
   highlightSentenceIds?: number[] | null;
-  documentCitationScrollToken?: number;
   onJump: (id: number) => void;
   autoScroll: boolean;
   isResizing?: boolean;
@@ -423,7 +423,6 @@ function EmbedPdfDocumentBody({
   sentences,
   currentId,
   highlightSentenceIds = null,
-  documentCitationScrollToken = 0,
   onJump,
   autoScroll,
   isResizing,
@@ -471,6 +470,16 @@ function EmbedPdfDocumentBody({
   const { provides: selectionCapability } = useSelectionCapability();
   const { provides: scrollApi } = useScroll(documentId);
   const scrollRef = useRef(scrollApi);
+  const { provides: scrollCapability } = useScrollCapability();
+  const [layoutReadyTick, setLayoutReadyTick] = useState(0);
+  useEffect(() => {
+    if (!scrollCapability) return undefined;
+    return scrollCapability.onLayoutReady((event) => {
+      if (event.documentId === documentId) {
+        setLayoutReadyTick((tick) => tick + 1);
+      }
+    });
+  }, [documentId, scrollCapability]);
   scrollRef.current = scrollApi;
   const { provides: historyApi } = useHistoryCapability();
   const historyRef = useRef({ provides: historyApi });
@@ -536,41 +545,23 @@ function EmbedPdfDocumentBody({
 
     if (!autoScroll || currentId === null || !sentences) return;
     const highlightIds = highlightIdSet(currentId, highlightSentenceIds);
-    let attempts = 0;
-    const scrollToHighlight = () => {
-      if (!scrollRef.current) {
-        if (attempts < 24) {
-          attempts += 1;
-          window.setTimeout(scrollToHighlight, 120);
-        }
-        return;
-      }
-      const bbox = firstHighlightableBBox(sentences, [...highlightIds]);
-      if (!bbox) {
-        if (attempts < 24) {
-          attempts += 1;
-          window.setTimeout(scrollToHighlight, 120);
-        }
-        return;
-      }
-      scrollRef.current?.scrollToPage({
-        pageNumber: bbox.page,
-        pageCoordinates: {
-          x: bbox.x,
-          y: bbox.y,
-        },
-        alignY: 35,
-        behavior: attempts === 0 ? "smooth" : "auto",
-      });
-    };
-    scrollToHighlight();
+    const bbox = firstHighlightableBBox(sentences, [...highlightIds]);
+    if (!bbox || !scrollRef.current) return;
+    scrollRef.current.scrollToPage({
+      pageNumber: bbox.page,
+      pageCoordinates: {
+        x: bbox.x,
+        y: bbox.y,
+      },
+      alignY: 35,
+      behavior: layoutReadyTick > 1 ? "auto" : "smooth",
+    });
   }, [
+    layoutReadyTick,
     currentId,
-    documentCitationScrollToken,
     highlightSentenceIds,
     autoScroll,
     sentences,
-    pdfLoaded,
     isHistoryProcessingRef,
   ]);
 
@@ -1081,7 +1072,6 @@ const PdfViewer = React.memo(function PdfViewer({
   sentences,
   currentId,
   highlightSentenceIds = null,
-  documentCitationScrollToken = 0,
   onJump,
   autoScroll,
   isResizing,
@@ -1154,7 +1144,6 @@ const PdfViewer = React.memo(function PdfViewer({
               sentences={sentences}
               currentId={currentId}
               highlightSentenceIds={highlightSentenceIds}
-              documentCitationScrollToken={documentCitationScrollToken}
               onJump={onJump}
               autoScroll={autoScroll}
               isResizing={isResizing}

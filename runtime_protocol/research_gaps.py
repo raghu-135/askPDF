@@ -169,11 +169,48 @@ def _limitation_denies_publish_canvas_tool(text: str) -> bool:
     )
 
 
+def _limitation_denies_draft_answer_for_evaluator(text: str) -> bool:
+    lowered = str(text or "").casefold()
+    if re.search(r"\bno\s+claims?\s+or\s+data\b", lowered) and _NEGATIVE_LIMITATION_PATTERN.search(lowered):
+        return True
+    if "draft" not in lowered and "evaluation" not in lowered:
+        return False
+    if re.search(r"draft\s+answer", lowered) and _NEGATIVE_LIMITATION_PATTERN.search(lowered):
+        return True
+    return bool(
+        re.search(r"\bno\b.+\b(?:present|included|provided)\b.+\bevaluation\b", lowered)
+        or (
+            re.search(r"\bno\s+claims?\b", lowered)
+            and _NEGATIVE_LIMITATION_PATTERN.search(lowered)
+        )
+        or (
+            re.search(r"\bno\s+claims?\s+or\s+data\b", lowered)
+            and _NEGATIVE_LIMITATION_PATTERN.search(lowered)
+        )
+    )
+
+
+def _limitation_denies_canvas_output_absence(text: str) -> bool:
+    lowered = str(text or "").casefold()
+    if "output" not in lowered and "tool" not in lowered:
+        return False
+    return bool(
+        re.search(r"\bno\s+such\s+output\b", lowered)
+        or (
+            "publish" in lowered
+            and "canvas" in lowered
+            and _NEGATIVE_LIMITATION_PATTERN.search(lowered)
+        )
+    )
+
+
 def is_false_canvas_absence_limitation(text: str) -> bool:
     return (
         _limitation_denies_canvas_presence(text)
         or _limitation_denies_document_citations(text)
         or _limitation_denies_publish_canvas_tool(text)
+        or _limitation_denies_draft_answer_for_evaluator(text)
+        or _limitation_denies_canvas_output_absence(text)
     )
 
 

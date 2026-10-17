@@ -76,6 +76,16 @@ def test_strip_false_canvas_limitations_block_removes_retest_variant_wording():
     assert strip_false_canvas_limitations_block(text) == "Evidence summary."
 
 
+def test_filter_false_canvas_absence_limitations_rejects_evaluator_draft_denials():
+    issues = [
+        "No draft answer content present for evaluation",
+        "No claims or data about WMT 2014 BLEU results are included",
+        "No citations or document references are provided in the draft answer",
+        "The user requested a research canvas using the publish canvas tool, but no such output is given",
+    ]
+    assert filter_false_canvas_absence_limitations(issues) == []
+
+
 def test_strip_false_canvas_limitations_block_removes_published_canvas_denials():
     text = (
         "Summary of the paper.\n\n"

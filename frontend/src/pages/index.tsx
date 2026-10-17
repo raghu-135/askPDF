@@ -81,7 +81,6 @@ export default function Home() {
   const [activeSource, setActiveSource] = useState<'pdf' | 'chat'>('pdf');
   const [currentPdfId, setCurrentPdfId] = useState<number | null>(null);
   const [pdfHighlightSentenceIds, setPdfHighlightSentenceIds] = useState<number[] | null>(null);
-  const [documentCitationScrollToken, setDocumentCitationScrollToken] = useState(0);
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
   const [playRequestId, setPlayRequestId] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -714,7 +713,6 @@ export default function Home() {
     if (!highlightIds.length) return;
     setPdfHighlightSentenceIds(highlightIds);
     setCurrentPdfId(highlightIds[0]);
-    setDocumentCitationScrollToken((value) => value + 1);
     if (target.play !== false) {
       setPlayRequestId(highlightIds[0]);
     }
@@ -1190,7 +1188,6 @@ export default function Home() {
               darkMode={pdfDarkMode}
               currentDocumentSentenceId={activeSource === 'pdf' ? currentPdfId : null}
               highlightSentenceIds={pdfHighlightSentenceIds}
-              documentCitationScrollToken={documentCitationScrollToken}
               onDocumentJump={(id) => {
                 setActiveSource('pdf');
                 setCurrentPdfId(id);

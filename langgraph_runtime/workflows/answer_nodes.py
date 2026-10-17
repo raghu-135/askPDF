@@ -135,13 +135,16 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         "canvas_published": published["published"],
     }
     log_node_end(state, node_name, started, data)
-    return {
+    update: Dict[str, Any] = {
         "final_answer": published["answer"],
         "reasoning": published["reasoning"],
         "reasoning_available": published["reasoning_available"],
         "reasoning_format": published["reasoning_format"],
         "node_events": append_event(state, node_name, data, started=started, config=config),
     }
+    if published.get("published"):
+        update["task_canvas_published"] = True
+    return update
 
 
 async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
