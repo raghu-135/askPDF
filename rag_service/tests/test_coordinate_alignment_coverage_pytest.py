@@ -65,7 +65,12 @@ def test_provenance_fallback_assigns_non_zero_bbox():
             "bboxes": [],
         }
     ]
-    aligned = _align_coordinates(canonical, [], elements_by_id={"el-1": element})
+    aligned = _align_coordinates(
+        canonical,
+        [],
+        elements_by_id={"el-1": element},
+        page_dimensions={1: (612.0, 792.0)},
+    )
     assert aligned[0]["alignment_precision"] == "coarse"
     assert _sentence_has_bbox(aligned[0])
 

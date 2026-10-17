@@ -34,3 +34,16 @@ test('transformSentences omits placeholder boxes when coordinates are missing', 
   ]);
   assert.deepEqual(transformed[0].bboxes, []);
 });
+
+test('deriveBBoxes drops boxes without page dimensions instead of emitting 0x0', () => {
+  const transformed = transformSentences([
+    {
+      id: 3,
+      text: 'Missing page size',
+      label: 'text',
+      page: 1,
+      bbox: { page: 1, x0: 10, y0: 20, x1: 40, y1: 50 },
+    },
+  ]);
+  assert.deepEqual(transformed[0].bboxes, []);
+});

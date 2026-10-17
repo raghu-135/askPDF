@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import re
 import asyncio
 import logging
@@ -92,27 +93,191 @@ def _convert_bottomleft_to_topleft(bbox: tuple[float, float, float, float], page
     return (left, page_height - top, right, page_height - bottom)
 
 
-def _page_heights_from_candidates(candidates: list[dict[str, Any]]) -> dict[int, float]:
-    heights: dict[int, float] = {}
+def _positive_dimension(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _page_size_map_from_pdf(data: bytes) -> dict[int, tuple[float, float]]:
+    import pdfplumber
+
+    sizes: dict[int, tuple[float, float]] = {}
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for index, page in enumerate(pdf.pages):
+            width = _positive_dimension(page.width)
+            height = _positive_dimension(page.height)
+            if width and height:
+                sizes[index + 1] = (width, height)
+    return sizes
+
+
+def _page_dimensions_from_candidates(candidates: list[dict[str, Any]]) -> dict[int, tuple[float, float]]:
+    dimensions: dict[int, tuple[float, float]] = {}
     for candidate in candidates:
-        page_height = candidate.get("page_height")
-        if page_height in (None, ""):
+        width = _positive_dimension(candidate.get("page_width"))
+        height = _positive_dimension(candidate.get("page_height"))
+        if not width or not height:
             continue
         for page in _pages(candidate):
-            heights[page] = float(page_height)
+            dimensions[page] = (width, height)
         page = candidate.get("page")
         if page not in (None, ""):
             try:
-                heights[int(page)] = float(page_height)
+                dimensions[int(page)] = (width, height)
             except (TypeError, ValueError):
                 pass
-    return heights
+        for bbox in candidate.get("bboxes") or []:
+            if not isinstance(bbox, Mapping):
+                continue
+            box_width = _positive_dimension(bbox.get("page_width")) or width
+            box_height = _positive_dimension(bbox.get("page_height")) or height
+            box_page = bbox.get("page")
+            if box_page not in (None, ""):
+                try:
+                    dimensions[int(box_page)] = (box_width, box_height)
+                except (TypeError, ValueError):
+                    pass
+    return dimensions
+
+
+def _merge_page_dimensions(*maps: Mapping[int, tuple[float, float]]) -> dict[int, tuple[float, float]]:
+    merged: dict[int, tuple[float, float]] = {}
+    for mapping in maps:
+        for page, size in mapping.items():
+            try:
+                page_number = int(page)
+            except (TypeError, ValueError):
+                continue
+            if page_number <= 0:
+                continue
+            width = _positive_dimension(size[0])
+            height = _positive_dimension(size[1])
+            if width and height:
+                merged[page_number] = (width, height)
+    return merged
+
+
+def _page_heights_from_dimensions(page_dimensions: Mapping[int, tuple[float, float]]) -> dict[int, float]:
+    return {page: height for page, (_, height) in page_dimensions.items()}
+
+
+def _bbox_within_page(bbox: Mapping[str, Any], page_width: float, page_height: float) -> bool:
+    if not _bbox_has_area(bbox):
+        return False
+    try:
+        x0 = float(bbox.get("x0", bbox.get("x", 0)))
+        y0 = float(bbox.get("y0", bbox.get("y", 0)))
+        x1 = float(bbox.get("x1", x0))
+        y1 = float(bbox.get("y1", y0))
+    except (TypeError, ValueError):
+        return False
+    return (
+        0 <= x0 <= page_width
+        and 0 <= x1 <= page_width
+        and 0 <= y0 <= page_height
+        and 0 <= y1 <= page_height
+        and x0 <= x1
+        and y0 <= y1
+    )
+
+
+def _stamp_bbox_page_dimensions(
+    bbox: Any,
+    *,
+    default_page: int | None,
+    page_dimensions: Mapping[int, tuple[float, float]],
+) -> dict[str, Any] | None:
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        try:
+            x0, y0, x1, y1 = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        except (TypeError, ValueError):
+            return None
+        page = default_page or 0
+        stamped: dict[str, Any] = {"page": page, "x0": x0, "y0": y0, "x1": x1, "y1": y1}
+    elif isinstance(bbox, Mapping):
+        stamped = dict(bbox)
+        page_raw = stamped.get("page", default_page)
+        try:
+            page = int(page_raw)
+        except (TypeError, ValueError):
+            page = 0
+        stamped["page"] = page
+    else:
+        return None
+    size = page_dimensions.get(int(stamped.get("page") or 0))
+    if not size:
+        return None
+    page_width, page_height = size
+    stamped["page_width"] = page_width
+    stamped["page_height"] = page_height
+    if not _bbox_within_page(stamped, page_width, page_height):
+        return None
+    return stamped
+
+
+def _apply_page_dimensions_to_sentences(
+    sentences: list[dict[str, Any]],
+    page_dimensions: Mapping[int, tuple[float, float]],
+) -> None:
+    for sentence in sentences:
+        default_page = sentence.get("page")
+        try:
+            default_page_number = int(default_page) if default_page not in (None, "") else None
+        except (TypeError, ValueError):
+            default_page_number = None
+        if default_page_number is None:
+            pages = sentence.get("pages") or []
+            if pages:
+                try:
+                    default_page_number = int(pages[0])
+                except (TypeError, ValueError):
+                    default_page_number = None
+
+        stamped_boxes: list[dict[str, Any]] = []
+        for raw in sentence.get("bboxes") or []:
+            stamped = _stamp_bbox_page_dimensions(
+                raw,
+                default_page=default_page_number,
+                page_dimensions=page_dimensions,
+            )
+            if stamped is not None:
+                stamped_boxes.append(stamped)
+        if stamped_boxes:
+            sentence["bboxes"] = stamped_boxes
+            sentence["bbox"] = stamped_boxes[0]
+            sentence["page"] = stamped_boxes[0].get("page")
+        elif sentence.get("bbox") not in (None, "", []):
+            stamped = _stamp_bbox_page_dimensions(
+                sentence.get("bbox"),
+                default_page=default_page_number,
+                page_dimensions=page_dimensions,
+            )
+            if stamped is not None:
+                sentence["bbox"] = stamped
+                sentence["bboxes"] = [stamped]
+                sentence["page"] = stamped.get("page")
+            else:
+                sentence.pop("bbox", None)
+                sentence["bboxes"] = []
+
+        primary_page = sentence.get("page")
+        try:
+            page_number = int(primary_page)
+        except (TypeError, ValueError):
+            page_number = 0
+        size = page_dimensions.get(page_number)
+        if size:
+            sentence["page_width"] = size[0]
+            sentence["page_height"] = size[1]
 
 
 def _bboxes_from_element_provenance(
     element: Mapping[str, Any],
     *,
-    page_heights: Mapping[int, float],
+    page_dimensions: Mapping[int, tuple[float, float]],
     default_page_height: float = 792.0,
 ) -> list[dict[str, Any]]:
     bboxes: list[dict[str, Any]] = []
@@ -131,11 +296,19 @@ def _bboxes_from_element_provenance(
             bottom = float(bbox_data["b"])
         except (KeyError, TypeError, ValueError):
             continue
-        page_height = float(page_heights.get(page, default_page_height))
+        page_height = float(page_dimensions.get(page, (0.0, default_page_height))[1])
+        page_width = float(page_dimensions.get(page, (612.0, default_page_height))[0])
         x0, y0, x1, y1 = _convert_bottomleft_to_topleft((left, top, right, bottom), page_height)
         if (x1 - x0) <= 0.1 or (y1 - y0) <= 0.1:
             continue
-        bboxes.append({"page": page, "x0": x0, "y0": y0, "x1": x1, "y1": y1})
+        candidate = {"page": page, "x0": x0, "y0": y0, "x1": x1, "y1": y1}
+        stamped = _stamp_bbox_page_dimensions(
+            candidate,
+            default_page=page,
+            page_dimensions=page_dimensions,
+        )
+        if stamped is not None:
+            bboxes.append(stamped)
     return bboxes
 
 
@@ -143,7 +316,7 @@ def _apply_provenance_bbox_fallback(
     sentences: list[dict[str, Any]],
     *,
     elements_by_id: Mapping[str, Mapping[str, Any]],
-    page_heights: Mapping[int, float],
+    page_dimensions: Mapping[int, tuple[float, float]],
 ) -> None:
     for sentence in sentences:
         if _sentence_has_bbox(sentence):
@@ -152,16 +325,14 @@ def _apply_provenance_bbox_fallback(
         element = elements_by_id.get(str(element_ids[0])) if element_ids else None
         if element is None:
             continue
-        bboxes = _bboxes_from_element_provenance(element, page_heights=page_heights)
+        bboxes = _bboxes_from_element_provenance(element, page_dimensions=page_dimensions)
         if not bboxes:
             continue
         sentence["bboxes"] = bboxes
         sentence["bbox"] = bboxes[0]
         sentence["page"] = bboxes[0].get("page")
-        if sentence.get("page_width") in (None, ""):
-            sentence["page_width"] = element.get("page_width")
-        if sentence.get("page_height") in (None, ""):
-            sentence["page_height"] = element.get("page_height")
+        sentence["page_width"] = bboxes[0].get("page_width")
+        sentence["page_height"] = bboxes[0].get("page_height")
         sentence["alignment_precision"] = "coarse"
 
 
@@ -292,11 +463,15 @@ def _align_coordinates(
     coordinate_candidates: list[dict[str, Any]],
     *,
     elements_by_id: Mapping[str, Mapping[str, Any]] | None = None,
+    page_dimensions: Mapping[int, tuple[float, float]] | None = None,
     max_span: int = 6,
 ) -> list[dict[str, Any]]:
     """Attach pdfplumber coordinates without replacing canonical Docling text."""
     candidates = list(coordinate_candidates or [])
-    page_heights = _page_heights_from_candidates(candidates)
+    dimensions = _merge_page_dimensions(
+        page_dimensions or {},
+        _page_dimensions_from_candidates(candidates),
+    )
     search_from = 0
     for sentence in canonical_sentences:
         target_text = str(sentence.get("text") or "")
@@ -341,8 +516,10 @@ def _align_coordinates(
         _apply_provenance_bbox_fallback(
             canonical_sentences,
             elements_by_id=elements_by_id,
-            page_heights=page_heights,
+            page_dimensions=dimensions,
         )
+    if dimensions:
+        _apply_page_dimensions_to_sentences(canonical_sentences, dimensions)
     return canonical_sentences
 
 
@@ -454,6 +631,10 @@ async def convert_pdf_and_project(
         # structure. pdfplumber contributes coordinates only when a candidate
         # can be aligned to an individual canonical sentence.
         sentences = project_sentences(payload)
+        page_dimensions = _merge_page_dimensions(
+            _page_size_map_from_pdf(data),
+            _page_dimensions_from_candidates(coordinate_candidates or []),
+        )
         elements_by_id = {
             str(item.get("element_id")): item
             for item in elements
@@ -463,6 +644,7 @@ async def convert_pdf_and_project(
             sentences,
             coordinate_candidates or [],
             elements_by_id=elements_by_id,
+            page_dimensions=page_dimensions,
         )
         payload["reading_projection"] = sentences
         published = await repo.complete_conversion(
@@ -510,6 +692,9 @@ async def convert_pdf_and_project(
 
 
 __all__ = [
+    "_apply_page_dimensions_to_sentences",
+    "_bbox_within_page",
+    "_bboxes_from_element_provenance",
     "conversion_filename",
     "convert_pdf_and_project",
     "current_extraction_contract_fingerprint",
