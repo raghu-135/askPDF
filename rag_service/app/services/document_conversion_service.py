@@ -335,7 +335,7 @@ def _align_coordinates(
         for key in ("bbox", "bboxes", "page_width", "page_height", "words", "font", "page", "pages"):
             if best.get(key) not in (None, [], ""):
                 sentence[key] = best[key]
-        sentence["alignment_precision"] = "exact" if _sentence_has_bbox(sentence) else "coarse"
+        sentence["alignment_precision"] = "exact"
         search_from = best_end + 1
     if elements_by_id:
         _apply_provenance_bbox_fallback(

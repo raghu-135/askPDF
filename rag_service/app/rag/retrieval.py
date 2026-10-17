@@ -293,9 +293,10 @@ def _document_stitch_group_key(chunk: Dict[str, Any]) -> tuple[str, str, str]:
     if table_id:
         return (file_hash, manifest_id, "table:" + str(table_id))
     section_id = str(metadata.get("section_id") or chunk.get("section_id") or file_hash)
-    synthetic = str(metadata.get("chunk_identity") or chunk.get("chunk_identity") or chunk.get("chunk_id") or "")
-    key = f"section:{section_id}|chunk:{synthetic}" if synthetic else f"section:{section_id}"
-    return (file_hash, manifest_id, key)
+    chunk_identity = str(metadata.get("chunk_identity") or chunk.get("chunk_identity") or "").strip()
+    if chunk_identity:
+        return (file_hash, manifest_id, f"section:{section_id}|identity:{chunk_identity}")
+    return (file_hash, manifest_id, f"section:{section_id}")
 
 
 def _chunk_body_text(chunk: Dict[str, Any]) -> str:
