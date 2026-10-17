@@ -81,7 +81,8 @@ import {
   DeepResearchIssueList,
   DeepResearchProvisionalAnswer,
 } from './conversation/DeepResearchDecisionContent';
-import { budgetUsageFromTask, countReviewIssues, formatBudgetMeterLine, RESEARCH_BUDGET_TOOLTIP } from '../lib/deep-research-decision-ui';
+import { budgetUsageFromTask, countReviewIssues } from '../lib/deep-research-decision-ui';
+import { DeepResearchBudgetChips } from './conversation/DeepResearchBudgetChips';
 import { formatAgentTaskStatus, formatTimelineItemStatus } from '../lib/deep-research-task-status';
 import { WorkbenchSelect } from './workbench/WorkbenchToolbar';
 
@@ -687,7 +688,17 @@ export default function DeepResearchTaskPanel({
   const requestedWebUnavailable = webSearchMode !== 'off' && webSearchField?.enabled === false;
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
   const liveBudgetSnapshot = useMemo(() => budgetUsageFromTask(task), [task]);
-  const reviewIssueCounts = useMemo(() => countReviewIssues(pendingInterrupt), [pendingInterrupt]);
+  const reviewTodoTitles = useMemo(() => {
+    const map: Record<string, string> = {};
+    todos.forEach((todo) => {
+      if (todo.id && todo.title) map[todo.id] = todo.title;
+    });
+    return map;
+  }, [todos]);
+  const reviewIssueCounts = useMemo(
+    () => countReviewIssues(pendingInterrupt, reviewTodoTitles),
+    [pendingInterrupt, reviewTodoTitles],
+  );
   const isTaskPauseInterrupt = pendingInterrupt?.type === 'task_pause' || pendingInterrupt?.node_id === 'task_pause_gate';
   const approvalTodoIds = Array.isArray(pendingInterrupt?.approval_scope?.todo_ids)
     ? pendingInterrupt.approval_scope.todo_ids.map(String)
@@ -728,6 +739,17 @@ export default function DeepResearchTaskPanel({
   const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
+  const reviewPanelHeader = pendingInterrupt ? (
+    <>
+      <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
+      <DeepResearchDecisionLead
+        pending={pendingInterrupt}
+        task={task}
+        isBudgetReview={isBudgetReview}
+        todoTitles={reviewTodoTitles}
+      />
+    </>
+  ) : null;
   const reviewCitationSources = useMemo(
     () => items.flatMap((item) => (item.sources || []).map((source) => {
       const locator = source.page ?? 0;
@@ -786,7 +808,16 @@ export default function DeepResearchTaskPanel({
   return <ConversationPanelTemplate
     ref={panelRef}
     sx={{ p: 1 }}
-    transcriptSx={reviewPanelOpen ? { flexGrow: 0, maxHeight: 160, overflow: 'hidden' } : undefined}
+    transcriptSx={reviewPanelOpen ? {
+      flex: '0 0 auto',
+      flexShrink: 0,
+      minHeight: 120,
+      maxHeight: '24vh',
+      overflow: 'hidden',
+    } : {
+      flex: 1,
+      minHeight: 0,
+    }}
     header={<ConversationHeader
       models={models}
       model={frozen ? String(task?.configuration?.llm_model || model) : model}
@@ -831,12 +862,7 @@ export default function DeepResearchTaskPanel({
         Model, agent, and context window are locked for this task. Start a new Deep Research task to change them.
       </Alert>}
       {liveBudgetSnapshot && task && !pendingInterrupt && <Box sx={{ mb: 1 }}>
-        <Chip
-          size="small"
-          variant="outlined"
-          title={RESEARCH_BUDGET_TOOLTIP}
-          label={`Research tranche ${liveBudgetSnapshot.trancheIndex} · ${formatBudgetMeterLine(liveBudgetSnapshot)}`}
-        />
+        <DeepResearchBudgetChips snapshot={liveBudgetSnapshot} />
       </Box>}
       {task?.research_canvases?.length ? (
         <DeepResearchTaskDeliverables
@@ -846,7 +872,7 @@ export default function DeepResearchTaskPanel({
         />
       ) : null}
     </>}
-    transcript={<ConversationTranscriptFrame>{items.map((item) => <TimelineBubble
+    transcript={<ConversationTranscriptFrame sx={reviewPanelOpen ? { flex: 1, minHeight: 0, maxHeight: '100%' } : undefined}>{items.map((item) => <TimelineBubble
       key={item.id}
       item={item}
       taskId={task?.id || ''}
@@ -872,6 +898,8 @@ export default function DeepResearchTaskPanel({
       variant="approval"
       rootRef={panelRef}
       horizontalInset={1}
+      fillColumn
+      fixedHeader={reviewPanelHeader}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField
           label="Optional guidance for the next tranche"
@@ -887,9 +915,7 @@ export default function DeepResearchTaskPanel({
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
     >
-      <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
-      <DeepResearchDecisionLead pending={pendingInterrupt} task={task} isBudgetReview />
-      <DeepResearchIssueList pending={pendingInterrupt} />
+      <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} />
       <DeepResearchProvisionalAnswer
         content={pendingInterrupt.provisional_answer}
         emptyMessage="No usable provisional answer was produced. Continue or steer the research."
@@ -900,6 +926,8 @@ export default function DeepResearchTaskPanel({
       variant="approval"
       rootRef={panelRef}
       horizontalInset={1}
+      fillColumn
+      fixedHeader={reviewPanelHeader}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField
           label="Guidance for the next research tranche"
@@ -933,9 +961,7 @@ export default function DeepResearchTaskPanel({
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
     >
-      <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
-      <DeepResearchDecisionLead pending={pendingInterrupt} task={task} isBudgetReview={false} />
-      <DeepResearchIssueList pending={pendingInterrupt} />
+      <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} />
       {pendingInterrupt.provisional_answer ? (
         <DeepResearchProvisionalAnswer
           content={pendingInterrupt.provisional_answer}

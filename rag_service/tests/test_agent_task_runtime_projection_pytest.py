@@ -790,6 +790,15 @@ def test_timeline_run_error_falls_back_to_debug_diagnostics():
     assert "OpenRouter" in error["safe_message"]
 
 
+def test_enrich_result_gaps_labels_todo_ids():
+    gaps = _enrich_result_gaps(
+        {},
+        ["todo-1", "Web benchmarks were requested but web search is off for this task."],
+        {"plan_todos": [{"id": "todo-1", "title": "Gather live web evidence"}]},
+    )
+    assert gaps[0] == "Gather live web evidence (todo-1)"
+
+
 def test_result_review_body_mentions_budget_and_issues():
     budget = initial_budget_state({"max_model_calls": 3, "max_model_tokens": 1000, "max_tool_calls": 10, "max_active_runtime_ms": 60000})
     budget["tranche_usage"]["model_calls"] = 3

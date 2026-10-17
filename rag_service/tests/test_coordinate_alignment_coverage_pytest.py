@@ -70,7 +70,7 @@ def test_provenance_fallback_assigns_non_zero_bbox():
     assert _sentence_has_bbox(aligned[0])
 
 
-@pytest.mark.slow
+@pytest.mark.integration
 def test_alignment_bbox_coverage_on_multi_column_pdf(alignment_columns_pdf_bytes):
     try:
         from app.services.document_pipeline import _sentence_nlp
