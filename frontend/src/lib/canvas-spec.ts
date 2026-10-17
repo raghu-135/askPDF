@@ -7,6 +7,7 @@ export type CanvasCitation = {
   label: string;
   file_hash?: string | null;
   sentence_id?: number | null;
+  sentence_ids?: number[] | null;
   url?: string | null;
   memory_id?: string | null;
   message_id?: string | null;
@@ -146,10 +147,16 @@ export const documentCitationTarget = (
 ): DocumentCanvasCitationTarget | null => {
   if (citation.kind !== 'document' || !citation.file_hash) return null;
   const sentenceId = Number.isInteger(citation.sentence_id) ? Number(citation.sentence_id) : null;
+  const explicitIds = Array.isArray(citation.sentence_ids)
+    ? citation.sentence_ids.filter((value) => Number.isInteger(value)).map((value) => Number(value))
+    : [];
+  const sentenceIds = explicitIds.length > 0
+    ? explicitIds
+    : (sentenceId != null ? [sentenceId] : undefined);
   return {
     fileHash: citation.file_hash,
-    sentenceId,
-    sentenceIds: sentenceId != null ? [sentenceId] : undefined,
+    sentenceId: sentenceId ?? (sentenceIds?.[0] ?? null),
+    sentenceIds,
     play: false,
   };
 };

@@ -3,10 +3,23 @@ import test from 'node:test';
 
 import { documentCitationTarget, layoutCanvasDag, canvasSpecCounts } from '../src/lib/canvas-spec.ts';
 
+test('chunk citations can highlight every sentence id', () => {
+  assert.deepEqual(
+    documentCitationTarget({
+      kind: 'document',
+      label: 'Chunk',
+      file_hash: 'abc',
+      sentence_id: 7,
+      sentence_ids: [7, 8, 9],
+    }),
+    { fileHash: 'abc', sentenceId: 7, sentenceIds: [7, 8, 9], play: false },
+  );
+});
+
 test('document citations expose file hash and sentence id', () => {
   assert.deepEqual(
     documentCitationTarget({ kind: 'document', label: 'Paper', file_hash: 'abc', sentence_id: 4 }),
-    { fileHash: 'abc', sentenceId: 4, sentenceIds: [4] },
+    { fileHash: 'abc', sentenceId: 4, sentenceIds: [4], play: false },
   );
   assert.equal(documentCitationTarget({ kind: 'web', label: 'Note', url: 'https://example.com' }), null);
 });

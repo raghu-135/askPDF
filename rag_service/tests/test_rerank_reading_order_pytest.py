@@ -54,9 +54,11 @@ def test_reassemble_section_chunks_in_reading_order_despite_rerank_scores():
     ]
     groups = reassemble_document_chunks_by_reading_order(chunks)
     assert len(groups) == 2
-    assert [item["metadata"]["chunk_index"] for item in groups[0]] == [0, 1, 2]
-    assert " ".join(_combine_group_bodies(groups[0]).split()) == "first second third"
-    assert groups[1][0]["metadata"]["section_id"] == "s2"
+    section_group = next(group for group in groups if group[0]["metadata"]["section_id"] == "s1")
+    assert [item["metadata"]["chunk_index"] for item in section_group] == [0, 1, 2]
+    assert " ".join(_combine_group_bodies(section_group).split()) == "first second third"
+    other_group = next(group for group in groups if group[0]["metadata"]["section_id"] == "s2")
+    assert other_group[0]["metadata"]["section_id"] == "s2"
 
 
 def test_reassemble_keeps_distinct_chunks_when_table_id_missing():
@@ -64,6 +66,8 @@ def test_reassemble_keeps_distinct_chunks_when_table_id_missing():
         _chunk(file_hash="f1", section_id="s1", chunk_index=0, text="table-one", chunk_id="table-one-0"),
         _chunk(file_hash="f1", section_id="s1", chunk_index=1, text="table-two", chunk_id="table-two-0"),
     ]
+    chunks[0]["metadata"]["chunk_identity"] = "table-one"
+    chunks[1]["metadata"]["chunk_identity"] = "table-two"
     groups = reassemble_document_chunks_by_reading_order(chunks)
     assert len(groups) == 2
     assert _combine_group_bodies(groups[0]) == "table-one"

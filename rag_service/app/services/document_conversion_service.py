@@ -6,6 +6,7 @@ import hashlib
 import re
 import asyncio
 import logging
+import unicodedata
 from difflib import SequenceMatcher
 from typing import Any, Mapping
 
@@ -40,6 +41,130 @@ def _normalise(text: str) -> str:
     return " ".join(str(text or "").split()).casefold()
 
 
+_LIGATURE_REPLACEMENTS = (
+    ("ﬁ", "fi"),
+    ("ﬂ", "fl"),
+    ("ﬀ", "ff"),
+    ("ﬃ", "ffi"),
+    ("ﬄ", "ffl"),
+)
+
+
+def _normalize_match_text(text: str) -> str:
+    """Normalize text for near-exact sentence alignment (whitespace, unicode, hyphenation)."""
+    value = unicodedata.normalize("NFKC", str(text or ""))
+    for source, target in _LIGATURE_REPLACEMENTS:
+        value = value.replace(source, target)
+    value = value.replace("\u00ad", "")
+    value = re.sub(r"-\s*\n\s*", "", value)
+    value = re.sub(r"-\s+", "", value)
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"\s*([,.;:!?])\s*", r"\1", value)
+    return value.casefold().strip()
+
+
+def _bbox_has_area(bbox: Any) -> bool:
+    if not isinstance(bbox, Mapping):
+        return False
+    try:
+        x0 = float(bbox.get("x0", bbox.get("x", 0)))
+        y0 = float(bbox.get("y0", bbox.get("y", 0)))
+        x1 = float(bbox.get("x1", x0))
+        y1 = float(bbox.get("y1", y0))
+    except (TypeError, ValueError):
+        return False
+    return (x1 - x0) > 0.1 and (y1 - y0) > 0.1
+
+
+def _sentence_has_bbox(sentence: Mapping[str, Any]) -> bool:
+    for key in ("bboxes", "bbox"):
+        raw = sentence.get(key)
+        if isinstance(raw, list):
+            if any(_bbox_has_area(item) for item in raw):
+                return True
+        elif _bbox_has_area(raw):
+            return True
+    return False
+
+
+def _convert_bottomleft_to_topleft(bbox: tuple[float, float, float, float], page_height: float) -> tuple[float, float, float, float]:
+    left, top, right, bottom = bbox
+    return (left, page_height - top, right, page_height - bottom)
+
+
+def _page_heights_from_candidates(candidates: list[dict[str, Any]]) -> dict[int, float]:
+    heights: dict[int, float] = {}
+    for candidate in candidates:
+        page_height = candidate.get("page_height")
+        if page_height in (None, ""):
+            continue
+        for page in _pages(candidate):
+            heights[page] = float(page_height)
+        page = candidate.get("page")
+        if page not in (None, ""):
+            try:
+                heights[int(page)] = float(page_height)
+            except (TypeError, ValueError):
+                pass
+    return heights
+
+
+def _bboxes_from_element_provenance(
+    element: Mapping[str, Any],
+    *,
+    page_heights: Mapping[int, float],
+    default_page_height: float = 792.0,
+) -> list[dict[str, Any]]:
+    bboxes: list[dict[str, Any]] = []
+    for prov in element.get("provenance") or []:
+        if not isinstance(prov, Mapping):
+            continue
+        page_no = prov.get("page_no")
+        bbox_data = prov.get("bbox")
+        if page_no in (None, "") or not isinstance(bbox_data, Mapping):
+            continue
+        try:
+            page = int(page_no)
+            left = float(bbox_data["l"])
+            top = float(bbox_data["t"])
+            right = float(bbox_data["r"])
+            bottom = float(bbox_data["b"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        page_height = float(page_heights.get(page, default_page_height))
+        x0, y0, x1, y1 = _convert_bottomleft_to_topleft((left, top, right, bottom), page_height)
+        if (x1 - x0) <= 0.1 or (y1 - y0) <= 0.1:
+            continue
+        bboxes.append({"page": page, "x0": x0, "y0": y0, "x1": x1, "y1": y1})
+    return bboxes
+
+
+def _apply_provenance_bbox_fallback(
+    sentences: list[dict[str, Any]],
+    *,
+    elements_by_id: Mapping[str, Mapping[str, Any]],
+    page_heights: Mapping[int, float],
+) -> None:
+    for sentence in sentences:
+        if _sentence_has_bbox(sentence):
+            continue
+        element_ids = sentence.get("source_element_ids") or []
+        element = elements_by_id.get(str(element_ids[0])) if element_ids else None
+        if element is None:
+            continue
+        bboxes = _bboxes_from_element_provenance(element, page_heights=page_heights)
+        if not bboxes:
+            continue
+        sentence["bboxes"] = bboxes
+        sentence["bbox"] = bboxes[0]
+        sentence["page"] = bboxes[0].get("page")
+        if sentence.get("page_width") in (None, ""):
+            sentence["page_width"] = element.get("page_width")
+        if sentence.get("page_height") in (None, ""):
+            sentence["page_height"] = element.get("page_height")
+        sentence["alignment_precision"] = "coarse"
+
+
 def _pages(value: Mapping[str, Any]) -> set[int]:
     values = list(value.get("pages") or [])
     if value.get("page") not in (None, ""):
@@ -56,15 +181,56 @@ def _pages(value: Mapping[str, Any]) -> set[int]:
 
 
 def _verified_text_match(target: str, candidate: str) -> bool:
-    """Accept only a full sentence match, allowing modest line-wrap drift."""
-    if not target or not candidate:
+    """Accept a near-exact full-sentence match after normalization."""
+    left = _normalize_match_text(target)
+    right = _normalize_match_text(candidate)
+    if not left or not right:
         return False
-    if target == candidate:
+    if left == right:
         return True
-    shorter, longer = sorted((target, candidate), key=len)
-    if len(shorter) < 24 or shorter not in longer:
+    shorter, longer = sorted((left, right), key=len)
+    if shorter in longer and len(shorter) / max(len(longer), 1) >= 0.85:
+        return True
+    return SequenceMatcher(None, left, right).ratio() >= 0.94
+
+
+def _candidate_compatible(sentence: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
+    pages = _pages(sentence)
+    candidate_pages = _pages(candidate)
+    if pages and candidate_pages and not pages.intersection(candidate_pages):
         return False
-    return len(shorter) / len(longer) >= 0.8 or SequenceMatcher(None, target, candidate).ratio() >= 0.92
+    if sentence.get("label") and candidate.get("label") and sentence.get("label") != candidate.get("label"):
+        return False
+    sentence_refs = {str(value) for value in sentence.get("source_element_refs") or [] if value}
+    candidate_ref = str(candidate.get("source_ref") or "")
+    if sentence_refs and candidate_ref and candidate_ref not in sentence_refs:
+        return False
+    return True
+
+
+def _merge_candidate_span(candidates: list[Mapping[str, Any]]) -> dict[str, Any]:
+    texts = [str(item.get("text") or "") for item in candidates]
+    merged_text = " ".join(part for part in texts if part).strip()
+    bboxes: list[dict[str, Any]] = []
+    for item in candidates:
+        raw = item.get("bboxes") or []
+        if isinstance(raw, list):
+            bboxes.extend([box for box in raw if isinstance(box, Mapping)])
+        elif isinstance(item.get("bbox"), Mapping):
+            bboxes.append(dict(item["bbox"]))
+    merged: dict[str, Any] = {"text": merged_text, "bboxes": bboxes}
+    for key in ("bbox", "page_width", "page_height", "words", "font", "page", "label", "source_ref"):
+        for item in candidates:
+            if item.get(key) not in (None, [], ""):
+                merged[key] = item[key]
+                break
+    pages: set[int] = set()
+    for item in candidates:
+        pages.update(_pages(item))
+    if pages:
+        merged["pages"] = sorted(pages)
+        merged["page"] = sorted(pages)[0]
+    return merged
 
 
 def current_extraction_fingerprint(data: bytes, *, merge_multi_bbox: bool = True) -> str:
@@ -124,40 +290,59 @@ async def enqueue_pdf_conversion(
 def _align_coordinates(
     canonical_sentences: list[dict[str, Any]],
     coordinate_candidates: list[dict[str, Any]],
+    *,
+    elements_by_id: Mapping[str, Mapping[str, Any]] | None = None,
+    max_span: int = 6,
 ) -> list[dict[str, Any]]:
     """Attach pdfplumber coordinates without replacing canonical Docling text."""
-    unused = list(coordinate_candidates or [])
+    candidates = list(coordinate_candidates or [])
+    page_heights = _page_heights_from_candidates(candidates)
+    search_from = 0
     for sentence in canonical_sentences:
-        target = _normalise(sentence.get("text", ""))
-        pages = _pages(sentence)
-        best = None
-        best_score = 0.0
-        for candidate in unused:
-            candidate_text = _normalise(candidate.get("text", ""))
-            candidate_pages = _pages(candidate)
-            if pages and (not candidate_pages or not pages.intersection(candidate_pages)):
-                continue
-            if not target or not candidate_text:
-                continue
-            if sentence.get("label") and candidate.get("label") and sentence.get("label") != candidate.get("label"):
-                continue
-            sentence_refs = {str(value) for value in sentence.get("source_element_refs") or [] if value}
-            candidate_ref = str(candidate.get("source_ref") or "")
-            if sentence_refs and (not candidate_ref or candidate_ref not in sentence_refs):
-                continue
-            if not _verified_text_match(target, candidate_text):
-                continue
-            score = SequenceMatcher(None, target, candidate_text).ratio()
-            if score > best_score:
-                best, best_score = candidate, score
-        if best is None:
-            sentence["alignment_precision"] = "coarse"
+        target_text = str(sentence.get("text") or "")
+        target = _normalize_match_text(target_text)
+        if not target:
+            sentence.setdefault("alignment_precision", "coarse")
             continue
-        for key in ("bbox", "bboxes", "page_width", "page_height", "words", "font", "page"):
+        best: dict[str, Any] | None = None
+        best_score = 0.0
+        best_end = search_from
+        for start in range(search_from, len(candidates)):
+            span: list[Mapping[str, Any]] = []
+            for end in range(start, min(start + max_span, len(candidates))):
+                candidate = candidates[end]
+                if not _candidate_compatible(sentence, candidate):
+                    break
+                span.append(candidate)
+                merged = _merge_candidate_span(span)
+                candidate_text = _normalize_match_text(str(merged.get("text") or ""))
+                if not candidate_text:
+                    continue
+                if not _verified_text_match(target_text, str(merged.get("text") or "")):
+                    continue
+                score = SequenceMatcher(None, target, candidate_text).ratio()
+                if score >= best_score:
+                    best = merged
+                    best_score = score
+                    best_end = end
+                if target == candidate_text:
+                    break
+            if best is not None and target == _normalize_match_text(str(best.get("text") or "")):
+                break
+        if best is None:
+            sentence.setdefault("alignment_precision", "coarse")
+            continue
+        for key in ("bbox", "bboxes", "page_width", "page_height", "words", "font", "page", "pages"):
             if best.get(key) not in (None, [], ""):
                 sentence[key] = best[key]
-        sentence["alignment_precision"] = "exact" if sentence.get("bboxes") else "coarse"
-        unused.remove(best)
+        sentence["alignment_precision"] = "exact"
+        search_from = best_end + 1
+    if elements_by_id:
+        _apply_provenance_bbox_fallback(
+            canonical_sentences,
+            elements_by_id=elements_by_id,
+            page_heights=page_heights,
+        )
     return canonical_sentences
 
 
@@ -269,7 +454,16 @@ async def convert_pdf_and_project(
         # structure. pdfplumber contributes coordinates only when a candidate
         # can be aligned to an individual canonical sentence.
         sentences = project_sentences(payload)
-        sentences = _align_coordinates(sentences, coordinate_candidates or [])
+        elements_by_id = {
+            str(item.get("element_id")): item
+            for item in elements
+            if isinstance(item, Mapping) and item.get("element_id")
+        }
+        sentences = _align_coordinates(
+            sentences,
+            coordinate_candidates or [],
+            elements_by_id=elements_by_id,
+        )
         payload["reading_projection"] = sentences
         published = await repo.complete_conversion(
             file_hash=file_hash,

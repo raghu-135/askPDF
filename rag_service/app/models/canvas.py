@@ -45,6 +45,7 @@ class CanvasCitation(CanvasModel):
     label: str = Field(min_length=1, max_length=MAX_CITATION_LABEL_CHARS)
     file_hash: Optional[str] = None
     sentence_id: Optional[int] = Field(default=None, ge=0)
+    sentence_ids: Optional[list[int]] = Field(default=None, max_length=64)
     url: Optional[str] = None
     memory_id: Optional[str] = None
     message_id: Optional[str] = None

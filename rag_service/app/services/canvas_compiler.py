@@ -9,6 +9,8 @@ from sqlalchemy import or_, select
 from app.agent.evidence_contract import (
     RECORD_IDENTIFIER_PATTERN,
     SOURCE_IDENTIFIER_PATTERN,
+    format_document_source_locator,
+    parse_document_source_locator,
     normalized_canonical_source_id,
     normalized_source_url,
 )
@@ -46,7 +48,7 @@ class ResolvedClaim:
     group: Optional[str]
 
 
-async def _first_sentence_for_chunk(file_hash: str, locator: str) -> int | None:
+async def _chunk_row_for_locator(file_hash: str, locator: str):
     async with async_session_maker() as session:
         async with session.begin():
             result = await session.execute(
@@ -63,9 +65,14 @@ async def _first_sentence_for_chunk(file_hash: str, locator: str) -> int | None:
                 .order_by(DocumentChunk.chunk_order)
                 .limit(1)
             )
-            row = result.scalar_one_or_none()
-    if row is None:
-        return None
+            return result.scalar_one_or_none()
+
+
+async def _chunk_locator_exists(file_hash: str, locator: str) -> bool:
+    return await _chunk_row_for_locator(file_hash, locator) is not None
+
+
+async def _parsed_sentence_catalog(file_hash: str) -> dict[int, dict[str, Any]]:
     parsed = await get_file_parsed_sentences(file_hash)
     by_id: dict[int, dict[str, Any]] = {}
     for item in (parsed or {}).get("sentences") or []:
@@ -75,6 +82,15 @@ async def _first_sentence_for_chunk(file_hash: str, locator: str) -> int | None:
             by_id[int(item.get("id"))] = item
         except (TypeError, ValueError):
             continue
+    return by_id
+
+
+async def _readable_sentence_ids_for_chunk(file_hash: str, locator: str) -> tuple[int | None, list[int]]:
+    row = await _chunk_row_for_locator(file_hash, locator)
+    if row is None:
+        return None, []
+    by_id = await _parsed_sentence_catalog(file_hash)
+    readable: list[int] = []
     for raw in row.sentence_ids or []:
         try:
             sentence_id = int(raw)
@@ -85,8 +101,14 @@ async def _first_sentence_for_chunk(file_hash: str, locator: str) -> int | None:
             continue
         if item.get("readable") is False:
             continue
-        return sentence_id
-    return None
+        readable.append(sentence_id)
+    first = readable[0] if readable else None
+    return first, readable
+
+
+async def _first_sentence_for_chunk(file_hash: str, locator: str) -> int | None:
+    first, _readable = await _readable_sentence_ids_for_chunk(file_hash, locator)
+    return first
 
 
 async def _sentence_exists(file_hash: str, sentence_id: int) -> bool:
@@ -127,7 +149,7 @@ async def _canonicalize_draft_source_id(
                     )
                 ).scalar_one_or_none()
                 if row is not None and row.file_hash in thread_file_hashes:
-                    return f"doc:{row.file_hash}:{row.source_id}"
+                    return f"doc:{row.file_hash}:{format_document_source_locator({'chunk_id': row.chunk_id or row.source_id})}"
             row = (
                 await session.execute(
                     select(DocumentChunk)
@@ -139,7 +161,7 @@ async def _canonicalize_draft_source_id(
                 )
             ).scalar_one_or_none()
             if row is not None and row.file_hash in thread_file_hashes:
-                return f"doc:{row.file_hash}:{row.source_id}"
+                return f"doc:{row.file_hash}:{format_document_source_locator({'chunk_id': row.chunk_id or row.source_id})}"
     return ""
 
 
@@ -150,23 +172,44 @@ async def _citation_for_document_locator(
     default_label: str,
 ) -> tuple[CanvasCitation, Optional[tuple[str, int]]]:
     quote: Optional[tuple[str, int]] = None
-    if locator.isdigit():
-        sentence_id = int(locator)
+    sentence_ids: list[int] = []
+    kind, token = parse_document_source_locator(locator)
+    if kind == "sentence":
+        try:
+            sentence_id = int(token)
+        except ValueError:
+            raise CanvasCompileError("unknown_sentence", f"sentence locator is invalid for doc:{file_hash}:{locator}")
         if not await _sentence_exists(file_hash, sentence_id):
             raise CanvasCompileError(
                 "unknown_sentence",
                 f"sentence_id {sentence_id} was not found for doc:{file_hash}:{locator}",
             )
         quote = (file_hash, sentence_id)
-    else:
-        sentence_id = await _first_sentence_for_chunk(file_hash, locator)
-        if sentence_id is not None and await _sentence_exists(file_hash, sentence_id):
+        sentence_ids = [sentence_id]
+    elif kind == "legacy":
+        legacy_id = token
+        sentence_exists = await _sentence_exists(file_hash, int(legacy_id))
+        chunk_exists = await _chunk_locator_exists(file_hash, legacy_id)
+        if sentence_exists and not chunk_exists:
+            sentence_id = int(legacy_id)
             quote = (file_hash, sentence_id)
+            sentence_ids = [sentence_id]
+        else:
+            first, readable = await _readable_sentence_ids_for_chunk(file_hash, legacy_id)
+            if first is not None:
+                quote = (file_hash, first)
+            sentence_ids = readable
+    else:
+        first, readable = await _readable_sentence_ids_for_chunk(file_hash, token)
+        if first is not None and await _sentence_exists(file_hash, first):
+            quote = (file_hash, first)
+        sentence_ids = readable
     citation = CanvasCitation(
         kind="document",
         label=default_label[:160],
         file_hash=file_hash,
         sentence_id=quote[1] if quote else None,
+        sentence_ids=sentence_ids or None,
     )
     return citation, quote
 
@@ -191,7 +234,7 @@ async def _resolve_src_alias(
         if not chunks:
             continue
         chunk = chunks[0]
-        locator = str(chunk.chunk_id or chunk.source_id or "")
+        locator = format_document_source_locator({"chunk_id": chunk.chunk_id or chunk.source_id})
         if not locator:
             continue
         return await _citation_for_document_locator(
@@ -308,6 +351,7 @@ def _unique_citations(claims: list[ResolvedClaim]) -> list[CanvasCitation]:
                 citation.kind,
                 citation.file_hash,
                 citation.sentence_id,
+                tuple(citation.sentence_ids or ()),
                 citation.url,
                 citation.memory_id,
                 citation.message_id,

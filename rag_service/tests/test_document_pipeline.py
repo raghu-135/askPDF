@@ -204,7 +204,7 @@ def test_table_projection_does_not_invent_headers_for_native_cells():
 def test_pipeline_versions_are_extraction_v7_and_table_pack_v8():
     from app.services.document_pipeline import EXTRACTION_PIPELINE_VERSION, RETRIEVAL_CHUNKING_VERSION
 
-    assert EXTRACTION_PIPELINE_VERSION == "docling-pdf-v7"
+    assert EXTRACTION_PIPELINE_VERSION == "docling-pdf-v8"
     assert RETRIEVAL_CHUNKING_VERSION == "table-pack-v8"
 
 

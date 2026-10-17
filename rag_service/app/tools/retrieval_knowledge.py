@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from collections import defaultdict
-from typing import Any
+from typing import Any, Mapping
 
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
@@ -95,6 +95,18 @@ def _normalise_pages(value: Any) -> list[int]:
     return sorted(pages)
 
 
+def _thread_file_name(file_hash: Any, document_lookup: Mapping[str, Any] | None) -> str | None:
+    if not file_hash or not document_lookup:
+        return None
+    raw = document_lookup.get(str(file_hash))
+    if isinstance(raw, dict):
+        name = str(raw.get("file_name") or raw.get("title") or "").strip()
+        return name or None
+    if isinstance(raw, str):
+        return str(raw).strip() or None
+    return None
+
+
 def _source_from_chunk(
     chunk: Any,
     *,
@@ -104,6 +116,7 @@ def _source_from_chunk(
     manifest_id: str | None = None,
     extraction_fingerprint: str | None = None,
     chunking_fingerprint: str | None = None,
+    document_lookup: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata = dict(getattr(chunk, "metadata_json", None) or {}) if not isinstance(chunk, dict) else dict(chunk.get("metadata") or {})
     get = chunk.get if isinstance(chunk, dict) else lambda key, default=None: getattr(chunk, key, default)
@@ -156,13 +169,17 @@ def _source_from_chunk(
         or get("sentence_ids", None)
         or []
     )
-    file_name = str(
-        metadata.get("file_name")
-        or get("file_name", None)
-        or metadata.get("title")
-        or get("title", None)
-        or ""
-    ).strip() or None
+    file_name = (
+        _thread_file_name(get("file_hash"), document_lookup)
+        or str(
+            metadata.get("file_name")
+            or get("file_name", None)
+            or metadata.get("title")
+            or get("title", None)
+            or ""
+        ).strip()
+        or None
+    )
     return {
         "source_id": source_id,
         "file_hash": get("file_hash"),
@@ -403,7 +420,11 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
             for group in selected_groups:
                 group_sources: list[dict[str, Any]] = []
                 for item in group:
-                    source = _source_from_chunk(item, score=item.get("rerank_score", item.get("score")))
+                    source = _source_from_chunk(
+                        item,
+                        score=item.get("rerank_score", item.get("score")),
+                        document_lookup=lookup,
+                    )
                     group_sources.append(source)
                     sources.append(source)
                 combined_text = _combine_group_bodies(group)
@@ -721,6 +742,7 @@ async def read_context(request: ReadContextRequest, context: ToolInvocationConte
                     manifest_id=manifest_id,
                     extraction_fingerprint=canonical.extraction_fingerprint,
                     chunking_fingerprint=str(selected_manifest.chunking_fingerprint or ""),
+                    document_lookup=lookup,
                 )
             )
             consumed += 1
