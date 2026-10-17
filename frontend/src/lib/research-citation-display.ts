@@ -53,9 +53,17 @@ function docIdFallbackLabel(sourceId: string): string | null {
   return `document, section ${locator}`;
 }
 
+const COMBINED_PAREN_CITATION_PATTERN = /\(([^)]+\.pdf,\s*page\s+\d+)\s+(doc:[^\s)]+)\)/gi;
+
 export function rewriteDocCitationTokens(content: string, displayMap: Map<string, string>): string {
-  if (!content.trim() || !displayMap.size) return content;
+  if (!content.trim()) return content;
   let result = content;
+  result = result.replace(COMBINED_PAREN_CITATION_PATTERN, (_match, humanLabel: string, sourceId: string) => {
+    const id = String(sourceId || '').trim();
+    const label = (displayMap.size ? displayMap.get(id) : undefined) || String(humanLabel || '').trim();
+    return `${label} (\`${id}\`)`;
+  });
+  if (!displayMap.size) return result;
   displayMap.forEach((label, id) => {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const replacement = `${label} (\`${id}\`)`;
