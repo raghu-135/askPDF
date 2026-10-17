@@ -992,6 +992,7 @@ export default function DeepResearchTaskPanel({
         <DeepResearchProvisionalAnswer
           content={pendingInterrupt.provisional_answer}
           citationSources={timelineCitationSources}
+          defaultCollapsed={false}
         />
       ) : null}
     </ResizableDecisionPanel> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel

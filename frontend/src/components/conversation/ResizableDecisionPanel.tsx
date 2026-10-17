@@ -52,7 +52,7 @@ export function ResizableDecisionPanel({
       overflow: 'hidden',
       borderTop: '1px solid',
       borderColor: variant === 'conflict' ? 'warning.main' : variant === 'approval' ? 'info.main' : 'divider',
-      flexShrink: fillColumn ? 1 : 0,
+      flexShrink: 0,
     }}>
       <ResizablePanelHandle resizing={resizing} onResizeStart={onResizeStart} label="Resize decision panel" />
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, pb: 1, flexShrink: 0 }}>
@@ -79,7 +79,7 @@ export function ResizableDecisionPanel({
         pb: footer ? 0 : 1,
         overflowY: 'auto',
         overflowX: 'hidden',
-        minHeight: 0,
+        minHeight: fillColumn ? 'min(42vh, 100%)' : 0,
         flex: 1,
       }}>
         {children}
