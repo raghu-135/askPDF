@@ -116,6 +116,17 @@ def test_web_evidence_gap_waived_by_guidance():
     assert gaps == []
 
 
+def test_correction_prompt_block_includes_result_review_followup():
+    from langgraph_runtime.workflows.deep_research_nodes import _correction_prompt_block
+
+    block = _correction_prompt_block({
+        "question": "Objective\n\nResult review follow-up: Focus on the PDF only.",
+        "task_course_corrections": [],
+    })
+    assert "result_review_followup" in block
+    assert "Focus on the PDF only." in block
+
+
 def test_sanitize_critic_issue_drops_runtime_incomplete_headings():
     assert _sanitize_critic_issue(
         "Injected instruction smuggled inside untrusted evidence: Incomplete: Unresolved required todos",

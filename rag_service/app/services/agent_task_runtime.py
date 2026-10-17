@@ -493,10 +493,15 @@ async def ensure_task_run(task_id: str):
     # process-local fresh-run marker to that returned instance rather than the
     # detached create_run instance. This also handles a concurrent creator
     # winning the task attachment while preserving persisted runtime state.
+    parent_run_id = active.id if active is not None else None
+    if parent_run_id is None:
+        source_run_id = str(retry_context.get("source_run_id") or "").strip()
+        if source_run_id:
+            parent_run_id = source_run_id
     attached = await tasks.attach_run(
         task.id,
         run,
-        parent_run_id=active.id if active is not None else None,
+        parent_run_id=parent_run_id,
     )
     attached_metadata = dict(attached.run_metadata_json or {})
     setattr(attached, "_fresh_runtime_run", attached_metadata.get("runtime_started") is False)
@@ -605,6 +610,24 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         delivery_state=tasks.COURSE_CORRECTION_DELIVERY_ACCEPTED,
     )
     pending_corrections = linked_run_corrections if continuation_is_linked(run) else [*linked_run_corrections, *outbox_corrections]
+    if followup_input:
+        steering_operation_id = str(
+            retry_context.get("idempotency_key")
+            or retry_context.get("source_run_id")
+            or f"result-review:{run.id}"
+        )
+        steering_correction = {
+            "correction_id": f"result-review:{steering_operation_id}",
+            "operation_id": steering_operation_id,
+            "instruction": followup_input,
+            "scope": "remaining_work",
+            "observed_task_version": int(task.version or 0),
+            "observed_plan_revision": 0,
+        }
+        pending_corrections = [
+            steering_correction,
+            *pending_corrections,
+        ]
     seen_correction_ids: set[str] = set()
     pending_corrections = [
         value for value in pending_corrections

@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any, Mapping, Optional
 from urllib.parse import urlparse
+
+_RUNTIME_REPORT_SECTION_PATTERN = re.compile(r"\n##\s+Unresolved required work[\s\S]*$", re.IGNORECASE)
+_CANVAS_PUBLICATION_CLAIM_PATTERN = re.compile(
+    r"(?im)^.*\b("
+    r"canvas draft|draft (?:research )?canvas|canvas was drafted|"
+    r"published (?:a |the )?(?:research )?canvas|"
+    r"research canvas (?:was|has been) (?:drafted|published|created)"
+    r").*$\n?",
+)
 
 
 def timeline_sources(
@@ -145,10 +155,30 @@ def timeline_sort_key(item: Mapping[str, Any]) -> tuple[str, int, str]:
     return (timestamp, order, str(item.get("id") or ""))
 
 
+def _strip_runtime_report_appendix(markdown: str) -> str:
+    return _RUNTIME_REPORT_SECTION_PATTERN.sub("", str(markdown or "")).rstrip()
+
+
+def _honest_canvas_narration(markdown: str, *, has_valid_canvas: bool) -> str:
+    text = str(markdown or "").strip()
+    if not text or has_valid_canvas:
+        return text
+    if not _CANVAS_PUBLICATION_CLAIM_PATTERN.search(text):
+        return text
+    text = _CANVAS_PUBLICATION_CLAIM_PATTERN.sub("", text).rstrip()
+    note = "_No research canvas was published for this run._"
+    if note.casefold() not in text.casefold():
+        text = f"{text}\n\n{note}" if text else note
+    return text.strip()
+
+
 def followup_guidance_entries(task_config: Mapping[str, Any] | None, run: Any) -> list[dict[str, str]]:
     config = dict(task_config or {})
     run_id = str(getattr(run, "id", "") or "")
     parent_run_id = str(getattr(run, "parent_run_id", "") or "")
+    run_metadata = dict(getattr(run, "run_metadata_json", None) or {})
+    metadata_source_run_id = str(run_metadata.get("result_review_source_run_id") or "")
+    metadata_idempotency_key = str(run_metadata.get("result_review_idempotency_key") or "")
     entries: list[dict[str, str]] = []
     for entry in config.get("result_review_context") or []:
         if not isinstance(entry, Mapping):
@@ -157,18 +187,38 @@ def followup_guidance_entries(task_config: Mapping[str, Any] | None, run: Any) -
         followup = str(entry.get("followup_input") or "").strip()
         if not followup:
             continue
+        entry_key = str(entry.get("idempotency_key") or source_run_id)
+        matched = False
         if parent_run_id and source_run_id == parent_run_id:
-            entries.append({"followup": followup, "key": str(entry.get("idempotency_key") or source_run_id)})
+            matched = True
+        elif metadata_source_run_id and source_run_id == metadata_source_run_id:
+            matched = True
+        elif metadata_idempotency_key and entry_key == metadata_idempotency_key:
+            matched = True
         elif not parent_run_id and source_run_id == run_id:
-            entries.append({"followup": followup, "key": str(entry.get("idempotency_key") or source_run_id)})
+            matched = True
+        if matched:
+            entries.append({"followup": followup, "key": entry_key})
     return entries
 
 
-async def timeline_report_markdown(run: Any, artifacts: list[Any]) -> str | None:
+async def timeline_report_markdown(
+    run: Any,
+    artifacts: list[Any],
+    *,
+    research_canvas_kind: str = "research_canvas",
+) -> str | None:
+    from app.models.canvas import RESEARCH_CANVAS_ARTIFACT_KIND
+
+    run_id = str(getattr(run, "id", "") or "")
+    has_valid_canvas = any(
+        str(getattr(artifact, "agent_run_id", "")) == run_id
+        and str(getattr(artifact, "kind", "")) in {research_canvas_kind, RESEARCH_CANVAS_ARTIFACT_KIND}
+        and str(getattr(artifact, "validity", "")) == "valid"
+        for artifact in artifacts
+    )
     pending = dict(getattr(run, "pending_interrupt_json", None) or {})
-    provisional = str(pending.get("provisional_answer") or "").strip()
-    if provisional:
-        return provisional
+    provisional = _strip_runtime_report_appendix(str(pending.get("provisional_answer") or "").strip())
     final_report = next(
         (
             artifact for artifact in artifacts
@@ -177,19 +227,20 @@ async def timeline_report_markdown(run: Any, artifacts: list[Any]) -> str | None
         ),
         None,
     )
-    if final_report is None:
-        return None
-    summary = dict(getattr(final_report, "summary_json", None) or {})
-    excerpt = str(summary.get("text") or summary.get("excerpt") or "").strip()
-    if excerpt:
-        return excerpt
-    object_key = str(getattr(final_report, "object_key", "") or "").strip()
-    if not object_key:
-        return None
-    from app.services.content_store import get_content_store
+    final_body = ""
+    if final_report is not None:
+        object_key = str(getattr(final_report, "object_key", "") or "").strip()
+        if object_key:
+            from app.services.content_store import get_content_store
 
-    try:
-        content = (await get_content_store().read(object_key)).decode("utf-8", errors="replace").strip()
-    except FileNotFoundError:
+            try:
+                final_body = (await get_content_store().read(object_key)).decode("utf-8", errors="replace").strip()
+            except FileNotFoundError:
+                final_body = ""
+        if not final_body:
+            summary = dict(getattr(final_report, "summary_json", None) or {})
+            final_body = str(summary.get("text") or summary.get("excerpt") or "").strip()
+    chosen = _strip_runtime_report_appendix(final_body) or provisional
+    if not chosen:
         return None
-    return content or None
+    return _honest_canvas_narration(chosen, has_valid_canvas=has_valid_canvas) or None
