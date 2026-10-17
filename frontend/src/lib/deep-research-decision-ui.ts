@@ -115,20 +115,53 @@ export function objectiveRequestsLiveWeb(objective: string): boolean {
   return OBJECTIVE_WEB_EVIDENCE_PATTERN.test(String(objective || ''));
 }
 
+const WAIVE_WEB_GUIDANCE_PATTERN = /\b(skip|omit|ignore|waive|without|no\s+need\s+for)\b[\s\S]{0,40}\b(web|benchmarks?|industry\s+comparison)/i;
+
+export function guidanceWaivesWebBenchmarks(...texts: string[]): boolean {
+  return texts.some((text) => WAIVE_WEB_GUIDANCE_PATTERN.test(String(text || '')));
+}
+
+export function effectiveObjectiveRequestsLiveWeb(
+  objective: string,
+  guidanceTexts: string[] = [],
+): boolean {
+  if (guidanceWaivesWebBenchmarks(...guidanceTexts)) return false;
+  const combined = [objective, ...guidanceTexts].filter(Boolean).join('\n');
+  return objectiveRequestsLiveWeb(combined);
+}
+
+const LIMITATION_TOPIC_PATTERNS: Array<{ topic: string; pattern: RegExp }> = [
+  { topic: 'index_readiness', pattern: /document\s+index\s+(?:is\s+)?not\s+(\w+\s+)*ready|index(?:ing)?\s+(?:is\s+)?not\s+ready/i },
+  { topic: 'staff_absence', pattern: /\bno\s+staff\b|staff\s+information\s+not|without\s+staff|does\s+not\s+provide\s+(?:any\s+)?staff/i },
+  { topic: 'web_off', pattern: /web\s+search\s+is\s+off|web\s+benchmarks?/i },
+];
+
+function limitationTopics(text: string): Set<string> {
+  const topics = new Set<string>();
+  LIMITATION_TOPIC_PATTERNS.forEach(({ topic, pattern }) => {
+    if (pattern.test(text)) topics.add(topic);
+  });
+  return topics;
+}
+
 export type ReviewLimitationItem = { kind: 'gap' | 'finding'; text: string };
 
 function normalizeLimitationKey(text: string): string {
   return text.toLowerCase().replace(/[^\w\s]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function isRedundantFinding(text: string, gapKeys: Set<string>): boolean {
+function isRedundantFinding(text: string, gapKeys: Set<string>, gapTopics: Set<string>): boolean {
   const issueKey = normalizeLimitationKey(text);
+  const issueTopics = limitationTopics(text);
+  if (issueTopics.size && [...issueTopics].every((topic) => gapTopics.has(topic))) {
+    return true;
+  }
   if (!issueKey) return true;
   for (const gapKey of gapKeys) {
     if (!gapKey) continue;
     if (issueKey === gapKey) return true;
-    if (issueKey.length >= 12 && gapKey.includes(issueKey)) return true;
-    if (gapKey.length >= 12 && issueKey.includes(gapKey)) return true;
+    if (issueKey.length >= 8 && gapKey.includes(issueKey)) return true;
+    if (gapKey.length >= 8 && issueKey.includes(gapKey)) return true;
   }
   return false;
 }
@@ -163,6 +196,7 @@ export function reviewLimitationItems(
   if (!pending) return [];
   const items: ReviewLimitationItem[] = [];
   const gapKeys = new Set<string>();
+  const gapTopics = new Set<string>();
   const gaps = Array.isArray(pending.gaps) ? pending.gaps.map(String) : [];
   gaps.forEach((gap) => {
     const enriched = enrichReviewGapLine(gap, todoTitles);
@@ -170,6 +204,8 @@ export function reviewLimitationItems(
     items.push({ kind: 'gap', text: enriched });
     gapKeys.add(normalizeLimitationKey(enriched));
     gapKeys.add(normalizeLimitationKey(gap));
+    limitationTopics(enriched).forEach((topic) => gapTopics.add(topic));
+    limitationTopics(gap).forEach((topic) => gapTopics.add(topic));
   });
   const warnings = Array.isArray(pending.warnings) ? pending.warnings : [];
   warnings.forEach((entry) => {
@@ -189,12 +225,12 @@ export function reviewLimitationItems(
             || code,
           );
         }
-        if (!message || isNoiseCriticIssue(message) || isRedundantFinding(message, gapKeys)) return;
+        if (!message || isNoiseCriticIssue(message) || isRedundantFinding(message, gapKeys, gapTopics)) return;
         items.push({ kind: 'finding', text: message });
       });
     } else if (code !== 'evidence_critic_issues') {
       const fallback = code.replaceAll('_', ' ');
-      if (!isRedundantFinding(fallback, gapKeys)) {
+      if (!isRedundantFinding(fallback, gapKeys, gapTopics)) {
         items.push({ kind: 'finding', text: fallback });
       }
     }
@@ -291,10 +327,10 @@ export function buildDecisionLeadLine(options: {
   }
   if (!isBudgetReview && exhausted.length) {
     const names = exhausted.map(researchBudgetDimensionLabel).join(', ');
-    return `Research budget for ${names} is at the tranche limit.${breakdown} You can finish with this result or continue with guidance (uses more budget).`;
+    return `Research budget for ${names} is at the tranche limit.${breakdown} You can finish with this result or continue with guidance (starts a new budget tranche).`;
   }
   if (limitationCount > 0) {
-    return `Open research issues remain.${breakdown} Finish with this result or continue with guidance (uses more budget).`;
+    return `Open research issues remain.${breakdown} Finish with this result or continue with guidance (starts a new budget tranche).`;
   }
   return fallbackBody || 'Review the provisional answer before you continue or finish.';
 }

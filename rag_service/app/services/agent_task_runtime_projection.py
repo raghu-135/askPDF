@@ -236,13 +236,13 @@ def _result_review_body(
             )
         return (
             f"Research budget for {names} is at the tranche limit.{issue} "
-            "Finish with this result or continue with guidance (uses more budget)."
+            "Finish with this result or continue with guidance (starts a new budget tranche)."
         )
     if warning_count or gap_count:
         return (
             f"{warning_count} unverified claim{'s' if warning_count != 1 else ''} and "
             f"{gap_count} open gap{'s' if gap_count != 1 else ''}. "
-            "Finish with this result or continue with guidance (uses more budget)."
+            "Finish with this result or continue with guidance (starts a new budget tranche)."
         )
     return "Review the provisional answer before you continue or finish."
 
@@ -273,6 +273,36 @@ def _enrich_gap_label(gap: str, todo_titles: Mapping[str, str]) -> str:
     if text in todo_titles:
         return f"{todo_titles[text]} ({text})"
     return text
+
+
+def _filter_interrupt_gaps(gaps: list[str], provisional_answer: str, task_result: Mapping[str, Any]) -> list[str]:
+    from langgraph_runtime.workflows.deep_research_nodes import filter_stale_index_readiness_gaps
+
+    manifest: list[Any] = []
+    for key in ("task_evidence_manifest", "evidence_manifest", "artifact_manifest"):
+        value = task_result.get(key)
+        if isinstance(value, list):
+            manifest.extend(item for item in value if isinstance(item, Mapping))
+    return filter_stale_index_readiness_gaps(
+        gaps,
+        manifest=manifest,
+        evidence_texts=[provisional_answer],
+    )
+
+
+def _scrub_review_warnings(warnings: list[dict[str, Any]], gaps: list[str]) -> list[dict[str, Any]]:
+    from langgraph_runtime.workflows.deep_research_nodes import _dedupe_critic_issues
+
+    scrubbed: list[dict[str, Any]] = []
+    for entry in warnings:
+        if str(entry.get("code") or "") != "evidence_critic_issues":
+            scrubbed.append(entry)
+            continue
+        details = dict(entry.get("details") or {})
+        issues = [str(value) for value in details.get("issues") or [] if str(value).strip()]
+        details["issues"] = _dedupe_critic_issues(issues, gaps)
+        scrubbed.append({**entry, "details": details})
+    return scrubbed
 
 
 def _enrich_result_gaps(budget: Mapping[str, Any], gaps: list[str], task_result: Mapping[str, Any]) -> list[str]:
@@ -466,11 +496,17 @@ async def apply_neutral_task_completion(
             )
 
             warnings = [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]
-            gaps = _enrich_result_gaps(
-                budget,
-                list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip())),
+            provisional_text = str(task_result.get("text") or "")
+            gaps = _filter_interrupt_gaps(
+                _enrich_result_gaps(
+                    budget,
+                    list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip())),
+                    task_result,
+                ),
+                provisional_text,
                 task_result,
             )
+            warnings = _scrub_review_warnings(warnings, gaps)
             disposition = runtime_status
             pending: dict[str, Any] | None = None
             if runtime_status == "completed" and dimensions:
@@ -939,11 +975,17 @@ async def apply_runtime_task_delta(
                 result_status = str(delta.result.get("status") or "")
                 if result_status == "completed" and task_result:
                     warnings = [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]
-                    gaps = _enrich_result_gaps(
-                        task.budgets_json if isinstance(task.budgets_json, Mapping) else {},
-                        list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip())),
+                    provisional_text = str(task_result.get("text") or "")
+                    gaps = _filter_interrupt_gaps(
+                        _enrich_result_gaps(
+                            task.budgets_json if isinstance(task.budgets_json, Mapping) else {},
+                            list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip())),
+                            task_result,
+                        ),
+                        provisional_text,
                         task_result,
                     )
+                    warnings = _scrub_review_warnings(warnings, gaps)
                     policy, max_rounds, review_round = _incomplete_disposition(run, task_result)
                     needs_review = bool(warnings or gaps or task_result.get("status") == "completed_with_warnings")
                     if needs_review and policy == "review" and review_round <= max_rounds:

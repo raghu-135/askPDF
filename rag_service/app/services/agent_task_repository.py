@@ -2168,6 +2168,8 @@ async def respond_to_result_review(
                 })
                 config["result_review_context"] = review_context[-5:]
                 replace_jsonb_field(task, "config_json", config)
+                budget = normalize_budget_state(task.budgets_json, (task.config_json or {}).get("limits") or {})
+                replace_jsonb_field(task, "budgets_json", reset_tranche(budget))
                 todos = list((await session.execute(
                     select(AgentTaskTodo).where(
                         AgentTaskTodo.task_id == task.id,

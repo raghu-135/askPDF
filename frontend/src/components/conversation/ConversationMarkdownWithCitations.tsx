@@ -5,6 +5,7 @@ import { ConversationMarkdown } from './ConversationMarkdown';
 
 const DOC_CITATION_PATTERN = /([^\n`]+?,\s*page\s+\d+)\s*\(`(doc:[^`]+)`\)/gi;
 const SOURCE_BRACKET_PATTERN = /\[Source:\s*([^\]]+)\]/gi;
+const PAREN_PDF_PAGE_PATTERN = /\(([^)]+\.pdf,\s*page\s+\d+)\)/gi;
 
 type Segment = { type: 'markdown' | 'chip'; value: string; sourceId?: string };
 
@@ -32,6 +33,19 @@ function collectCitationSegments(text: string): Segment[] {
       });
     }
     match = sourcePattern.exec(text);
+  }
+  const parenPattern = new RegExp(PAREN_PDF_PAGE_PATTERN.source, 'gi');
+  match = parenPattern.exec(text);
+  while (match) {
+    const overlaps = hits.some((hit) => match!.index >= hit.index && match!.index < hit.index + hit.length);
+    if (!overlaps) {
+      hits.push({
+        index: match.index,
+        length: match[0].length,
+        segment: { type: 'chip', value: match[1].trim(), sourceId: match[0] },
+      });
+    }
+    match = parenPattern.exec(text);
   }
   hits.sort((a, b) => a.index - b.index);
   const parts: Segment[] = [];
