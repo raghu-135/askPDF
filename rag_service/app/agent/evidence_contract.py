@@ -60,10 +60,39 @@ def _first_locator(value: Dict[str, Any], *keys: str) -> Any:
     return "document"
 
 
+def format_document_source_locator(value: Dict[str, Any]) -> str:
+    """Build an unambiguous doc:{hash}:locator suffix (``c-`` chunk or ``s-`` sentence)."""
+    chunk_id = value.get("chunk_id")
+    if chunk_id not in (None, ""):
+        token = str(chunk_id)
+        if token.startswith(("c-", "s-")):
+            return token
+        return f"c-{token}"
+    sentence_id = value.get("sentence_id")
+    if sentence_id not in (None, ""):
+        try:
+            return f"s-{int(sentence_id)}"
+        except (TypeError, ValueError):
+            pass
+    return str(_first_locator(value, "page_number", "page", "page_start"))
+
+
+def parse_document_source_locator(locator: str) -> tuple[str, str]:
+    """Return ``(kind, id)`` where kind is ``chunk``, ``sentence``, or ``legacy``."""
+    token = str(locator or "").strip()
+    if token.startswith("c-"):
+        return ("chunk", token[2:])
+    if token.startswith("s-"):
+        return ("sentence", token[2:])
+    if token.isdigit():
+        return ("legacy", token)
+    return ("chunk", token)
+
+
 def canonical_source_id(value: Dict[str, Any]) -> str:
     file_hash = value.get("file_hash") or value.get("document_id") or value.get("file_id")
     if file_hash and SOURCE_IDENTIFIER_PATTERN.fullmatch(str(file_hash)):
-        locator = str(_first_locator(value, "chunk_id", "page_number", "page", "page_start"))
+        locator = format_document_source_locator(value)
         if SOURCE_IDENTIFIER_PATTERN.fullmatch(locator):
             return f"doc:{file_hash}:{locator}"
     url = normalized_source_url(value.get("url") or value.get("source_url") or value.get("link"))

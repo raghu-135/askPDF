@@ -598,6 +598,28 @@ def test_vector_citation_preserves_validated_provenance_metadata():
     assert source["source_element_ids"] == ["element-1"]
 
 
+def test_vector_citation_uses_thread_lookup_when_metadata_missing_file_name():
+    source = _source_from_chunk(
+        {
+            "file_hash": "file-1",
+            "source_id": "src-1",
+            "generation": "generation-1",
+            "manifest_id": "manifest-file-1",
+            "text": "evidence",
+            "metadata": {
+                "body_text": "evidence",
+                "generation": "generation-1",
+                "manifest_id": "manifest-file-1",
+                "extraction_fingerprint": "extract-1",
+                "chunking_fingerprint": "chunk-1",
+            },
+        },
+        document_lookup={"file-1": {"file_name": "attention.pdf", "source_type": "pdf"}},
+    )
+    assert source["file_name"] == "attention.pdf"
+    assert source["title"] == "attention.pdf"
+
+
 def test_vector_citation_includes_file_name_from_metadata():
     source = _source_from_chunk({
         "file_hash": "file-1",
