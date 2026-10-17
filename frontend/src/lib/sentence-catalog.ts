@@ -58,8 +58,8 @@ export function adjacentReadableId(
   return playlist[nextIndex];
 }
 
-export function uniqueHighlightBoxes(boxes: HighlightBBox[]): HighlightBBox[] {
-  const kept: HighlightBBox[] = [];
+export function uniqueHighlightBoxes<T extends HighlightBBox>(boxes: readonly T[]): T[] {
+  const kept: T[] = [];
   for (const box of boxes) {
     const duplicate = kept.some((existing) => (
       existing.page === box.page
