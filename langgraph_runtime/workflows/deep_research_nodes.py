@@ -568,21 +568,26 @@ def _objective_requests_live_web(objective: str) -> bool:
     return bool(_OBJECTIVE_WEB_EVIDENCE_PATTERN.search(str(objective or "")))
 
 
-def _web_evidence_plan_gaps(objective: str, web_search_mode: str) -> list[str]:
-    if not _objective_requests_live_web(objective):
-        return []
-    if web_search_mode == "off":
-        return [
-            "Web benchmarks or live web evidence were requested in the objective, but web search is off for this task.",
-        ]
-    return []
-
-
 from runtime_protocol.research_gaps import (
     dedupe_critic_issues as _dedupe_critic_issues,
     filter_stale_index_readiness_gaps,
     text_cites_document_evidence as _text_cites_document_evidence,
+    web_evidence_plan_gaps as _web_evidence_plan_gaps,
 )
+
+
+def _guidance_texts_from_state(state: Mapping[str, Any]) -> list[str]:
+    texts: list[str] = []
+    question = str(state.get("question") or "")
+    marker = "Result review follow-up:"
+    if marker in question:
+        texts.append(question.split(marker, 1)[1].strip())
+    for value in state.get("task_course_corrections") or []:
+        if isinstance(value, Mapping):
+            instruction = str(value.get("instruction") or "").strip()
+            if instruction:
+                texts.append(instruction)
+    return texts
 
 
 def _ensure_web_research_todo(
@@ -1126,7 +1131,11 @@ Previous candidate (untrusted, bounded): {candidate[:12000]}
             for value in course_corrections
         ],
         "task_result_gaps": list(dict.fromkeys(
-            _web_evidence_plan_gaps(str(state.get("question") or ""), web_search_mode),
+            _web_evidence_plan_gaps(
+                str(state.get("question") or ""),
+                web_search_mode,
+                *_guidance_texts_from_state(state),
+            ),
         )),
     }
 
@@ -1675,6 +1684,7 @@ async def deep_coordinator(state: Dict[str, Any], config: RunnableConfig) -> Dic
         _web_evidence_plan_gaps(
             str(state.get("question") or ""),
             str(state.get("web_search_mode") or "off"),
+            *_guidance_texts_from_state(state),
         )
     )
     for packet in packets:

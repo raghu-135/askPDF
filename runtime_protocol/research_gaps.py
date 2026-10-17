@@ -5,6 +5,15 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable, Mapping
 
+_OBJECTIVE_WEB_EVIDENCE_PATTERN = re.compile(
+    r"\b(web\s+search|live\s+web|industry\s+(?:benchmark|comparison)|external\s+sources?|web\s+benchmarks?)\b",
+    re.IGNORECASE,
+)
+_WAIVE_WEB_GUIDANCE_PATTERN = re.compile(
+    r"\b(skip|omit|ignore|waive|without|no\s+need\s+for)\b[\s\S]{0,40}\b(web|benchmarks?|industry\s+comparison)",
+    re.IGNORECASE,
+)
+
 _INDEX_READINESS_GAP_MARKERS = (
     "document index is not ready",
     "document conversion is not ready",
@@ -90,6 +99,44 @@ def filter_stale_index_readiness_gaps(
 
 def normalize_limitation_key(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]+", "", str(text or "").casefold())).strip()
+
+
+def gap_display_line(entry: Any) -> str:
+    if isinstance(entry, str):
+        return entry.strip()
+    if isinstance(entry, Mapping):
+        for key in ("message", "summary", "text", "description"):
+            raw = entry.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+        code = str(entry.get("code") or "").strip()
+        if code:
+            return code.replace("_", " ")
+    return str(entry or "").strip()
+
+
+def guidance_waives_web_benchmarks(*texts: str) -> bool:
+    return any(_WAIVE_WEB_GUIDANCE_PATTERN.search(str(text or "")) for text in texts)
+
+
+def objective_requests_live_web(objective: str) -> bool:
+    return bool(_OBJECTIVE_WEB_EVIDENCE_PATTERN.search(str(objective or "")))
+
+
+def web_evidence_plan_gaps(
+    objective: str,
+    web_search_mode: str,
+    *guidance_texts: str,
+) -> list[str]:
+    if guidance_waives_web_benchmarks(*guidance_texts):
+        return []
+    if not objective_requests_live_web(objective):
+        return []
+    if web_search_mode == "off":
+        return [
+            "Web benchmarks or live web evidence were requested in the objective, but web search is off for this task.",
+        ]
+    return []
 
 
 def dedupe_critic_issues(issues: list[str], gaps: list[str]) -> list[str]:

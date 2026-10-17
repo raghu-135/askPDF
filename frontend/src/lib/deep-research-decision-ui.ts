@@ -166,6 +166,21 @@ function isRedundantFinding(text: string, gapKeys: Set<string>, gapTopics: Set<s
   return false;
 }
 
+export function normalizeReviewGapText(
+  gap: unknown,
+  todoTitles?: Record<string, string>,
+): string {
+  if (gap && typeof gap === 'object') {
+    const record = gap as { message?: string; summary?: string; text?: string; code?: string };
+    const message = String(record.message || record.summary || record.text || '').trim();
+    if (message) return enrichReviewGapLine(message, todoTitles);
+    const code = String(record.code || '').trim();
+    if (code) return enrichReviewGapLine(code.replaceAll('_', ' '), todoTitles);
+    return '';
+  }
+  return enrichReviewGapLine(String(gap || ''), todoTitles);
+}
+
 export function enrichReviewGapLine(
   gap: string,
   todoTitles?: Record<string, string>,
@@ -197,15 +212,15 @@ export function reviewLimitationItems(
   const items: ReviewLimitationItem[] = [];
   const gapKeys = new Set<string>();
   const gapTopics = new Set<string>();
-  const gaps = Array.isArray(pending.gaps) ? pending.gaps.map(String) : [];
+  const gaps = Array.isArray(pending.gaps) ? pending.gaps : [];
   gaps.forEach((gap) => {
-    const enriched = enrichReviewGapLine(gap, todoTitles);
+    const enriched = normalizeReviewGapText(gap, todoTitles);
     if (!enriched) return;
     items.push({ kind: 'gap', text: enriched });
     gapKeys.add(normalizeLimitationKey(enriched));
     gapKeys.add(normalizeLimitationKey(gap));
     limitationTopics(enriched).forEach((topic) => gapTopics.add(topic));
-    limitationTopics(gap).forEach((topic) => gapTopics.add(topic));
+    limitationTopics(typeof gap === 'string' ? gap : enriched).forEach((topic) => gapTopics.add(topic));
   });
   const warnings = Array.isArray(pending.warnings) ? pending.warnings : [];
   warnings.forEach((entry) => {
@@ -330,9 +345,16 @@ export function buildDecisionLeadLine(options: {
     return `Research budget for ${names} is at the tranche limit.${breakdown} You can finish with this result or continue with guidance (starts a new budget tranche).`;
   }
   if (limitationCount > 0) {
-    return `Open research issues remain.${breakdown} Finish with this result or continue with guidance (starts a new budget tranche).`;
+    return `Open research issues remain.${breakdown} Finish with this result or continue with guidance for another tranche.`;
   }
   return fallbackBody || 'Review the provisional answer before you continue or finish.';
+}
+
+export function resultReviewContinueLabel(limitationCount: number): string {
+  if (limitationCount > 0) {
+    return 'Continue with guidance (another tranche)';
+  }
+  return 'Continue with guidance';
 }
 
 export const RESEARCH_BUDGET_TOOLTIP =

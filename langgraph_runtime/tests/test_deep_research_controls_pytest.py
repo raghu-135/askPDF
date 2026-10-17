@@ -8,9 +8,9 @@ from langgraph_runtime.workflows.deep_research_nodes import (
     _ensure_web_research_todo,
     _objective_requests_live_web,
     _sanitize_critic_issue,
-    _web_evidence_plan_gaps,
     filter_stale_index_readiness_gaps,
 )
+from runtime_protocol.research_gaps import web_evidence_plan_gaps
 from langgraph_runtime.workflows.runtime_invocation import _usage_summary
 from langgraph_runtime.models.deep_research import DeepResearchPlanProposal, DeepResearchTodoProposal, SubagentProfileId
 
@@ -102,9 +102,18 @@ def test_objective_web_benchmark_detection():
 
 
 def test_web_evidence_gap_when_search_off():
-    gaps = _web_evidence_plan_gaps("Use web benchmarks for comparison", "off")
+    gaps = web_evidence_plan_gaps("Use web benchmarks for comparison", "off")
     assert gaps
     assert "web search is off" in gaps[0].lower()
+
+
+def test_web_evidence_gap_waived_by_guidance():
+    gaps = web_evidence_plan_gaps(
+        "Use web benchmarks for comparison",
+        "off",
+        "Skip web benchmarks; focus on the document only.",
+    )
+    assert gaps == []
 
 
 def test_sanitize_critic_issue_drops_runtime_incomplete_headings():

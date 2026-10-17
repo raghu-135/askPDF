@@ -26,7 +26,14 @@ from app.services.agent_task_runtime import (
 from app.services.agent_run_cancellation import require_task_cancellation, request_task_cancellation
 from app.services.agent_run_pause import request_task_pause
 from app.services.content_store import get_content_store
-from app.services.agent_task_presentation import plan_diff, timeline_run_error, timeline_sources
+from app.services.agent_task_presentation import (
+    followup_guidance_entries,
+    plan_diff,
+    timeline_report_markdown,
+    timeline_run_error,
+    timeline_sort_key,
+    timeline_sources,
+)
 from app.services.agent_task_research_canvases import (
     attach_research_canvases,
     list_research_canvas_refs_for_task_ids,
@@ -818,27 +825,7 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
         "primary_content": task.objective, "timestamp": maybe_iso_utc_z(run.started_at),
         "folds": {"technical_details": {"attempt": run.task_attempt}}, "trace_anchor": None,
     }]
-    if run.parent_run_id:
-        review_context = [
-            dict(value) for value in (task.config_json or {}).get("result_review_context") or []
-            if isinstance(value, dict)
-        ]
-        for entry in reversed(review_context):
-            if str(entry.get("source_run_id") or "") != str(run.parent_run_id):
-                continue
-            followup = str(entry.get("followup_input") or "").strip()
-            if not followup:
-                continue
-            items.append({
-                "id": f"guidance:{run_id}:{entry.get('idempotency_key') or entry.get('source_run_id')}",
-                "type": "research_guidance",
-                "status": "completed",
-                "primary_content": followup,
-                "timestamp": maybe_iso_utc_z(run.started_at),
-                "folds": {"technical_details": {"source_run_id": run.parent_run_id}},
-                "trace_anchor": None,
-            })
-            break
+    guidance_entries = followup_guidance_entries(task.config_json, run)
     previous_plan_json: dict[str, Any] = {}
     for index, plan in enumerate(plans):
         plan_json = dict(plan.plan_json or {})
@@ -876,6 +863,31 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
             "trace_anchor": {"node_type": "deep_task_planner", "revision": plan.revision},
         })
         previous_plan_json = plan_json
+    if guidance_entries and plans:
+        first_plan_at = maybe_iso_utc_z(plans[0].created_at) or maybe_iso_utc_z(run.started_at)
+        for index, entry in enumerate(guidance_entries):
+            items.append({
+                "id": f"guidance:{run_id}:{entry['key']}:{index}",
+                "type": "research_guidance",
+                "status": "completed",
+                "primary_content": entry["followup"],
+                "timestamp": first_plan_at,
+                "sort_order": 15,
+                "folds": {"technical_details": {"source_run_id": run.parent_run_id or run_id}},
+                "trace_anchor": None,
+            })
+    elif guidance_entries:
+        for index, entry in enumerate(guidance_entries):
+            items.append({
+                "id": f"guidance:{run_id}:{entry['key']}:{index}",
+                "type": "research_guidance",
+                "status": "completed",
+                "primary_content": entry["followup"],
+                "timestamp": maybe_iso_utc_z(run.started_at),
+                "sort_order": 15,
+                "folds": {"technical_details": {"source_run_id": run.parent_run_id or run_id}},
+                "trace_anchor": None,
+            })
     artifact_by_id = {artifact.id: artifact for artifact in artifacts}
     for attempt in subagents:
         timeline_type = _subagent_timeline_type(attempt.status)
@@ -926,6 +938,24 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
         and artifact.kind == RESEARCH_CANVAS_ARTIFACT_KIND
         and artifact.validity == "valid"
     ), None)
+    report_markdown = None
+    if str(run.status) in {"completed", "failed", "cancelled", "expired"}:
+        report_markdown = await timeline_report_markdown(run, artifacts)
+    if report_markdown:
+        report_sources = timeline_sources(
+            artifacts,
+            attempts_by_run=attempts_by_run,
+            selected_run_id=run_id,
+        )
+        items.append({
+            "id": f"report:{run_id}",
+            "type": "research_report",
+            "status": run.status,
+            "primary_content": report_markdown,
+            "timestamp": maybe_iso_utc_z(run.completed_at or run.started_at),
+            "sources": report_sources,
+            "trace_anchor": {"node_type": "finalizer"},
+        })
     if run_canvas is not None:
         summary = dict(run_canvas.summary_json or {})
         title = str(summary.get("title") or "Research canvas")
@@ -957,13 +987,27 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
             },
             "trace_anchor": {"run_id": run.id},
         })
-    items.sort(key=lambda item: (item.get("timestamp") or "", item["id"]))
     task_payload = await _task_payload(task)
     await attach_research_canvases(task_payload, thread_id=thread_id, task_id=task.id)
     research_canvases = list(task_payload.get("research_canvases") or [])
     run_research_canvases = [
         canvas for canvas in research_canvases if canvas.get("run_id") == run_id
     ]
+    if run_canvas is None and run_research_canvases:
+        fallback = run_research_canvases[-1]
+        title = str(fallback.get("title") or "Research canvas")
+        canvas_id = str(fallback.get("id") or "")
+        if canvas_id:
+            items.append({
+                "id": f"canvas:{canvas_id}",
+                "type": "research_canvas",
+                "status": run.status,
+                "primary_content": title,
+                "timestamp": maybe_iso_utc_z(run.completed_at or run.started_at),
+                "canvas_ref": {"id": canvas_id, "title": title},
+                "trace_anchor": {"node_type": "finalizer"},
+            })
+    items.sort(key=timeline_sort_key)
     return {
         "task": task_payload,
         "run": _run_payload(run),

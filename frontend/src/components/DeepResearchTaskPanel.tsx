@@ -85,7 +85,11 @@ import {
   budgetUsageFromTask,
   countReviewIssues,
   effectiveObjectiveRequestsLiveWeb,
+  resultReviewContinueLabel,
 } from '../lib/deep-research-decision-ui';
+import { citationSourcesFromTimelineItems } from '../lib/research-citation-display';
+import type { CitationDisplaySource } from '../lib/research-citation-display';
+import { ConversationMarkdownWithCitations } from './conversation/ConversationMarkdownWithCitations';
 import { DeepResearchBudgetChips } from './conversation/DeepResearchBudgetChips';
 import { formatAgentTaskStatus, formatTimelineItemStatus } from '../lib/deep-research-task-status';
 import { WorkbenchSelect } from './workbench/WorkbenchToolbar';
@@ -232,6 +236,7 @@ function TimelineBubble({
   onReadAloud,
   rootRef,
   onSelectAttempt,
+  citationSources,
 }: {
   item: AgentTaskTimelineItem;
   taskId: string;
@@ -244,8 +249,12 @@ function TimelineBubble({
   onReadAloud: () => void;
   rootRef: React.Ref<HTMLLIElement>;
   onSelectAttempt?: (attempt: number) => void;
+  citationSources?: CitationDisplaySource[];
 }) {
-  const isObjective = item.type === 'objective' || item.type === 'research_guidance';
+  const isObjective = item.type === 'objective';
+  const isGuidance = item.type === 'research_guidance';
+  const isUserBubble = isObjective || isGuidance;
+  const useCitationMarkdown = item.type === 'research_report' || item.type === 'todo_result';
   const foldEntries = Object.entries(item.folds || {}).filter(([label, value]) => (
     !['sources', 'artifacts'].includes(label)
     && value != null
@@ -257,13 +266,20 @@ function TimelineBubble({
     ['memory', 'Memory context'],
     ['thread', 'Thread context'],
   ] as const;
+  const badgeLabel = isGuidance
+    ? `your guidance · ${formatTimelineItemStatus(item.status)}`
+    : `${item.type.replaceAll('_', ' ')} · ${formatTimelineItemStatus(item.status)}`;
+  const markdownBody = useCitationMarkdown
+    ? <ConversationMarkdownWithCitations content={item.primary_content} citationSources={citationSources} />
+    : undefined;
   return <ConversationMessageBubble
     rootRef={rootRef}
-    role={isObjective ? 'user' : 'assistant'}
-    content={item.primary_content}
+    role={isUserBubble ? 'user' : 'assistant'}
+    content={markdownBody ? '' : item.primary_content}
+    beforeContent={markdownBody}
     active={active}
-    wide={!isObjective}
-    badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${formatTimelineItemStatus(item.status)}`} sx={{ mb: 1 }} color={['todo_failure', 'run_failure'].includes(item.type) ? 'error' : item.type === 'research_canvas' ? 'success' : 'default'} />}
+    wide={!isUserBubble}
+    badge={<Chip size="small" label={badgeLabel} sx={{ mb: 1 }} color={['todo_failure', 'run_failure'].includes(item.type) ? 'error' : item.type === 'research_canvas' || item.type === 'research_report' ? 'success' : isGuidance ? 'info' : 'default'} />}
     actions={<ConversationMessageActions copied={copied} readActive={active} onCopy={onCopy} onReadAloud={onReadAloud}>
       {onSaveToMemory && item.type === 'todo_result' && <Button size="small" onClick={() => onSaveToMemory(item.primary_content)}>Save to memory</Button>}
       {item.type === 'research_canvas' && onOpenCanvas && item.canvas_ref && (
@@ -767,21 +783,8 @@ export default function DeepResearchTaskPanel({
       />
     </>
   ) : null;
-  const reviewCitationSources = useMemo(
-    () => items.flatMap((item) => (item.sources || []).map((source) => {
-      const locator = source.page ?? 0;
-      const docId = source.file_hash ? `doc:${source.file_hash}:${locator}` : undefined;
-      return {
-        kind: source.kind,
-        label: source.title,
-        file_name: source.title,
-        page: source.page,
-        source_id: docId,
-        origins: (source.origins || []).map((origin) => ({
-          source_id: origin.artifact_id,
-        })),
-      };
-    })),
+  const timelineCitationSources = useMemo(
+    () => citationSourcesFromTimelineItems(items),
     [items],
   );
   const respondToResultReview = async (decision: 'accept' | 'retry_with_input') => {
@@ -798,6 +801,7 @@ export default function DeepResearchTaskPanel({
         decision,
         followup_input: followup?.trim(),
       });
+      setReviewGuidance('');
       await refresh();
     } catch (value) { setDecisionError(value instanceof Error ? value.message : String(value)); }
     finally { setDecisionSubmitting(null); }
@@ -828,10 +832,9 @@ export default function DeepResearchTaskPanel({
     transcriptSx={reviewPanelOpen ? {
       flex: '0 0 auto',
       flexShrink: 0,
-      minHeight: 120,
-      maxHeight: '24vh',
-      overflowY: 'auto',
-      overflowX: 'hidden',
+      minHeight: 96,
+      maxHeight: '22vh',
+      overflow: 'hidden',
     } : {
       flex: 1,
       minHeight: 0,
@@ -894,13 +897,14 @@ export default function DeepResearchTaskPanel({
         />
       ) : null}
     </>}
-    transcript={<ConversationTranscriptFrame sx={reviewPanelOpen ? { flex: '0 0 auto', overflow: 'visible', maxHeight: 'none' } : undefined}>{items.map((item) => <TimelineBubble
+    transcript={<ConversationTranscriptFrame sx={reviewPanelOpen ? { flex: '0 0 auto', overflow: 'hidden', maxHeight: '100%' } : undefined}>{items.map((item) => <TimelineBubble
       key={item.id}
       item={item}
       taskId={task?.id || ''}
       threadId={threadId}
       onSaveToMemory={onSaveToMemory}
       onOpenCanvas={onOpenCanvas}
+      citationSources={timelineCitationSources}
       copied={copiedId === item.id}
       active={activeItemId === item.id}
       onCopy={() => copyItem(item)}
@@ -932,16 +936,16 @@ export default function DeepResearchTaskPanel({
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
           <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !pendingInterrupt.provisional_answer || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('accept_partial')}>Finish with partial answer</Button>
           <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !budgetReviewAvailability.enabled} title="Uses another research tranche" onClick={() => void respondToBudgetReview('continue')}>Continue research (more budget)</Button>
-          <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !budgetReviewAvailability.enabled} title="Uses another research tranche" onClick={() => void respondToBudgetReview('steer')}>Steer and continue (more budget)</Button>
+          <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !budgetReviewAvailability.enabled} title="Uses another research tranche" onClick={() => void respondToBudgetReview('steer')}>Apply guidance and continue</Button>
         </Box>
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
     >
-      <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} />
+      <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
       <DeepResearchProvisionalAnswer
         content={pendingInterrupt.provisional_answer}
         emptyMessage="No usable provisional answer was produced. Continue or steer the research."
-        citationSources={reviewCitationSources}
+        citationSources={timelineCitationSources}
       />
     </ResizableDecisionPanel> : pendingInterrupt && isResultReview ? <ResizableDecisionPanel
       title={pendingInterrupt.title || 'Review incomplete result'}
@@ -977,17 +981,17 @@ export default function DeepResearchTaskPanel({
             title={resultReviewAvailability.disabledReason}
             onClick={() => void respondToResultReview('retry_with_input')}
           >
-            Continue with guidance (more budget)
+            {resultReviewContinueLabel(reviewIssueCounts.limitationCount)}
           </Button>
         </Box>
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
     >
-      <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} />
+      <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
       {pendingInterrupt.provisional_answer ? (
         <DeepResearchProvisionalAnswer
           content={pendingInterrupt.provisional_answer}
-          citationSources={reviewCitationSources}
+          citationSources={timelineCitationSources}
         />
       ) : null}
     </ResizableDecisionPanel> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
