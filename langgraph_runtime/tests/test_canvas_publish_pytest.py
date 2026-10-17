@@ -12,6 +12,7 @@ from langgraph_runtime.workflows.canvas_publish import (
     canvas_idempotency_key,
     prepare_publish_canvas_tool_input,
     sanitize_supersedes_id_for_publish,
+    strip_false_canvas_absence_prose,
     strip_prose_publish_canvas,
     strip_unpublished_canvas_claims,
     synthesize_with_canvas_publish,
@@ -81,6 +82,19 @@ def test_strip_prose_publish_canvas_removes_fake_calls():
     text = 'Findings.\n\npublish_canvas(title="Research Summary")\n\nDone.'
     assert "publish_canvas" not in strip_prose_publish_canvas(text)
     assert "Findings." in strip_prose_publish_canvas(text)
+
+
+def test_strip_false_canvas_absence_prose_removes_denials_when_draft_exists():
+    text = (
+        "Summary of findings.\n\n"
+        "No research canvas content provided.\n"
+        "No document citations.\n"
+        "Transformer BLEU is 28.4."
+    )
+    cleaned = strip_false_canvas_absence_prose(text)
+    assert "no research canvas" not in cleaned.casefold()
+    assert "no document citations" not in cleaned.casefold()
+    assert "28.4" in cleaned
 
 
 def test_strip_unpublished_canvas_claims_removes_false_publish_narration():

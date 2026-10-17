@@ -35,6 +35,12 @@ _UNPUBLISHED_CANVAS_CLAIM_LINE = re.compile(
     r"^\s*here(?:'s| is)\s+(?:a\s+)?(?:the\s+)?research canvas\b.*$",
     re.IGNORECASE,
 )
+_FALSE_CANVAS_ABSENCE_LINE = re.compile(
+    r"^\s*no\s+(?:research\s+)?canvas(?:\s+content)?\s+provided\b.*$|"
+    r"^\s*no\s+document\s+citations?\b.*$|"
+    r"^\s*(?:research\s+)?canvas\s+(?:was\s+)?not\s+(?:provided|available)\b.*$",
+    re.IGNORECASE,
+)
 _MAX_ROUNDS = 2
 _DRAFT_ERROR_CODES = frozenset({
     "publish_canvas_invalid_draft",
@@ -109,6 +115,17 @@ def strip_prose_publish_canvas(text: str) -> str:
     cleaned = _FAKE_FENCE.sub("", str(text or ""))
     cleaned = _FAKE_CALL.sub("", cleaned)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def strip_false_canvas_absence_prose(text: str) -> str:
+    """Remove chat lines that deny canvas/citations when a draft was captured."""
+
+    kept = [
+        line
+        for line in str(text or "").splitlines()
+        if not _FALSE_CANVAS_ABSENCE_LINE.match(line)
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
 
 
 def strip_unpublished_canvas_claims(text: str) -> str:
@@ -430,6 +447,8 @@ async def synthesize_with_canvas_draft(
     normalized = normalize_ai_response(last_response)
     answer = strip_prose_publish_canvas(normalized["answer"])
     answer = strip_unpublished_canvas_claims(answer)
+    if captured_draft is not None:
+        answer = strip_false_canvas_absence_prose(answer)
     return {
         "answer": answer,
         "response": last_response,

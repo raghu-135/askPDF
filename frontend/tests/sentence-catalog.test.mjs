@@ -6,6 +6,7 @@ import {
   highlightIdSet,
   readableSentenceIds,
   sentenceById,
+  uniqueHighlightBoxes,
 } from '../src/lib/sentence-catalog.ts';
 
 test('readable playlist skips non-readable catalog ids', () => {
@@ -46,6 +47,13 @@ test('adjacentReadableId steps from a non-readable id toward readable neighbors'
   ];
   assert.equal(adjacentReadableId(sentences, 0, 1), 1);
   assert.equal(adjacentReadableId(sentences, 0, -1), null);
+});
+
+test('uniqueHighlightBoxes dedupes identical boxes across sentences', () => {
+  const box = { page: 3, x: 10, y: 20, width: 100, height: 12, page_width: 600, page_height: 800 };
+  const near = { page: 3, x: 10.2, y: 20.1, width: 100.1, height: 12, page_width: 600, page_height: 800 };
+  const distinct = { page: 3, x: 200, y: 20, width: 80, height: 12, page_width: 600, page_height: 800 };
+  assert.equal(uniqueHighlightBoxes([box, near, distinct]).length, 2);
 });
 
 test('highlight lookup uses cited ids instead of array offsets', () => {
