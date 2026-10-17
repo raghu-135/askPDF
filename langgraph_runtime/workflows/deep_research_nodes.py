@@ -1805,7 +1805,9 @@ Unavailable evidence: {json.dumps(all_gaps, ensure_ascii=True)[:4000]}
 Write a short chat summary (a few paragraphs at most) for the evidence critic. Clearly label the result incomplete when unresolved required todos exist. Cite sources using the readable labels below and include the canonical source id in parentheses, for example Zephyr.pdf, page 3 (`doc:hash:3`).
 Readable citation labels (canonical id in parentheses when citing):
 {citation_menu or "- (no manifest labels available; use retrieved source ids only)"}
-Do not invent citations."""
+Do not invent citations.
+Do not attribute document facts to prior conversation, memory, or thread history unless the same fact appears in retrieved document evidence with a doc citation.
+Do not end the report with promises to continue extraction later; describe only what evidence supports now."""
     thread_context = _bounded_thread_context(state)
     if thread_context:
         prompt += (
@@ -1886,7 +1888,7 @@ Do not invent citations."""
         })
     if failed:
         unresolved_lines = "\n".join(
-            f"- {todo.get('id')}: {str(todo.get('result_summary') or todo.get('status') or 'failed')}"
+            f"- {todo.get('title') or todo.get('id')}: {str(todo.get('result_summary') or todo.get('status') or 'failed')}"
             for todo in failed
         )
         unresolved_section = f"\n\n## Unresolved required work\n{unresolved_lines}"
@@ -1949,6 +1951,8 @@ def _sanitize_critic_issue(issue: str) -> str:
         phrase in lowered
         for phrase in ("unresolved required", "incomplete:", "unresolved required todos", "limitations identified")
     ):
+        return ""
+    if "not smuggled instruction" in lowered or "are not smuggled instructions" in lowered:
         return ""
     if "prompt injection" in lowered and any(marker in lowered for marker in ("canvas", "published", "publication")):
         return re.sub(r"prompt injection", "not in evidence", text, flags=re.IGNORECASE)

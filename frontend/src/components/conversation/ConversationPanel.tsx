@@ -57,17 +57,30 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
       {status}
       <Box
         sx={{
-          flex: 1,
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          ...(decision
+            ? { flex: '0 0 auto', flexShrink: 0 }
+            : { flex: 1 }),
           ...transcriptSx,
         }}
       >
         {transcript}
       </Box>
-      {decision ? <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', ...decisionSx }}>{decision}</Box> : null}
+      {decision ? (
+        <Box sx={{
+          flex: '1 1 0',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          ...decisionSx,
+        }}>
+          {decision}
+        </Box>
+      ) : null}
       {composer}
       {footer}
     </Paper>
@@ -180,6 +193,8 @@ export function ConversationHeader({
         value={model}
         options={models}
         disabled={disabled}
+        minWidth={160}
+        sx={{ flex: '1 1 140px', minWidth: 0, maxWidth: 280 }}
         onChange={handleModelChange}
       />
       {afterModelControls}
