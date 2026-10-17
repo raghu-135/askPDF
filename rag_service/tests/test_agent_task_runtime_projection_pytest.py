@@ -9,9 +9,11 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import select
 
+from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
     AgentRun,
     AgentRuntimeOperation,
+    AgentTask,
     AgentTaskArtifact,
     AgentTaskEvent,
     AgentTaskRuntimeDelta,
@@ -668,6 +670,68 @@ async def test_redirect_projects_intermediate_plan_before_retained_artifact(
         stored_command = await session.get(AgentTaskCommand, command.id)
     assert stored_command.status == "completed"
     assert stored_command.result_json["delivery_state"] == "satisfied"
+
+
+@pytest.mark.asyncio
+async def test_result_review_retry_plan_delta_without_steer_command_does_not_conflict(
+    test_session_maker, sample_thread,
+):
+    """Regression: follow-up steering must not inject synthetic result-review correction ids into runtime deltas."""
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    review_key = "review-key-1"
+    async with test_session_maker() as session:
+        async with session.begin():
+            row = await session.get(AgentTask, task.id, with_for_update=True)
+            config = dict(row.config_json or {})
+            config["result_review_context"] = [{
+                "source_run_id": run.id,
+                "followup_input": "Focus on the PDF only.",
+                "idempotency_key": review_key,
+            }]
+            replace_jsonb_field(row, "config_json", config)
+    linked_run = AgentRun(
+        id=str(uuid.uuid4()),
+        thread_id=task.thread_id,
+        workflow_id=task.workflow_id,
+        framework="langgraph",
+        builder_id="langgraph_graph",
+        resolved_spec_json={"schema_version": 1},
+        run_metadata_json={
+            "run_kind": "agent_task",
+            "result_review_source_run_id": run.id,
+            "result_review_idempotency_key": review_key,
+        },
+    )
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add(linked_run)
+    linked_run = await repository.attach_run(task.id, linked_run, parent_run_id=run.id)
+    task = await repository.get_task(task.id)
+    assert task is not None
+    delta = TaskOrchestrationDelta(
+        event_id=f"{linked_run.id}:attempt:2:operation:start:result",
+        attempt_id=f"{linked_run.id}:attempt:2",
+        operation_id="start",
+        idempotency_key=f"delta:{linked_run.id}:attempt:2:start",
+        observed_task_version=task.version,
+        observed_plan_revision=0,
+        plan_changes=(
+            RuntimePlanChange(
+                runtime_revision=1,
+                parent_runtime_revision=0,
+                acknowledged_product_revision=0,
+                reason="course_correction",
+                planner_visit=1,
+                plan=_plan("pdf-focus"),
+                correction_ids=(),
+            ),
+        ),
+        todo_changes=({"id": "pdf-focus", "status": "pending", "progress": 0},),
+        budget_usage=initial_budget_state({"max_model_calls": 10}),
+        pending_interrupt={"operation": "clear"},
+        result={"status": "running"},
+    )
+    await apply_runtime_task_delta(task_id=task.id, agent_run_id=linked_run.id, delta=delta)
 
 
 @pytest.mark.asyncio

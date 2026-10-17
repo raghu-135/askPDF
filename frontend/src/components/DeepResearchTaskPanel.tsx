@@ -781,6 +781,11 @@ export default function DeepResearchTaskPanel({
         isBudgetReview={isBudgetReview}
         todoTitles={reviewTodoTitles}
       />
+      {reviewPanelOpen ? (
+        <Box sx={{ flexShrink: 0, maxHeight: 'min(32vh, 240px)', overflowY: 'auto', pr: 0.25 }}>
+          <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
+        </Box>
+      ) : null}
     </>
   ) : null;
   const timelineCitationSources = useMemo(
@@ -941,7 +946,6 @@ export default function DeepResearchTaskPanel({
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
     >
-      <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
       <DeepResearchProvisionalAnswer
         content={pendingInterrupt.provisional_answer}
         emptyMessage="No usable provisional answer was produced. Continue or steer the research."
@@ -987,7 +991,6 @@ export default function DeepResearchTaskPanel({
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
     >
-      <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
       {pendingInterrupt.provisional_answer ? (
         <DeepResearchProvisionalAnswer
           content={pendingInterrupt.provisional_answer}
