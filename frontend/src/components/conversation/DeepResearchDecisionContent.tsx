@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Alert, Box, Button, Collapse, TextField, Typography,
+  Alert, Box, Button, Chip, Collapse, Stack, TextField, Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { AgentRunPendingInterrupt, AgentTaskSummary } from '../../lib/api';
@@ -8,12 +8,11 @@ import {
   budgetUsageFromInterrupt,
   buildDecisionLeadLine,
   countReviewIssues,
-  reviewSummaryLines,
+  reviewLimitationItems,
 } from '../../lib/deep-research-decision-ui';
 import { DeepResearchBudgetChips } from './DeepResearchBudgetChips';
 import { buildCitationDisplayMap, rewriteDocCitationTokens } from '../../lib/research-citation-display';
 import type { CitationDisplaySource } from '../../lib/research-citation-display';
-import { ConversationDisclosure } from './ConversationDisclosure';
 import { ConversationMarkdownWithCitations } from './ConversationMarkdownWithCitations';
 
 const RUNTIME_REPORT_SECTION_PATTERN = /\n##\s+Unresolved required work[\s\S]*$/i;
@@ -43,11 +42,11 @@ export function DeepResearchIssueList({
   defaultExpanded?: boolean;
   todoTitles?: Record<string, string>;
 }) {
-  const lines = useMemo(() => reviewSummaryLines(pending, todoTitles), [pending, todoTitles]);
+  const items = useMemo(() => reviewLimitationItems(pending, todoTitles), [pending, todoTitles]);
   const [open, setOpen] = useState(Boolean(defaultExpanded));
-  if (!lines.length) return null;
+  if (!items.length) return null;
   return (
-    <Box>
+    <Box sx={{ flexShrink: 0 }}>
       <Button
         size="small"
         color="inherit"
@@ -55,11 +54,21 @@ export function DeepResearchIssueList({
         onClick={() => setOpen((value) => !value)}
         sx={{ textTransform: 'none', px: 0 }}
       >
-        {lines.length} limitation{lines.length === 1 ? '' : 's'} identified
+        {items.length} limitation{items.length === 1 ? '' : 's'} identified
       </Button>
-      <Collapse in={open}>
-        <Box component="ul" sx={{ m: 0, pl: 2.5, typography: 'body2', color: 'text.secondary' }}>
-          {lines.map((line, index) => <li key={`${index}-${line.slice(0, 24)}`}>{line}</li>)}
+      <Collapse in={open} sx={{ overflow: 'visible' }}>
+        <Box component="ul" sx={{ m: 0, pl: 0, listStyle: 'none', typography: 'body2', color: 'text.secondary' }}>
+          {items.map((item, index) => (
+            <Box component="li" key={`${index}-${item.text.slice(0, 24)}`} sx={{ display: 'flex', gap: 0.75, alignItems: 'flex-start', mb: 0.75 }}>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={item.kind === 'gap' ? 'Gap' : 'Review'}
+                sx={{ height: 20, flexShrink: 0, '& .MuiChip-label': { px: 0.75, fontSize: '0.65rem' } }}
+              />
+              <Typography component="span" variant="body2" color="text.secondary">{item.text}</Typography>
+            </Box>
+          ))}
         </Box>
       </Collapse>
     </Box>
@@ -161,12 +170,26 @@ export function DeepResearchProvisionalAnswer({
     return rewriteDocCitationTokens(raw, map);
   }, [content, citationSources]);
 
+  const [open, setOpen] = useState(!defaultCollapsed);
   if (displayContent?.trim()) {
     if (defaultCollapsed) {
       return (
-        <ConversationDisclosure label="Provisional report" defaultExpanded={false}>
-          <ConversationMarkdownWithCitations content={displayContent} citationSources={citationSources} />
-        </ConversationDisclosure>
+        <Box sx={{ flexShrink: 0 }}>
+          <Button
+            size="small"
+            color="inherit"
+            endIcon={<ExpandMoreIcon sx={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />}
+            onClick={() => setOpen((value) => !value)}
+            sx={{ textTransform: 'none', px: 0 }}
+          >
+            Provisional report
+          </Button>
+          <Collapse in={open} sx={{ overflow: 'visible' }}>
+            <Stack spacing={0.5} sx={{ pt: 0.5 }}>
+              <ConversationMarkdownWithCitations content={displayContent} citationSources={citationSources} />
+            </Stack>
+          </Collapse>
+        </Box>
       );
     }
     return <ConversationMarkdownWithCitations content={displayContent} citationSources={citationSources} />;

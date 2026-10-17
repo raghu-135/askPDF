@@ -578,6 +578,71 @@ def _web_evidence_plan_gaps(objective: str, web_search_mode: str) -> list[str]:
     return []
 
 
+_INDEX_READINESS_GAP_MARKERS = (
+    "document index is not ready",
+    "document conversion is not ready",
+    "document context is being repaired",
+)
+
+
+def _text_cites_document_evidence(*texts: str) -> bool:
+    joined = "\n".join(str(text or "") for text in texts)
+    if re.search(r"`doc:", joined):
+        return True
+    return bool(re.search(r"\[Source:\s*PDF:", joined, re.IGNORECASE))
+
+
+def filter_stale_index_readiness_gaps(
+    gaps: list[str],
+    *,
+    manifest: Any = None,
+    evidence_texts: Iterable[str] = (),
+) -> list[str]:
+    """Drop transient indexing gaps when manifest or synthesis already cites document evidence."""
+    if not gaps:
+        return gaps
+    has_doc_evidence = bool(_manifest_citation_ids(manifest or [])) or _text_cites_document_evidence(*evidence_texts)
+    if not has_doc_evidence:
+        return gaps
+    kept: list[str] = []
+    for gap in gaps:
+        lowered = str(gap or "").casefold().strip()
+        if any(marker in lowered for marker in _INDEX_READINESS_GAP_MARKERS):
+            continue
+        if lowered in {"document index not ready", "index not ready"}:
+            continue
+        kept.append(gap)
+    return kept
+
+
+def _normalize_limitation_key(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]+", "", str(text or "").casefold())).strip()
+
+
+def _dedupe_critic_issues(issues: list[str], gaps: list[str]) -> list[str]:
+    gap_keys = {_normalize_limitation_key(value) for value in gaps if str(value).strip()}
+    gap_keys = {value for value in gap_keys if value}
+    deduped: list[str] = []
+    for issue in issues:
+        issue_key = _normalize_limitation_key(issue)
+        if not issue_key:
+            continue
+        redundant = False
+        for gap_key in gap_keys:
+            if issue_key == gap_key:
+                redundant = True
+                break
+            if len(issue_key) >= 12 and issue_key in gap_key:
+                redundant = True
+                break
+            if len(gap_key) >= 12 and gap_key in issue_key:
+                redundant = True
+                break
+        if not redundant:
+            deduped.append(issue)
+    return deduped
+
+
 def _ensure_web_research_todo(
     proposal: DeepResearchPlanProposal,
     *,
@@ -1675,6 +1740,18 @@ async def deep_coordinator(state: Dict[str, Any], config: RunnableConfig) -> Dic
             dict(value) for value in packet.get("warnings") or [] if isinstance(value, Mapping)
         )
         result_gaps.extend(str(value) for value in packet.get("gaps") or [] if str(value).strip())
+    manifest_for_gaps = [
+        item for item in (
+            list(state.get("task_evidence_manifest") or [])
+            + [item for item in state.get("task_artifact_manifest") or [] if isinstance(item, Mapping)]
+        )
+        if isinstance(item, Mapping)
+    ]
+    result_gaps = filter_stale_index_readiness_gaps(
+        list(dict.fromkeys(result_gaps)),
+        manifest=manifest_for_gaps,
+        evidence_texts=[str(packet.get("text") or "") for packet in packets if isinstance(packet, Mapping)],
+    )
     if sink is not None and work_items:
         dispatch_id = str(work_items[0].get("dispatch_id") or "")
         if not dispatch_id or any(str(item.get("dispatch_id") or "") != dispatch_id for item in work_items):
@@ -1782,7 +1859,6 @@ async def deep_task_synthesizer(state: Dict[str, Any], config: RunnableConfig) -
         if isinstance(todo, dict) and todo.get("required") and todo.get("status") != "completed"
     ]
     result_gaps = [str(value) for value in state.get("task_result_gaps") or [] if str(value).strip()]
-    all_gaps = list(dict.fromkeys([*evidence_gaps, *result_gaps]))
     manifest_entries = [
         item for item in (
             list(state.get("task_evidence_manifest") or [])
@@ -1790,6 +1866,11 @@ async def deep_task_synthesizer(state: Dict[str, Any], config: RunnableConfig) -
         )
         if isinstance(item, Mapping)
     ]
+    all_gaps = filter_stale_index_readiness_gaps(
+        list(dict.fromkeys([*evidence_gaps, *result_gaps])),
+        manifest=manifest_entries,
+        evidence_texts=[*reports, str(state.get("final_answer") or "")],
+    )
     citation_labels = build_citation_display_map(manifest_entries)
     citation_menu = "\n".join(
         f"- {source_id}: {label}" for source_id, label in sorted(citation_labels.items())
@@ -1886,6 +1967,11 @@ Do not end the report with promises to continue extraction later; describe only 
             "code": "synthesis_contradicts_thread_inventory",
             "message": "The report claims missing documents although thread inventory lists attached files.",
         })
+    all_gaps = filter_stale_index_readiness_gaps(
+        all_gaps,
+        manifest=manifest_entries,
+        evidence_texts=[text, *reports],
+    )
     if failed:
         unresolved_lines = "\n".join(
             f"- {todo.get('title') or todo.get('id')}: {str(todo.get('result_summary') or todo.get('status') or 'failed')}"
@@ -1996,12 +2082,18 @@ Report:\n{critic_report[:60000]}{draft_block}"""
             accounting_phase="partial_synthesis" if state.get("task_budget_boundary") else "research",
         )
         review = safe_json_object(text)
+    gap_context = [
+        str(value) for value in state.get("task_result_gaps") or [] if str(value).strip()
+    ] + [
+        str(value) for value in state.get("task_incomplete_reasons") or [] if str(value).strip()
+    ]
     issues = [
         sanitized
         for value in review.get("issues") or []
         for sanitized in [_sanitize_critic_issue(str(value))]
         if sanitized
     ][:20]
+    issues = _dedupe_critic_issues(issues, gap_context)
     coverage_by_id = {
         str(value.get("correction_id")): dict(value)
         for value in review.get("correction_coverage") or []

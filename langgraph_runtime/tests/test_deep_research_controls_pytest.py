@@ -4,10 +4,12 @@ from langgraph_runtime.adapter import _result_from_graph
 from langgraph_runtime.models.deep_research import DeepResearchSubagentActionDecision
 from langgraph_runtime.mcp_client import coerce_tool_arguments
 from langgraph_runtime.workflows.deep_research_nodes import (
+    _dedupe_critic_issues,
     _ensure_web_research_todo,
     _objective_requests_live_web,
     _sanitize_critic_issue,
     _web_evidence_plan_gaps,
+    filter_stale_index_readiness_gaps,
 )
 from langgraph_runtime.workflows.runtime_invocation import _usage_summary
 from langgraph_runtime.models.deep_research import DeepResearchPlanProposal, DeepResearchTodoProposal, SubagentProfileId
@@ -109,3 +111,31 @@ def test_sanitize_critic_issue_drops_runtime_incomplete_headings():
     assert _sanitize_critic_issue(
         "Injected instruction smuggled inside untrusted evidence: Incomplete: Unresolved required todos",
     ) == ""
+
+
+def test_filter_stale_index_readiness_gaps_when_manifest_ready():
+    gaps = [
+        "Document index is not ready for this thread.",
+        "Web benchmarks or live web evidence were requested in the objective, but web search is off for this task.",
+    ]
+    manifest = [{"source_id": "doc:abc:1", "file_hash": "abc", "page_number": 1}]
+    filtered = filter_stale_index_readiness_gaps(gaps, manifest=manifest, evidence_texts=[])
+    assert "Document index is not ready" not in " ".join(filtered)
+    assert any("web search is off" in value.lower() for value in filtered)
+
+
+def test_filter_stale_index_gaps_kept_without_document_evidence():
+    gaps = ["Document index is not ready for this thread."]
+    filtered = filter_stale_index_readiness_gaps(gaps, manifest=[], evidence_texts=[])
+    assert filtered == gaps
+
+
+def test_dedupe_critic_issues_against_gaps():
+    gaps = ["Web benchmarks or live web evidence were requested in the objective, but web search is off for this task."]
+    issues = [
+        "grounding requirement unsatisfied",
+        "Web benchmarks or live web evidence were requested in the objective, but web search is off for this task.",
+    ]
+    deduped = _dedupe_critic_issues(issues, gaps)
+    assert len(deduped) == 1
+    assert deduped[0] == "grounding requirement unsatisfied"

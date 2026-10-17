@@ -16,7 +16,13 @@ export function ConversationDisclosure({
       defaultExpanded={defaultExpanded}
       disableGutters
       elevation={0}
-      sx={{ bgcolor: 'transparent', '&:before': { display: 'none' } }}
+      sx={{
+        bgcolor: 'transparent',
+        flexShrink: 0,
+        '&:before': { display: 'none' },
+        '& .MuiCollapse-root': { overflow: 'visible' },
+        '& .MuiAccordionDetails-root': { overflow: 'visible', display: 'block' },
+      }}
     >
       <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: 32, px: 0 }}>
         <Typography variant="caption">{label}</Typography>

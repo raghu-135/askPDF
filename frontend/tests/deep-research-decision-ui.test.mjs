@@ -7,6 +7,8 @@ import {
   countReviewIssues,
   formatBudgetDimensionChip,
   formatBudgetMeterLine,
+  objectiveRequestsLiveWeb,
+  reviewLimitationItems,
 } from '../src/lib/deep-research-decision-ui.ts';
 
 test('budgetUsageFromInterrupt reads tranche usage from pending usage payload', () => {
@@ -52,6 +54,24 @@ test('countReviewIssues totals structured limitation lines', () => {
   });
   assert.equal(counts.warningCount, 1);
   assert.equal(counts.gapCount, 1);
+  assert.equal(counts.reviewFindingCount, 2);
   assert.equal(counts.limitationCount, 3);
   assert.equal(counts.total, 3);
+});
+
+test('reviewLimitationItems dedupes critic issues that repeat gaps', () => {
+  const gap = 'Web benchmarks or live web evidence were requested in the objective, but web search is off for this task.';
+  const items = reviewLimitationItems({
+    gaps: [gap],
+    warnings: [{ code: 'evidence_critic_issues', details: { issues: [gap, 'Unique critic finding'] } }],
+  });
+  assert.equal(items.length, 2);
+  assert.equal(items[0].kind, 'gap');
+  assert.equal(items[1].kind, 'finding');
+  assert.equal(items[1].text, 'Unique critic finding');
+});
+
+test('objectiveRequestsLiveWeb detects benchmark objectives', () => {
+  assert.equal(objectiveRequestsLiveWeb('Compare to typical US bakery benchmarks using web sources'), true);
+  assert.equal(objectiveRequestsLiveWeb('Summarize the PDF only'), false);
 });

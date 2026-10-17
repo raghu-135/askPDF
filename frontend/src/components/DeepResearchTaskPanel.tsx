@@ -81,7 +81,11 @@ import {
   DeepResearchIssueList,
   DeepResearchProvisionalAnswer,
 } from './conversation/DeepResearchDecisionContent';
-import { budgetUsageFromTask, countReviewIssues } from '../lib/deep-research-decision-ui';
+import {
+  budgetUsageFromTask,
+  countReviewIssues,
+  objectiveRequestsLiveWeb,
+} from '../lib/deep-research-decision-ui';
 import { DeepResearchBudgetChips } from './conversation/DeepResearchBudgetChips';
 import { formatAgentTaskStatus, formatTimelineItemStatus } from '../lib/deep-research-task-status';
 import { WorkbenchSelect } from './workbench/WorkbenchToolbar';
@@ -686,6 +690,12 @@ export default function DeepResearchTaskPanel({
   const contextWindowField = definitionFields.find((field) => field.id === 'context_window');
   const webSearchField = definitionFields.find((field) => field.id === 'web_search_mode');
   const requestedWebUnavailable = webSearchMode !== 'off' && webSearchField?.enabled === false;
+  const effectiveWebMode = frozen ? configuredWebMode : webSearchMode;
+  const objectiveWebMismatch = Boolean(
+    task?.objective
+    && effectiveWebMode === 'off'
+    && objectiveRequestsLiveWeb(task.objective),
+  );
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
   const liveBudgetSnapshot = useMemo(() => budgetUsageFromTask(task), [task]);
   const reviewTodoTitles = useMemo(() => {
@@ -818,6 +828,7 @@ export default function DeepResearchTaskPanel({
       flex: 1,
       minHeight: 0,
     }}
+    decisionSx={reviewPanelOpen ? { flex: '1 1 0', minHeight: 0, overflow: 'hidden' } : undefined}
     header={<ConversationHeader
       models={models}
       model={frozen ? String(task?.configuration?.llm_model || model) : model}
@@ -854,6 +865,9 @@ export default function DeepResearchTaskPanel({
       {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
       {deepResearchDiscoveryError && <Alert severity="warning" sx={{ mb: 1 }}>{deepResearchDiscoveryError}</Alert>}
       {requestedWebUnavailable && <Alert severity="warning" sx={{ mb: 1 }}>The selected definition does not allow web search.</Alert>}
+      {objectiveWebMismatch && <Alert severity="warning" sx={{ mb: 1 }}>
+        This objective asks for web benchmarks or external sources, but web search is off for this task. Industry comparisons will be missing unless you start a new task with web search enabled.
+      </Alert>}
       {runtimeControlError && <Alert severity="warning" sx={{ mb: 1 }}>{runtimeControlError}</Alert>}
       {task?.status === 'recovery_required' && <Alert severity="warning" sx={{ mb: 1 }}>
         Runtime execution finished, but its product-state update could not be applied safely. Retry the task or ask an administrator to reconcile this run.
