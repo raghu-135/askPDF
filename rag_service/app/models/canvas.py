@@ -311,6 +311,16 @@ def admit_canvas_spec(spec: CanvasSpec, *, thread_file_hashes: set[str]) -> None
             "unknown_document_citation",
             "document citations must use file_hash values attached to this thread: " + ", ".join(unknown),
         )
+    missing_sentence = [
+        citation.label
+        for citation in citations
+        if citation.kind == "document" and citation.sentence_id is None
+    ]
+    if missing_sentence:
+        raise CanvasAdmissionError(
+            "missing_sentence_locator",
+            "document citations must resolve to at least one sentence id: " + ", ".join(missing_sentence[:5]),
+        )
 
 
 def _sentence_lookup(parsed: dict[str, Any] | None) -> dict[int, dict[str, Any]]:
