@@ -1,10 +1,6 @@
-import pytest
-
 from langgraph_runtime.models.retry import is_retryable_model_error
 from langgraph_runtime.workflows.runtime_invocation import error_summary, llm_result_metadata
 from runtime_protocol.model_errors import CONTEXT_LENGTH_EXCEEDED, classify_model_error_message, output_was_truncated
-
-pytest.importorskip("langgraph")
 
 
 def test_context_length_provider_error_is_non_retryable_and_coded():
