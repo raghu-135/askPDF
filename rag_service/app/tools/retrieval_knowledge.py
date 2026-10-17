@@ -156,9 +156,18 @@ def _source_from_chunk(
         or get("sentence_ids", None)
         or []
     )
+    file_name = str(
+        metadata.get("file_name")
+        or get("file_name", None)
+        or metadata.get("title")
+        or get("title", None)
+        or ""
+    ).strip() or None
     return {
         "source_id": source_id,
         "file_hash": get("file_hash"),
+        "file_name": file_name,
+        "title": file_name,
         "parent_id": get("section_id"),
         "chunk_id": get("chunk_id"),
         "text": body[:200] + ("..." if len(body) > 200 else ""),

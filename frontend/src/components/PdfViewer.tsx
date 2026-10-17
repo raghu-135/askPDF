@@ -86,7 +86,7 @@ import {
   type SentenceWithPageBBoxes,
 } from "../lib/pdf-utils";
 import { clampPanelRatio, PANEL_RATIOS } from "../lib/panel-ratio";
-import { highlightIdSet, sentenceById } from "../lib/sentence-catalog";
+import { firstHighlightableBBox, highlightIdSet, sentenceById } from "../lib/sentence-catalog";
 
 
 type BBox = {
@@ -528,8 +528,8 @@ function EmbedPdfDocumentBody({
     if (isHistoryProcessingRef.current) return;
 
     if (!autoScroll || currentId === null || !sentences) return;
-    const s = sentenceById(sentences, currentId);
-    const bbox = s?.bboxes?.[0];
+    const highlightIds = highlightIdSet(currentId, highlightSentenceIds);
+    const bbox = firstHighlightableBBox(sentences, [...highlightIds]);
     if (!bbox) return;
 
     scrollRef.current?.scrollToPage({
@@ -541,7 +541,7 @@ function EmbedPdfDocumentBody({
       alignY: 35,
       behavior: "smooth",
     });
-  }, [currentId, autoScroll, sentences, isHistoryProcessingRef]);
+  }, [currentId, highlightSentenceIds, autoScroll, sentences, isHistoryProcessingRef]);
 
   const scrollToAnnotation = useCallback(
     (anno: PdfAnnotationObject) => {

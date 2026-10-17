@@ -66,11 +66,26 @@ async def _first_sentence_for_chunk(file_hash: str, locator: str) -> int | None:
             row = result.scalar_one_or_none()
     if row is None:
         return None
-    for raw in row.sentence_ids or []:
+    parsed = await get_file_parsed_sentences(file_hash)
+    by_id: dict[int, dict[str, Any]] = {}
+    for item in (parsed or {}).get("sentences") or []:
+        if not isinstance(item, dict):
+            continue
         try:
-            return int(raw)
+            by_id[int(item.get("id"))] = item
         except (TypeError, ValueError):
             continue
+    for raw in row.sentence_ids or []:
+        try:
+            sentence_id = int(raw)
+        except (TypeError, ValueError):
+            continue
+        item = by_id.get(sentence_id)
+        if not item or not str(item.get("text") or "").strip():
+            continue
+        if item.get("readable") is False:
+            continue
+        return sentence_id
     return None
 
 

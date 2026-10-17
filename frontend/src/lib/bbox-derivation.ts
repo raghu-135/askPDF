@@ -48,17 +48,8 @@ export function deriveBBoxes(sentence: BackendSentence): BBox[] {
   // Filter out null/undefined bboxes (web content may not have bounding boxes)
   const validBboxes = bboxSources.filter((bbox): bbox is NonNullable<typeof bbox> => bbox != null);
 
-  // If no valid bboxes, create a default one for the sentence
   if (validBboxes.length === 0) {
-    return [{
-      page: sentence.page || 1,
-      x: 0,
-      y: 0,
-      width: 0,
-      height: 0,
-      page_width: sentence.page_width || 800,
-      page_height: sentence.page_height || 600,
-    }];
+    return [];
   }
 
   return validBboxes.map((bbox) => {

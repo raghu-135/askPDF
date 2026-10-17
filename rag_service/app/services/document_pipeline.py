@@ -16,9 +16,9 @@ from functools import lru_cache
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-EXTRACTION_PIPELINE_VERSION = "docling-pdf-v6"
+EXTRACTION_PIPELINE_VERSION = "docling-pdf-v7"
 CANONICAL_SCHEMA_VERSION = "docling-canonical-v2"
-RETRIEVAL_CHUNKING_VERSION = "table-pack-v7"
+RETRIEVAL_CHUNKING_VERSION = "table-pack-v8"
 RETRIEVAL_SOURCE_VERSION = "document-retrieval-v3"
 READING_EXCLUDED_LABELS = frozenset({
     "page_header",
@@ -627,8 +627,8 @@ def sentence_pipeline_identity() -> str:
 
 
 def _default_sentence_split(text: str) -> list[str]:
-    nlp = _sentence_nlp()
-    return [sentence.text.strip() for sentence in nlp(text) if sentence.text.strip()]
+    doc = _sentence_nlp()(text)
+    return [span.text.strip() for span in doc.sents if span.text.strip()]
 
 
 def _raw_value(value: Any) -> Any:

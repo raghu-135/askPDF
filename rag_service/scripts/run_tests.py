@@ -43,6 +43,7 @@ UNIT_TEST_FILES = [
     "test_canvas_api_pytest.py",
     "test_canvas_emit_pytest.py",
     "test_canvas_compiler_pytest.py",
+    "test_canvas_first_readable_sentence_pytest.py",
     "test_canvas_layout_skills_pytest.py",
     "test_canvas_spec_pytest.py",
     "test_canvas_service_pytest.py",
