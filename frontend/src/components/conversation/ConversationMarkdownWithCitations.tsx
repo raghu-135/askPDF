@@ -3,7 +3,51 @@ import { Chip, Stack } from '@mui/material';
 import type { CitationDisplaySource } from '../../lib/research-citation-display';
 import { ConversationMarkdown } from './ConversationMarkdown';
 
-const CITATION_CHIP_PATTERN = /([^\n`]+?,\s*page\s+\d+)\s*\(`(doc:[^`]+)`\)/gi;
+const DOC_CITATION_PATTERN = /([^\n`]+?,\s*page\s+\d+)\s*\(`(doc:[^`]+)`\)/gi;
+const SOURCE_BRACKET_PATTERN = /\[Source:\s*([^\]]+)\]/gi;
+
+type Segment = { type: 'markdown' | 'chip'; value: string; sourceId?: string };
+
+function collectCitationSegments(text: string): Segment[] {
+  const hits: Array<{ index: number; length: number; segment: Segment }> = [];
+  const docPattern = new RegExp(DOC_CITATION_PATTERN.source, 'gi');
+  let match = docPattern.exec(text);
+  while (match) {
+    hits.push({
+      index: match.index,
+      length: match[0].length,
+      segment: { type: 'chip', value: match[1].trim(), sourceId: match[2] },
+    });
+    match = docPattern.exec(text);
+  }
+  const sourcePattern = new RegExp(SOURCE_BRACKET_PATTERN.source, 'gi');
+  match = sourcePattern.exec(text);
+  while (match) {
+    const overlaps = hits.some((hit) => match!.index >= hit.index && match!.index < hit.index + hit.length);
+    if (!overlaps) {
+      hits.push({
+        index: match.index,
+        length: match[0].length,
+        segment: { type: 'chip', value: match[1].trim(), sourceId: match[0] },
+      });
+    }
+    match = sourcePattern.exec(text);
+  }
+  hits.sort((a, b) => a.index - b.index);
+  const parts: Segment[] = [];
+  let lastIndex = 0;
+  hits.forEach((hit) => {
+    if (hit.index > lastIndex) {
+      parts.push({ type: 'markdown', value: text.slice(lastIndex, hit.index) });
+    }
+    parts.push(hit.segment);
+    lastIndex = hit.index + hit.length;
+  });
+  if (lastIndex < text.length) {
+    parts.push({ type: 'markdown', value: text.slice(lastIndex) });
+  }
+  return parts.length ? parts : [{ type: 'markdown', value: text }];
+}
 
 export function ConversationMarkdownWithCitations({
   content,
@@ -15,22 +59,7 @@ export function ConversationMarkdownWithCitations({
   const segments = useMemo(() => {
     const text = String(content || '');
     if (!text.trim()) return [{ type: 'markdown' as const, value: text }];
-    const parts: Array<{ type: 'markdown' | 'chip'; value: string; sourceId?: string }> = [];
-    let lastIndex = 0;
-    const pattern = new RegExp(CITATION_CHIP_PATTERN.source, 'gi');
-    let match = pattern.exec(text);
-    while (match) {
-      if (match.index > lastIndex) {
-        parts.push({ type: 'markdown', value: text.slice(lastIndex, match.index) });
-      }
-      parts.push({ type: 'chip', value: match[1].trim(), sourceId: match[2] });
-      lastIndex = match.index + match[0].length;
-      match = pattern.exec(text);
-    }
-    if (lastIndex < text.length) {
-      parts.push({ type: 'markdown', value: text.slice(lastIndex) });
-    }
-    return parts.length ? parts : [{ type: 'markdown' as const, value: text }];
+    return collectCitationSegments(text);
   }, [content]);
 
   if (segments.length === 1 && segments[0].type === 'markdown') {

@@ -108,6 +108,31 @@ export function budgetUsageFromInterrupt(
 
 const TODO_GAP_PATTERN = /^todo-\d+$/i;
 
+/** Mirrors `_OBJECTIVE_WEB_EVIDENCE_PATTERN` in deep_research_nodes.py */
+const OBJECTIVE_WEB_EVIDENCE_PATTERN = /\b(web|benchmark|industry\s+comparison|compare\s+.*\s+to\s+typical|live\s+web|external\s+sources?)\b/i;
+
+export function objectiveRequestsLiveWeb(objective: string): boolean {
+  return OBJECTIVE_WEB_EVIDENCE_PATTERN.test(String(objective || ''));
+}
+
+export type ReviewLimitationItem = { kind: 'gap' | 'finding'; text: string };
+
+function normalizeLimitationKey(text: string): string {
+  return text.toLowerCase().replace(/[^\w\s]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function isRedundantFinding(text: string, gapKeys: Set<string>): boolean {
+  const issueKey = normalizeLimitationKey(text);
+  if (!issueKey) return true;
+  for (const gapKey of gapKeys) {
+    if (!gapKey) continue;
+    if (issueKey === gapKey) return true;
+    if (issueKey.length >= 12 && gapKey.includes(issueKey)) return true;
+    if (gapKey.length >= 12 && issueKey.includes(gapKey)) return true;
+  }
+  return false;
+}
+
 export function enrichReviewGapLine(
   gap: string,
   todoTitles?: Record<string, string>,
@@ -131,16 +156,20 @@ export function enrichReviewGapLine(
   return trimmed;
 }
 
-export function reviewSummaryLines(
+export function reviewLimitationItems(
   pending: AgentRunPendingInterrupt | null | undefined,
   todoTitles?: Record<string, string>,
-): string[] {
+): ReviewLimitationItem[] {
   if (!pending) return [];
-  const lines: string[] = [];
+  const items: ReviewLimitationItem[] = [];
+  const gapKeys = new Set<string>();
   const gaps = Array.isArray(pending.gaps) ? pending.gaps.map(String) : [];
   gaps.forEach((gap) => {
     const enriched = enrichReviewGapLine(gap, todoTitles);
-    if (enriched) lines.push(enriched);
+    if (!enriched) return;
+    items.push({ kind: 'gap', text: enriched });
+    gapKeys.add(normalizeLimitationKey(enriched));
+    gapKeys.add(normalizeLimitationKey(gap));
   });
   const warnings = Array.isArray(pending.warnings) ? pending.warnings : [];
   warnings.forEach((entry) => {
@@ -150,22 +179,34 @@ export function reviewSummaryLines(
     const issues = details && Array.isArray(details.issues) ? details.issues : [];
     if (issues.length) {
       issues.forEach((issue) => {
+        let message = '';
         if (typeof issue === 'string') {
-          if (!isNoiseCriticIssue(issue)) lines.push(issue);
+          message = issue;
         } else if (issue && typeof issue === 'object') {
-          const message = String(
+          message = String(
             (issue as { message?: string }).message
             || (issue as { summary?: string }).summary
             || code,
           );
-          if (!isNoiseCriticIssue(message)) lines.push(message);
         }
+        if (!message || isNoiseCriticIssue(message) || isRedundantFinding(message, gapKeys)) return;
+        items.push({ kind: 'finding', text: message });
       });
-    } else {
-      lines.push(code.replaceAll('_', ' '));
+    } else if (code !== 'evidence_critic_issues') {
+      const fallback = code.replaceAll('_', ' ');
+      if (!isRedundantFinding(fallback, gapKeys)) {
+        items.push({ kind: 'finding', text: fallback });
+      }
     }
   });
-  return lines;
+  return items;
+}
+
+export function reviewSummaryLines(
+  pending: AgentRunPendingInterrupt | null | undefined,
+  todoTitles?: Record<string, string>,
+): string[] {
+  return reviewLimitationItems(pending, todoTitles).map((item) => item.text);
 }
 
 export function isNoiseCriticIssue(text: string): boolean {
@@ -181,17 +222,16 @@ export function countReviewIssues(
   pending: AgentRunPendingInterrupt | null | undefined,
   todoTitles?: Record<string, string>,
 ): { warningCount: number; gapCount: number; reviewFindingCount: number; limitationCount: number; total: number } {
-  const lines = reviewSummaryLines(pending, todoTitles);
-  const gaps = Array.isArray(pending?.gaps) ? pending!.gaps.map(String).filter((gap) => gap.trim()) : [];
-  const gapLineCount = gaps.length;
-  const reviewFindingCount = Math.max(0, lines.length - gapLineCount);
+  const items = reviewLimitationItems(pending, todoTitles);
+  const gapCount = items.filter((item) => item.kind === 'gap').length;
+  const reviewFindingCount = items.filter((item) => item.kind === 'finding').length;
   const warnings = Array.isArray(pending?.warnings) ? pending!.warnings : [];
   return {
     warningCount: warnings.length,
-    gapCount: gaps.length,
+    gapCount,
     reviewFindingCount,
-    limitationCount: lines.length,
-    total: lines.length,
+    limitationCount: items.length,
+    total: items.length,
   };
 }
 

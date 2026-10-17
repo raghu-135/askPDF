@@ -1,5 +1,5 @@
 import React from 'react';
-import { Chip, Stack } from '@mui/material';
+import { Chip, Stack, Tooltip } from '@mui/material';
 import type { BudgetUsageSnapshot } from '../../lib/deep-research-decision-ui';
 import {
   formatBudgetDimensionChip,
@@ -18,26 +18,27 @@ export function DeepResearchBudgetChips({
   return (
     <Stack direction="row" spacing={0.75} flexWrap="wrap" alignItems="center" useFlexGap>
       {tranchePrefix ? (
-        <Chip
-          size="small"
-          variant="outlined"
-          label={`Tranche ${snapshot.trancheIndex}`}
-          title="Research budget tranche index for this task attempt."
-        />
+        <Tooltip title="Research budget tranche index for this task attempt.">
+          <Chip
+            size="small"
+            variant="outlined"
+            label={`Tranche ${snapshot.trancheIndex}`}
+          />
+        </Tooltip>
       ) : null}
       {RESEARCH_BUDGET_DIMENSIONS.map((key) => {
         const limit = snapshot.trancheLimits[key];
         if (limit == null) return null;
         const used = snapshot.trancheUsage[key] || 0;
         return (
-          <Chip
-            key={key}
-            size="small"
-            variant="outlined"
-            title={researchBudgetDimensionTooltip(key)}
-            label={formatBudgetDimensionChip(key, used, limit)}
-            sx={{ maxWidth: '100%', height: 'auto', '& .MuiChip-label': { whiteSpace: 'normal', py: 0.25 } }}
-          />
+          <Tooltip key={key} title={researchBudgetDimensionTooltip(key)}>
+            <Chip
+              size="small"
+              variant="outlined"
+              label={formatBudgetDimensionChip(key, used, limit)}
+              sx={{ maxWidth: '100%', height: 'auto', '& .MuiChip-label': { whiteSpace: 'normal', py: 0.25 } }}
+            />
+          </Tooltip>
         );
       })}
     </Stack>
