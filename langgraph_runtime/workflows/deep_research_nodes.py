@@ -578,101 +578,11 @@ def _web_evidence_plan_gaps(objective: str, web_search_mode: str) -> list[str]:
     return []
 
 
-_INDEX_READINESS_GAP_MARKERS = (
-    "document index is not ready",
-    "document conversion is not ready",
-    "document context is being repaired",
+from runtime_protocol.research_gaps import (
+    dedupe_critic_issues as _dedupe_critic_issues,
+    filter_stale_index_readiness_gaps,
+    text_cites_document_evidence as _text_cites_document_evidence,
 )
-
-
-def _text_cites_document_evidence(*texts: str) -> bool:
-    joined = "\n".join(str(text or "") for text in texts)
-    if re.search(r"`doc:", joined):
-        return True
-    if re.search(r"\[Source:\s*PDF:", joined, re.IGNORECASE):
-        return True
-    if re.search(r"\([^)]+\.pdf,\s*page\s+\d+\)", joined, re.IGNORECASE):
-        return True
-    if re.search(r"\.pdf\b", joined, re.IGNORECASE) and re.search(r"\bpage\s+\d+\b", joined, re.IGNORECASE):
-        return True
-    return False
-
-
-def _gap_mentions_index_not_ready(gap: str) -> bool:
-    lowered = str(gap or "").casefold().strip()
-    if not lowered:
-        return False
-    if any(marker in lowered for marker in _INDEX_READINESS_GAP_MARKERS):
-        return True
-    if lowered in {"document index not ready", "index not ready"}:
-        return True
-    return bool(re.search(r"document\s+index\s+(?:is\s+)?not\s+(\w+\s+)*ready", lowered))
-
-
-def _limitation_topic_keys(text: str) -> set[str]:
-    lowered = str(text or "").casefold()
-    topics: set[str] = set()
-    if _gap_mentions_index_not_ready(lowered) or re.search(r"\bindex(?:ing)?\s+(?:is\s+)?not\s+ready\b", lowered):
-        topics.add("index_readiness")
-    if re.search(r"\bno\s+staff\b|staff\s+information\s+not|without\s+staff|does\s+not\s+provide\s+(?:any\s+)?staff", lowered):
-        topics.add("staff_absence")
-    if "web search is off" in lowered or "web benchmarks" in lowered:
-        topics.add("web_off")
-    return topics
-
-
-def filter_stale_index_readiness_gaps(
-    gaps: list[str],
-    *,
-    manifest: Any = None,
-    evidence_texts: Iterable[str] = (),
-) -> list[str]:
-    """Drop transient indexing gaps when manifest or synthesis already cites document evidence."""
-    if not gaps:
-        return gaps
-    has_doc_evidence = bool(_manifest_citation_ids(manifest or [])) or _text_cites_document_evidence(*evidence_texts)
-    if not has_doc_evidence:
-        return gaps
-    kept: list[str] = []
-    for gap in gaps:
-        if _gap_mentions_index_not_ready(gap):
-            continue
-        kept.append(gap)
-    return kept
-
-
-def _normalize_limitation_key(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]+", "", str(text or "").casefold())).strip()
-
-
-def _dedupe_critic_issues(issues: list[str], gaps: list[str]) -> list[str]:
-    gap_keys = {_normalize_limitation_key(value) for value in gaps if str(value).strip()}
-    gap_keys = {value for value in gap_keys if value}
-    gap_topics: set[str] = set()
-    for gap in gaps:
-        gap_topics |= _limitation_topic_keys(gap)
-    deduped: list[str] = []
-    for issue in issues:
-        issue_key = _normalize_limitation_key(issue)
-        if not issue_key:
-            continue
-        issue_topics = _limitation_topic_keys(issue)
-        if issue_topics and issue_topics <= gap_topics:
-            continue
-        redundant = False
-        for gap_key in gap_keys:
-            if issue_key == gap_key:
-                redundant = True
-                break
-            if len(issue_key) >= 8 and issue_key in gap_key:
-                redundant = True
-                break
-            if len(gap_key) >= 8 and gap_key in issue_key:
-                redundant = True
-                break
-        if not redundant:
-            deduped.append(issue)
-    return deduped
 
 
 def _ensure_web_research_todo(

@@ -372,3 +372,8 @@ if [ "$frontend_only" = "1" ] && [ "${#backend_args[@]}" -eq 0 ]; then
 fi
 
 "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" run --rm --build test-runner "${backend_args[@]}"
+
+if [ "${SKIP_RAG_IMAGE_SMOKE:-}" != "1" ] && [ "${RUN_LANGGRAPH_RUNTIME:-0}" != "1" ] && [ "${RUN_HERMES_RUNTIME:-0}" != "1" ]; then
+    echo "Running rag-service image import smoke..."
+    bash "${PWD}/rag_service/scripts/rag_service_image_import_smoke.sh"
+fi

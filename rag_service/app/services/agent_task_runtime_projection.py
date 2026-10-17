@@ -29,6 +29,7 @@ from app.runtime.behavior import continuation_is_linked
 from app.services.content_store import get_content_store, task_artifact_content_key
 from app.time_utils import utc_now
 from runtime_protocol.contracts import TaskOrchestrationDelta
+from runtime_protocol.research_gaps import dedupe_critic_issues, filter_stale_index_readiness_gaps
 from app.runtime.budgets import configured_budget_value
 
 
@@ -276,8 +277,6 @@ def _enrich_gap_label(gap: str, todo_titles: Mapping[str, str]) -> str:
 
 
 def _filter_interrupt_gaps(gaps: list[str], provisional_answer: str, task_result: Mapping[str, Any]) -> list[str]:
-    from langgraph_runtime.workflows.deep_research_nodes import filter_stale_index_readiness_gaps
-
     manifest: list[Any] = []
     for key in ("task_evidence_manifest", "evidence_manifest", "artifact_manifest"):
         value = task_result.get(key)
@@ -291,8 +290,6 @@ def _filter_interrupt_gaps(gaps: list[str], provisional_answer: str, task_result
 
 
 def _scrub_review_warnings(warnings: list[dict[str, Any]], gaps: list[str]) -> list[dict[str, Any]]:
-    from langgraph_runtime.workflows.deep_research_nodes import _dedupe_critic_issues
-
     scrubbed: list[dict[str, Any]] = []
     for entry in warnings:
         if str(entry.get("code") or "") != "evidence_critic_issues":
@@ -300,7 +297,7 @@ def _scrub_review_warnings(warnings: list[dict[str, Any]], gaps: list[str]) -> l
             continue
         details = dict(entry.get("details") or {})
         issues = [str(value) for value in details.get("issues") or [] if str(value).strip()]
-        details["issues"] = _dedupe_critic_issues(issues, gaps)
+        details["issues"] = dedupe_critic_issues(issues, gaps)
         scrubbed.append({**entry, "details": details})
     return scrubbed
 
