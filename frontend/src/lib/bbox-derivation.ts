@@ -46,6 +46,29 @@ const positivePageDimension = (value: unknown): number | null => {
   return Number.isFinite(number) && number > 0 ? number : null;
 };
 
+const bboxArea = (bbox: BBox): number => Math.max(0, bbox.width) * Math.max(0, bbox.height);
+
+const bboxOverlapRatio = (left: BBox, right: BBox): number => {
+  if (left.page !== right.page) return 0;
+  const overlapWidth = Math.max(0, Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
+  const overlapHeight = Math.max(0, Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
+  const intersection = overlapWidth * overlapHeight;
+  const smaller = Math.min(bboxArea(left), bboxArea(right));
+  return smaller > 0 ? intersection / smaller : 0;
+};
+
+export const dedupeOverlappingBBoxes = (boxes: BBox[], overlapThreshold = 0.85): BBox[] => {
+  const sorted = [...boxes].sort((left, right) => bboxArea(left) - bboxArea(right));
+  const kept: BBox[] = [];
+  for (const candidate of sorted) {
+    if (kept.some((existing) => bboxOverlapRatio(candidate, existing) >= overlapThreshold)) {
+      continue;
+    }
+    kept.push(candidate);
+  }
+  return kept;
+};
+
 export function deriveBBoxes(sentence: BackendSentence): BBox[] {
   // Use bboxes array if available (multi-line sentences), otherwise use single bbox
   const bboxSources = sentence.bboxes || [sentence.bbox];
@@ -93,7 +116,7 @@ export function deriveBBoxes(sentence: BackendSentence): BBox[] {
       page_height: pageHeight,
     });
   }
-  return derived;
+  return dedupeOverlappingBBoxes(derived);
 }
 
 /**

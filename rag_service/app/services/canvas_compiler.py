@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -37,6 +38,8 @@ from app.models.canvas_draft import CanvasCompileError, CanvasDraftClaim, Canvas
 
 _FILE_HASH_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class ResolvedClaim:
@@ -48,7 +51,12 @@ class ResolvedClaim:
     group: Optional[str]
 
 
-async def _chunk_row_for_locator(file_hash: str, locator: str):
+async def _chunk_row_for_locator(
+    file_hash: str,
+    locator: str,
+    *,
+    embedding_model: str | None = None,
+):
     async with async_session_maker() as session:
         async with session.begin():
             result = await session.execute(
@@ -65,7 +73,14 @@ async def _chunk_row_for_locator(file_hash: str, locator: str):
                 .order_by(DocumentChunk.chunk_order)
                 .limit(1)
             )
-            return result.scalar_one_or_none()
+            row = result.scalar_one_or_none()
+    if row is not None:
+        return row
+    if not embedding_model:
+        return None
+    repo = get_canonical_document_repo()
+    chunks = await repo.get_chunks_by_source_id(locator, embedding_model, file_hash=file_hash)
+    return chunks[0] if chunks else None
 
 
 async def _chunk_locator_exists(file_hash: str, locator: str) -> bool:
@@ -85,12 +100,13 @@ async def _parsed_sentence_catalog(file_hash: str) -> dict[int, dict[str, Any]]:
     return by_id
 
 
-async def _readable_sentence_ids_for_chunk(file_hash: str, locator: str) -> tuple[int | None, list[int]]:
-    row = await _chunk_row_for_locator(file_hash, locator)
-    if row is None:
-        return None, []
-    by_id = await _parsed_sentence_catalog(file_hash)
-    readable: list[int] = []
+def _sentence_ids_from_chunk_row(
+    row: Any,
+    by_id: dict[int, dict[str, Any]],
+) -> tuple[int | None, list[int]]:
+    """Return scroll target (first readable) and highlight ids for a chunk row."""
+    catalog_ids: list[int] = []
+    readable_ids: list[int] = []
     for raw in row.sentence_ids or []:
         try:
             sentence_id = int(raw)
@@ -99,16 +115,38 @@ async def _readable_sentence_ids_for_chunk(file_hash: str, locator: str) -> tupl
         item = by_id.get(sentence_id)
         if not item or not str(item.get("text") or "").strip():
             continue
-        if item.get("readable") is False:
-            continue
-        readable.append(sentence_id)
-    first = readable[0] if readable else None
-    return first, readable
+        catalog_ids.append(sentence_id)
+        if item.get("readable") is not False:
+            readable_ids.append(sentence_id)
+    highlight_ids = readable_ids or catalog_ids
+    scroll_id = readable_ids[0] if readable_ids else (catalog_ids[0] if catalog_ids else None)
+    return scroll_id, highlight_ids
+
+
+async def _readable_sentence_ids_for_chunk(
+    file_hash: str,
+    locator: str,
+    *,
+    embedding_model: str | None = None,
+) -> tuple[int | None, list[int], bool]:
+    """Resolve chunk locator to sentence ids. Third value is True when a chunk row was found."""
+    row = await _chunk_row_for_locator(file_hash, locator, embedding_model=embedding_model)
+    if row is None:
+        return None, [], False
+    by_id = await _parsed_sentence_catalog(file_hash)
+    scroll_id, highlight_ids = _sentence_ids_from_chunk_row(row, by_id)
+    return scroll_id, highlight_ids, True
 
 
 async def _first_sentence_for_chunk(file_hash: str, locator: str) -> int | None:
-    first, _readable = await _readable_sentence_ids_for_chunk(file_hash, locator)
+    first, _readable, _found = await _readable_sentence_ids_for_chunk(file_hash, locator)
     return first
+
+
+def _raise_unresolved_document_locator(file_hash: str, locator: str, *, reason: str) -> None:
+    message = f"could not resolve doc:{file_hash}:{locator} ({reason})"
+    logger.warning("canvas compile unresolved document locator: %s", message)
+    raise CanvasCompileError("unknown_chunk", message)
 
 
 async def _sentence_exists(file_hash: str, sentence_id: int) -> bool:
@@ -170,6 +208,7 @@ async def _citation_for_document_locator(
     locator: str,
     *,
     default_label: str,
+    embedding_model: str | None = None,
 ) -> tuple[CanvasCitation, Optional[tuple[str, int]]]:
     quote: Optional[tuple[str, int]] = None
     sentence_ids: list[int] = []
@@ -195,22 +234,50 @@ async def _citation_for_document_locator(
             quote = (file_hash, sentence_id)
             sentence_ids = [sentence_id]
         else:
-            first, readable = await _readable_sentence_ids_for_chunk(file_hash, legacy_id)
-            if first is not None:
-                quote = (file_hash, first)
+            first, readable, found = await _readable_sentence_ids_for_chunk(
+                file_hash,
+                legacy_id,
+                embedding_model=embedding_model,
+            )
+            if not found:
+                _raise_unresolved_document_locator(file_hash, locator, reason="chunk row not found for legacy locator")
+            if not readable:
+                _raise_unresolved_document_locator(
+                    file_hash,
+                    locator,
+                    reason="chunk has no sentence ids in the current reading catalog",
+                )
+            quote = (file_hash, first) if first is not None else None
             sentence_ids = readable
     else:
-        first, readable = await _readable_sentence_ids_for_chunk(file_hash, token)
+        first, readable, found = await _readable_sentence_ids_for_chunk(
+            file_hash,
+            token,
+            embedding_model=embedding_model,
+        )
+        if not found:
+            _raise_unresolved_document_locator(file_hash, locator, reason="chunk row not found (stale c- locator or re-chunked document)")
+        if not readable:
+            _raise_unresolved_document_locator(
+                file_hash,
+                locator,
+                reason="chunk sentence_ids do not match the current sentence catalog",
+            )
         if first is not None and await _sentence_exists(file_hash, first):
             quote = (file_hash, first)
         sentence_ids = readable
+    if not sentence_ids:
+        _raise_unresolved_document_locator(file_hash, locator, reason="no highlightable sentence ids")
+    scroll_id = sentence_ids[0]
     citation = CanvasCitation(
         kind="document",
         label=default_label[:160],
         file_hash=file_hash,
-        sentence_id=quote[1] if quote else None,
-        sentence_ids=sentence_ids or None,
+        sentence_id=scroll_id,
+        sentence_ids=sentence_ids,
     )
+    if quote is None:
+        quote = (file_hash, scroll_id)
     return citation, quote
 
 
@@ -241,6 +308,7 @@ async def _resolve_src_alias(
             file_hash,
             locator,
             default_label=default_label,
+            embedding_model=embedding_model,
         )
     return None
 
@@ -303,6 +371,7 @@ async def _resolve_source_id(
         file_hash,
         locator,
         default_label=default_label,
+        embedding_model=embedding_model,
     )
 
 

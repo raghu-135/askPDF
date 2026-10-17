@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { isParsedSentencePayload, transformSentences } from '../src/lib/bbox-derivation.ts';
+import { dedupeOverlappingBBoxes, isParsedSentencePayload, transformSentences } from '../src/lib/bbox-derivation.ts';
 
 test('isParsedSentencePayload requires a non-empty array', () => {
   assert.equal(isParsedSentencePayload(undefined), false);
@@ -33,6 +33,12 @@ test('transformSentences omits placeholder boxes when coordinates are missing', 
     { id: 2, text: 'No coords', label: 'text', page: 1, page_width: 100, page_height: 200 },
   ]);
   assert.deepEqual(transformed[0].bboxes, []);
+});
+
+test('dedupeOverlappingBBoxes keeps the smaller precise box', () => {
+  const precise = { page: 1, x: 10, y: 20, width: 30, height: 10, page_width: 400, page_height: 600 };
+  const coarse = { page: 1, x: 8, y: 18, width: 40, height: 16, page_width: 400, page_height: 600 };
+  assert.deepEqual(dedupeOverlappingBBoxes([coarse, precise]), [precise]);
 });
 
 test('deriveBBoxes drops boxes without page dimensions instead of emitting 0x0', () => {

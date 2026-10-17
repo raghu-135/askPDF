@@ -81,7 +81,7 @@ async def test_compile_resolves_prefixed_chunk_locator_to_body_sentence():
     with (
         patch(
             "app.services.canvas_compiler._readable_sentence_ids_for_chunk",
-            new=AsyncMock(return_value=(7, [7, 8])),
+            new=AsyncMock(return_value=(7, [7, 8], True)),
         ),
         patch(
             "app.services.canvas_compiler._sentence_exists",
