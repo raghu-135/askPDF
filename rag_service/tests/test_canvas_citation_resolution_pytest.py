@@ -7,7 +7,42 @@ import pytest
 
 from app.agent.evidence_contract import canonical_source_id, format_document_source_locator
 from app.models.canvas_draft import CanvasCompileError, CanvasPublishDraft
-from app.services.canvas_compiler import compile_canvas_draft
+from app.services.canvas_compiler import (
+    _sentence_claim_overlap_score,
+    _sentence_ids_from_chunk_row,
+    compile_canvas_draft,
+)
+
+
+def test_chunk_sentence_ids_prefer_claim_overlap_over_first_readable():
+    row = SimpleNamespace(sentence_ids=[217, 218, 226, 227, 228])
+    by_id = {
+        217: {"text": "Table 2: BLEU on WMT English-German", "readable": True},
+        218: {"text": "ByteNet 23.75", "readable": True},
+        226: {"text": "Transformer (base) 27.3", "readable": True},
+        227: {"text": "Transformer (big) 28.4", "readable": True},
+        228: {"text": "Transformer (big) 41.0 on EN-FR", "readable": True},
+    }
+    claim = "Transformer big model 28.4 En-De"
+    scroll_id, highlight_ids = _sentence_ids_from_chunk_row(row, by_id, claim_text=claim)
+    assert scroll_id == 227
+    assert highlight_ids[:2] == [227, 228]
+    assert 217 not in highlight_ids
+    assert 218 not in highlight_ids
+    assert _sentence_claim_overlap_score(claim, by_id[227]["text"]) > _sentence_claim_overlap_score(
+        claim, by_id[218]["text"],
+    )
+
+
+def test_chunk_sentence_ids_fall_back_to_first_readable_without_claim_overlap():
+    row = SimpleNamespace(sentence_ids=[10, 11])
+    by_id = {
+        10: {"text": "Header row", "readable": True},
+        11: {"text": "Detail row", "readable": True},
+    }
+    scroll_id, highlight_ids = _sentence_ids_from_chunk_row(row, by_id, claim_text="")
+    assert scroll_id == 10
+    assert highlight_ids == [10, 11]
 
 
 def test_canonical_source_id_matches_runtime_citation_menu_format():

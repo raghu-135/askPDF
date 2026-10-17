@@ -86,7 +86,12 @@ import {
   type SentenceWithPageBBoxes,
 } from "../lib/pdf-utils";
 import { clampPanelRatio, PANEL_RATIOS } from "../lib/panel-ratio";
-import { firstHighlightableBBox, highlightIdSet, sentenceById } from "../lib/sentence-catalog";
+import {
+  firstHighlightableBBox,
+  highlightIdSet,
+  sentenceById,
+  uniqueHighlightBoxes,
+} from "../lib/sentence-catalog";
 
 
 type BBox = {
@@ -529,18 +534,27 @@ function EmbedPdfDocumentBody({
 
     if (!autoScroll || currentId === null || !sentences) return;
     const highlightIds = highlightIdSet(currentId, highlightSentenceIds);
-    const bbox = firstHighlightableBBox(sentences, [...highlightIds]);
-    if (!bbox) return;
-
-    scrollRef.current?.scrollToPage({
-      pageNumber: bbox.page,
-      pageCoordinates: {
-        x: bbox.x,
-        y: bbox.y,
-      },
-      alignY: 35,
-      behavior: "smooth",
-    });
+    let attempts = 0;
+    const scrollToHighlight = () => {
+      const bbox = firstHighlightableBBox(sentences, [...highlightIds]);
+      if (!bbox) {
+        if (attempts < 12) {
+          attempts += 1;
+          window.setTimeout(scrollToHighlight, 120);
+        }
+        return;
+      }
+      scrollRef.current?.scrollToPage({
+        pageNumber: bbox.page,
+        pageCoordinates: {
+          x: bbox.x,
+          y: bbox.y,
+        },
+        alignY: 35,
+        behavior: attempts === 0 ? "smooth" : "auto",
+      });
+    };
+    scrollToHighlight();
   }, [currentId, highlightSentenceIds, autoScroll, sentences, isHistoryProcessingRef]);
 
   const scrollToAnnotation = useCallback(
@@ -878,19 +892,21 @@ function EmbedPdfDocumentBody({
                   zIndex: 25,
                 }}
               >
-                {activeSentences.flatMap((activeSentence) => activeSentence.pageBBoxes.map((bbox, idx) => (
+                {uniqueHighlightBoxes(
+                  activeSentences.flatMap((activeSentence) => activeSentence.pageBBoxes),
+                ).map((bbox, idx) => (
                   <div
-                    key={`${activeSentence.id}-${idx}`}
+                    key={`highlight-box-${bbox.page}-${bbox.x}-${bbox.y}-${idx}`}
                     style={{
                       position: "absolute",
                       left: `${(bbox.x / bbox.page_width) * 100}%`,
-                      top: `${(bbox.y / bbox.page_height) * 100}%`,  // Already top-left origin
+                      top: `${(bbox.y / bbox.page_height) * 100}%`,
                       width: `${(bbox.width / bbox.page_width) * 100}%`,
                       height: `${(bbox.height / bbox.page_height) * 100}%`,
                       backgroundColor: "rgba(0, 180, 255, 0.28)",
                     }}
                   />
-                )))}
+                ))}
               </div>
             ) : null}
           </PagePointerProvider>

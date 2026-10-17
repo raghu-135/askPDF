@@ -36,6 +36,10 @@ import {
 } from '../lib/workspace-resume-state';
 import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
 import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec";
+import {
+  citationHighlightIds,
+  shouldPreserveCitationHighlight,
+} from "../lib/document-citation-navigation";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
 import { WorkbenchToolbar, WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
@@ -121,6 +125,7 @@ export default function Home() {
   } = useTraceTabs();
   const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
   const [canvasRefreshVersion, setCanvasRefreshVersion] = useState(0);
+  const pendingDocumentCitationRef = useRef<DocumentCanvasCitationTarget | null>(null);
   const [chunkInspectorTab, setChunkInspectorTab] = useState<DocumentWorkspaceTab | null>(null);
 
   const confirmDiscardMemoryCurator = useCallback(() => (
@@ -701,12 +706,29 @@ export default function Home() {
     });
   }, [activeProject, activeThread]);
 
+  const applyDocumentCitationHighlight = useCallback((target: DocumentCanvasCitationTarget) => {
+    const highlightIds = citationHighlightIds(target);
+    if (!highlightIds.length) return;
+    setPdfHighlightSentenceIds(highlightIds);
+    setCurrentPdfId(highlightIds[0]);
+    if (target.play !== false) {
+      setPlayRequestId(highlightIds[0]);
+    }
+  }, []);
+
   const handleActiveDocumentChange = useCallback((documentId: string) => {
     setActiveDocumentId(documentId);
-    setCurrentPdfId(null);
-    setPlayRequestId(null);
-    setActiveSource('pdf');
     const tab = pdfTabs.find((item) => item.id === documentId);
+    const pending = pendingDocumentCitationRef.current;
+    if (shouldPreserveCitationHighlight(pending, tab)) {
+      applyDocumentCitationHighlight(pending!);
+    } else {
+      pendingDocumentCitationRef.current = null;
+      setCurrentPdfId(null);
+      setPlayRequestId(null);
+      setPdfHighlightSentenceIds(null);
+    }
+    setActiveSource('pdf');
     if (tab) hydrateDocumentOnSelect(tab);
     if (isDocumentsWorkspaceActive(activeTabId)) {
       persistWorkspaceResume(workspaceContextKey, {
@@ -716,7 +738,34 @@ export default function Home() {
         canvasId: null,
       });
     }
-  }, [activeTabId, hydrateDocumentOnSelect, pdfTabs, persistWorkspaceResume, workspaceContextKey]);
+  }, [
+    activeTabId,
+    applyDocumentCitationHighlight,
+    hydrateDocumentOnSelect,
+    pdfTabs,
+    persistWorkspaceResume,
+    workspaceContextKey,
+  ]);
+
+  useEffect(() => {
+    const pending = pendingDocumentCitationRef.current;
+    if (!pending || !activeDocument?.fileHash || pending.fileHash !== activeDocument.fileHash) {
+      return;
+    }
+    if (!isDocumentsWorkspaceActive(activeTabId)) {
+      return;
+    }
+    if (!pdfSentences?.length) {
+      return;
+    }
+    applyDocumentCitationHighlight(pending);
+    pendingDocumentCitationRef.current = null;
+  }, [
+    activeDocument?.fileHash,
+    activeTabId,
+    applyDocumentCitationHighlight,
+    pdfSentences,
+  ]);
 
   const handleOpenOverviewDocument = useCallback((documentId: string) => {
     setActiveTabId(DOCUMENTS_TAB_ID);
@@ -954,10 +1003,9 @@ export default function Home() {
   const handleOpenDocumentCitation = useCallback((target: DocumentCanvasCitationTarget) => {
     const documentTab = pdfTabs.find((tab) => tab.fileHash === target.fileHash);
     if (!documentTab) return;
+    pendingDocumentCitationRef.current = target;
     setActiveTabId(DOCUMENTS_TAB_ID);
-    setActiveDocumentId(documentTab.id);
     setIsBrowserActive(false);
-    hydrateDocumentOnSelect(documentTab);
     setActiveSource('pdf');
     persistWorkspaceResume(workspaceContextKey, {
       tabId: DOCUMENTS_TAB_ID,
@@ -965,17 +1013,13 @@ export default function Home() {
       traceId: null,
       canvasId: null,
     });
-    const highlightIds = (target.sentenceIds?.length ? target.sentenceIds : (
-      target.sentenceId != null ? [target.sentenceId] : null
-    ));
-    if (highlightIds?.length) {
-      setPdfHighlightSentenceIds(highlightIds);
-      setCurrentPdfId(highlightIds[0]);
-      if (target.play !== false) {
-        setPlayRequestId(highlightIds[0]);
-      }
-    }
-  }, [hydrateDocumentOnSelect, pdfTabs, persistWorkspaceResume, workspaceContextKey]);
+    handleActiveDocumentChange(documentTab.id);
+  }, [
+    handleActiveDocumentChange,
+    pdfTabs,
+    persistWorkspaceResume,
+    workspaceContextKey,
+  ]);
 
   const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
     if (trace.activate !== false) {

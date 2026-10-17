@@ -100,9 +100,34 @@ async def _parsed_sentence_catalog(file_hash: str) -> dict[int, dict[str, Any]]:
     return by_id
 
 
+def _claim_match_tokens(claim_text: str) -> set[str]:
+    tokens = set(re.findall(r"[a-z0-9]+", str(claim_text or "").casefold()))
+    return {token for token in tokens if token.isdigit() or len(token) >= 3}
+
+
+def _sentence_claim_overlap_score(claim_text: str, sentence_text: str) -> float:
+    claim_tokens = _claim_match_tokens(claim_text)
+    if not claim_tokens:
+        return 0.0
+    lowered = str(sentence_text or "").casefold()
+    claim_numbers = {token for token in claim_tokens if token.isdigit()}
+    sentence_numbers = set(re.findall(r"\d+", lowered))
+    score = 0.0
+    if claim_numbers and sentence_numbers:
+        score += 3.0 * len(claim_numbers & sentence_numbers)
+    for token in claim_tokens:
+        if token.isdigit():
+            continue
+        if token in lowered:
+            score += 1.0
+    return score
+
+
 def _sentence_ids_from_chunk_row(
     row: Any,
     by_id: dict[int, dict[str, Any]],
+    *,
+    claim_text: str = "",
 ) -> tuple[int | None, list[int]]:
     """Return scroll target (first readable) and highlight ids for a chunk row."""
     catalog_ids: list[int] = []
@@ -118,6 +143,20 @@ def _sentence_ids_from_chunk_row(
         catalog_ids.append(sentence_id)
         if item.get("readable") is not False:
             readable_ids.append(sentence_id)
+    claim = str(claim_text or "").strip()
+    if claim and catalog_ids:
+        scored: list[tuple[float, int, bool]] = []
+        for sentence_id in catalog_ids:
+            item = by_id[sentence_id]
+            score = _sentence_claim_overlap_score(claim, str(item.get("text") or ""))
+            if score > 0:
+                scored.append((score, sentence_id, item.get("readable") is not False))
+        if scored:
+            scored.sort(key=lambda entry: (-entry[0], entry[1]))
+            highlight_ids = [sentence_id for _, sentence_id, _ in scored]
+            readable_matches = [sentence_id for _, sentence_id, readable in scored if readable]
+            scroll_id = (readable_matches or highlight_ids)[0]
+            return scroll_id, highlight_ids
     highlight_ids = readable_ids or catalog_ids
     scroll_id = readable_ids[0] if readable_ids else (catalog_ids[0] if catalog_ids else None)
     return scroll_id, highlight_ids
@@ -128,13 +167,14 @@ async def _readable_sentence_ids_for_chunk(
     locator: str,
     *,
     embedding_model: str | None = None,
+    claim_text: str = "",
 ) -> tuple[int | None, list[int], bool]:
     """Resolve chunk locator to sentence ids. Third value is True when a chunk row was found."""
     row = await _chunk_row_for_locator(file_hash, locator, embedding_model=embedding_model)
     if row is None:
         return None, [], False
     by_id = await _parsed_sentence_catalog(file_hash)
-    scroll_id, highlight_ids = _sentence_ids_from_chunk_row(row, by_id)
+    scroll_id, highlight_ids = _sentence_ids_from_chunk_row(row, by_id, claim_text=claim_text)
     return scroll_id, highlight_ids, True
 
 
@@ -238,6 +278,7 @@ async def _citation_for_document_locator(
                 file_hash,
                 legacy_id,
                 embedding_model=embedding_model,
+                claim_text=default_label,
             )
             if not found:
                 _raise_unresolved_document_locator(file_hash, locator, reason="chunk row not found for legacy locator")
@@ -254,6 +295,7 @@ async def _citation_for_document_locator(
             file_hash,
             token,
             embedding_model=embedding_model,
+            claim_text=default_label,
         )
         if not found:
             _raise_unresolved_document_locator(file_hash, locator, reason="chunk row not found (stale c- locator or re-chunked document)")

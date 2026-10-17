@@ -58,6 +58,23 @@ export function adjacentReadableId(
   return playlist[nextIndex];
 }
 
+export function uniqueHighlightBoxes(boxes: HighlightBBox[]): HighlightBBox[] {
+  const kept: HighlightBBox[] = [];
+  for (const box of boxes) {
+    const duplicate = kept.some((existing) => (
+      existing.page === box.page
+      && Math.abs(existing.x - box.x) < 1
+      && Math.abs(existing.y - box.y) < 1
+      && Math.abs(existing.width - box.width) < 1
+      && Math.abs(existing.height - box.height) < 1
+    ));
+    if (!duplicate) {
+      kept.push(box);
+    }
+  }
+  return kept;
+}
+
 export function firstHighlightableBBox(
   sentences: SentenceWithBBoxes[] | null,
   sentenceIds: number[],
