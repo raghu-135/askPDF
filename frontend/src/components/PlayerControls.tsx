@@ -8,6 +8,7 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import { ttsSentence, getVoices } from "../lib/tts-api";
 import { useTtsPrefetchCache } from "../hooks/useTtsPrefetchCache";
 import { adjacentReadableId } from "../lib/sentence-catalog";
+import { shouldClearCurrentOnSourceKeyChange } from "../lib/player-source-key";
 
 type Sentence = {
   id: number;
@@ -83,6 +84,7 @@ function usePlayerControlsState({
 }: PlayerControlsProps): PlayerControlsContextValue {
   const audioRef = useRef<HTMLAudioElement>(null);
   const playRequestTokenRef = useRef(0);
+  const previousSourceKeyRef = useRef<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPreparingAudio, setIsPreparingAudio] = useState(false);
   const [voices, setVoices] = useState<string[]>([]);
@@ -136,6 +138,11 @@ function usePlayerControlsState({
   }, [clearCache]);
 
   useEffect(() => {
+    const previousKey = previousSourceKeyRef.current;
+    previousSourceKeyRef.current = sourceKey;
+    if (!shouldClearCurrentOnSourceKeyChange(previousKey, sourceKey)) {
+      return;
+    }
     playRequestTokenRef.current += 1;
     if (audioRef.current) {
       audioRef.current.pause();

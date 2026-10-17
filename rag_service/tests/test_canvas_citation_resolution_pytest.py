@@ -8,6 +8,7 @@ import pytest
 from app.agent.evidence_contract import canonical_source_id, format_document_source_locator
 from app.models.canvas_draft import CanvasCompileError, CanvasPublishDraft
 from app.services.canvas_compiler import (
+    _readable_sentence_ids_for_chunk,
     _sentence_claim_overlap_score,
     _sentence_ids_from_chunk_row,
     compile_canvas_draft,
@@ -32,6 +33,51 @@ def test_chunk_sentence_ids_prefer_claim_overlap_over_first_readable():
     assert _sentence_claim_overlap_score(claim, by_id[227]["text"]) > _sentence_claim_overlap_score(
         claim, by_id[218]["text"],
     )
+
+
+@pytest.mark.asyncio
+async def test_table_chunk_claim_matching_searches_sibling_table_rows():
+    file_hash = "e" * 32
+    header_row = SimpleNamespace(
+        sentence_ids=[217, 218],
+        table_id="table-2",
+        chunk_order=24,
+    )
+    transformer_row = SimpleNamespace(
+        sentence_ids=[226, 227, 228],
+        table_id="table-2",
+        chunk_order=32,
+    )
+    by_id = {
+        217: {"text": "Table 2 header", "readable": True},
+        218: {"text": "ByteNet 23.75", "readable": True},
+        226: {"text": "Transformer (base) 27.3", "readable": True},
+        227: {"text": "Transformer (big) 28.4", "readable": True},
+        228: {"text": "Transformer (big) 41.0", "readable": True},
+    }
+    with (
+        patch(
+            "app.services.canvas_compiler._chunk_row_for_locator",
+            new=AsyncMock(return_value=header_row),
+        ),
+        patch(
+            "app.services.canvas_compiler._chunk_rows_for_table_id",
+            new=AsyncMock(return_value=[header_row, transformer_row]),
+        ),
+        patch(
+            "app.services.canvas_compiler._parsed_sentence_catalog",
+            new=AsyncMock(return_value=by_id),
+        ),
+    ):
+        scroll_id, highlight_ids, found = await _readable_sentence_ids_for_chunk(
+            file_hash,
+            "c-chunk-24",
+            claim_text="Transformer big 28.4 En-De",
+        )
+    assert found is True
+    assert scroll_id == 227
+    assert 227 in highlight_ids
+    assert 218 not in highlight_ids
 
 
 def test_chunk_sentence_ids_fall_back_to_first_readable_without_claim_overlap():

@@ -51,6 +51,22 @@ class ResolvedClaim:
     group: Optional[str]
 
 
+async def _chunk_rows_for_table_id(file_hash: str, table_id: str) -> list[Any]:
+    if not table_id:
+        return []
+    async with async_session_maker() as session:
+        async with session.begin():
+            result = await session.execute(
+                select(DocumentChunk)
+                .where(
+                    DocumentChunk.file_hash == file_hash,
+                    DocumentChunk.table_id == table_id,
+                )
+                .order_by(DocumentChunk.chunk_order)
+            )
+            return list(result.scalars().all())
+
+
 async def _chunk_row_for_locator(
     file_hash: str,
     locator: str,
@@ -123,6 +139,31 @@ def _sentence_claim_overlap_score(claim_text: str, sentence_text: str) -> float:
     return score
 
 
+def _catalog_ids_from_chunk_rows(
+    rows: list[Any],
+    by_id: dict[int, dict[str, Any]],
+) -> tuple[list[int], list[int]]:
+    catalog_ids: list[int] = []
+    readable_ids: list[int] = []
+    seen: set[int] = set()
+    for row in rows:
+        for raw in row.sentence_ids or []:
+            try:
+                sentence_id = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if sentence_id in seen:
+                continue
+            item = by_id.get(sentence_id)
+            if not item or not str(item.get("text") or "").strip():
+                continue
+            seen.add(sentence_id)
+            catalog_ids.append(sentence_id)
+            if item.get("readable") is not False:
+                readable_ids.append(sentence_id)
+    return catalog_ids, readable_ids
+
+
 def _sentence_ids_from_chunk_row(
     row: Any,
     by_id: dict[int, dict[str, Any]],
@@ -130,19 +171,7 @@ def _sentence_ids_from_chunk_row(
     claim_text: str = "",
 ) -> tuple[int | None, list[int]]:
     """Return scroll target (first readable) and highlight ids for a chunk row."""
-    catalog_ids: list[int] = []
-    readable_ids: list[int] = []
-    for raw in row.sentence_ids or []:
-        try:
-            sentence_id = int(raw)
-        except (TypeError, ValueError):
-            continue
-        item = by_id.get(sentence_id)
-        if not item or not str(item.get("text") or "").strip():
-            continue
-        catalog_ids.append(sentence_id)
-        if item.get("readable") is not False:
-            readable_ids.append(sentence_id)
+    catalog_ids, readable_ids = _catalog_ids_from_chunk_rows([row], by_id)
     claim = str(claim_text or "").strip()
     if claim and catalog_ids:
         scored: list[tuple[float, int, bool]] = []
@@ -174,6 +203,31 @@ async def _readable_sentence_ids_for_chunk(
     if row is None:
         return None, [], False
     by_id = await _parsed_sentence_catalog(file_hash)
+    table_id = str(getattr(row, "table_id", None) or "").strip()
+    rows = [row]
+    if table_id:
+        siblings = await _chunk_rows_for_table_id(file_hash, table_id)
+        if siblings:
+            rows = siblings
+    if len(rows) > 1:
+        catalog_ids, readable_ids = _catalog_ids_from_chunk_rows(rows, by_id)
+        claim = str(claim_text or "").strip()
+        if claim and catalog_ids:
+            scored: list[tuple[float, int, bool]] = []
+            for sentence_id in catalog_ids:
+                item = by_id[sentence_id]
+                score = _sentence_claim_overlap_score(claim, str(item.get("text") or ""))
+                if score > 0:
+                    scored.append((score, sentence_id, item.get("readable") is not False))
+            if scored:
+                scored.sort(key=lambda entry: (-entry[0], entry[1]))
+                highlight_ids = [sentence_id for _, sentence_id, _ in scored]
+                readable_matches = [sentence_id for _, sentence_id, readable in scored if readable]
+                scroll_id = (readable_matches or highlight_ids)[0]
+                return scroll_id, highlight_ids, True
+        highlight_ids = readable_ids or catalog_ids
+        scroll_id = readable_ids[0] if readable_ids else (catalog_ids[0] if catalog_ids else None)
+        return scroll_id, highlight_ids, True
     scroll_id, highlight_ids = _sentence_ids_from_chunk_row(row, by_id, claim_text=claim_text)
     return scroll_id, highlight_ids, True
 

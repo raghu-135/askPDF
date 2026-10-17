@@ -279,8 +279,16 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
     }
     if canvas_update.get("task_canvas_ref"):
         data["canvas_ref"] = canvas_update["task_canvas_ref"]
+    final_answer = str(state.get("final_answer") or "")
+    if canvas_update.get("task_canvas_published"):
+        from runtime_protocol.research_gaps import strip_false_canvas_limitations_block
+
+        final_answer = strip_false_canvas_limitations_block(final_answer)
+        data["answer_chars"] = len(final_answer)
+        data["output_preview"] = {"answer": compact_preview(final_answer)}
     log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
     return {
         **canvas_update,
+        **({"final_answer": final_answer} if canvas_update.get("task_canvas_published") else {}),
         "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
     }

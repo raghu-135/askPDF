@@ -56,6 +56,14 @@ test('uniqueHighlightBoxes dedupes identical boxes across sentences', () => {
   assert.equal(uniqueHighlightBoxes([box, near, distinct]).length, 2);
 });
 
+test('uniqueHighlightBoxes drops line boxes contained in paragraph boxes', () => {
+  const paragraph = { page: 5, x: 72, y: 400, width: 420, height: 48, page_width: 600, page_height: 800 };
+  const line = { page: 5, x: 74, y: 410, width: 300, height: 14, page_width: 600, page_height: 800 };
+  const kept = uniqueHighlightBoxes([line, paragraph]);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].height, 48);
+});
+
 test('highlight lookup uses cited ids instead of array offsets', () => {
   const sentences = [
     { id: 0, readable: false },

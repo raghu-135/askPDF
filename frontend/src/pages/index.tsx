@@ -765,6 +765,7 @@ export default function Home() {
     activeTabId,
     applyDocumentCitationHighlight,
     pdfSentences,
+    activeDocumentId,
   ]);
 
   const handleOpenOverviewDocument = useCallback((documentId: string) => {

@@ -120,9 +120,12 @@ def strip_prose_publish_canvas(text: str) -> str:
 def strip_false_canvas_absence_prose(text: str) -> str:
     """Remove chat lines that deny canvas/citations when a draft was captured."""
 
+    from runtime_protocol.research_gaps import strip_false_canvas_limitations_block
+
+    stripped = strip_false_canvas_limitations_block(str(text or ""))
     kept = [
         line
-        for line in str(text or "").splitlines()
+        for line in stripped.splitlines()
         if not _FALSE_CANVAS_ABSENCE_LINE.match(line)
     ]
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()

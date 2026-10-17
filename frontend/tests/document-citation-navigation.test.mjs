@@ -5,6 +5,7 @@ import {
   citationHighlightIds,
   shouldPreserveCitationHighlight,
 } from '../src/lib/document-citation-navigation.ts';
+import { shouldClearCurrentOnSourceKeyChange } from '../src/lib/player-source-key.ts';
 
 test('citationHighlightIds prefers sentenceIds array', () => {
   assert.deepEqual(
@@ -57,4 +58,23 @@ test('canvas citation open from canvas tab keeps pending target for documents ac
   assert.equal(currentPdfId, 226);
   assert.deepEqual(highlightIds, [226, 227, 228]);
   assert.equal(pending, target);
+});
+
+test('canvas citation survives documents player mount without clearing current id', () => {
+  const fileHash = 'd'.repeat(32);
+  const target = { fileHash, sentenceIds: [226], play: false };
+  let currentPdfId = citationHighlightIds(target)[0];
+  let previousSourceKey = null;
+  const sourceKey = `pdf:${fileHash}`;
+
+  const onCurrentChange = (id) => {
+    currentPdfId = id;
+  };
+
+  if (shouldClearCurrentOnSourceKeyChange(previousSourceKey, sourceKey)) {
+    onCurrentChange(null);
+  }
+  previousSourceKey = sourceKey;
+
+  assert.equal(currentPdfId, 226);
 });
