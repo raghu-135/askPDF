@@ -156,3 +156,9 @@ def test_thread_shape_documents_populate_subagent_attachment():
     attached = _attached_documents_for_subagent({"pre_fetch_bundle": {"documents": documents}})
     assert attached[0]["document_id"] == file_hash
     assert attached[0]["file_name"] == "resume.pdf"
+    attached_from_source = _attached_documents_for_subagent({
+        "pre_fetch_bundle": {
+            "document_sources": [{"source_id": f"doc:{file_hash}:0", "file_name": "resume.pdf"}],
+        },
+    })
+    assert attached_from_source[0]["document_id"] == file_hash

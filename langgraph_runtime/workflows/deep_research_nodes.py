@@ -488,6 +488,22 @@ def _bounded_thread_context(state: Mapping[str, Any]) -> str:
     return summary[:_THREAD_CONTEXT_CHAR_CAP] if summary.strip() else ""
 
 
+_FILE_HASH_PATTERN = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
+
+
+def _subagent_document_id(raw: Any) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    if _FILE_HASH_PATTERN.fullmatch(value):
+        return value.lower()
+    if value.startswith("doc:"):
+        parts = value.split(":", 2)
+        if len(parts) == 3 and _FILE_HASH_PATTERN.fullmatch(parts[1]):
+            return parts[1].lower()
+    return ""
+
+
 def _attached_documents_for_subagent(state: Mapping[str, Any]) -> list[dict[str, str]]:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), Mapping) else {}
     docs: list[dict[str, str]] = []
@@ -495,7 +511,7 @@ def _attached_documents_for_subagent(state: Mapping[str, Any]) -> list[dict[str,
     for item in bundle.get("documents") or []:
         if not isinstance(item, Mapping):
             continue
-        document_id = str(item.get("file_hash") or item.get("document_id") or "").strip()
+        document_id = _subagent_document_id(item.get("file_hash") or item.get("document_id"))
         if not document_id or document_id in seen:
             continue
         seen.add(document_id)
@@ -506,9 +522,9 @@ def _attached_documents_for_subagent(state: Mapping[str, Any]) -> list[dict[str,
     for item in bundle.get("document_sources") or []:
         if not isinstance(item, Mapping):
             continue
-        document_id = str(
-            item.get("file_hash") or item.get("source_id") or item.get("document_id") or ""
-        ).strip()
+        document_id = _subagent_document_id(
+            item.get("file_hash") or item.get("source_id") or item.get("document_id")
+        )
         if not document_id or document_id in seen:
             continue
         seen.add(document_id)

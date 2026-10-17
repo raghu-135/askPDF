@@ -288,11 +288,14 @@ def _chunk_reading_order_key(chunk: Dict[str, Any]) -> tuple[int, str, str]:
 def _document_stitch_group_key(chunk: Dict[str, Any]) -> tuple[str, str, str]:
     file_hash = str(chunk.get("file_hash") or "")
     metadata = _chunk_metadata(chunk)
+    manifest_id = str(chunk.get("manifest_id") or metadata.get("manifest_id") or "")
     table_id = metadata.get("table_id") or chunk.get("table_id")
     if table_id:
-        return (file_hash, "table", str(table_id))
+        return (file_hash, manifest_id, "table:" + str(table_id))
     section_id = str(metadata.get("section_id") or chunk.get("section_id") or file_hash)
-    return (file_hash, "section", section_id)
+    synthetic = str(metadata.get("chunk_identity") or chunk.get("chunk_identity") or chunk.get("chunk_id") or "")
+    key = f"section:{section_id}|chunk:{synthetic}" if synthetic else f"section:{section_id}"
+    return (file_hash, manifest_id, key)
 
 
 def _chunk_body_text(chunk: Dict[str, Any]) -> str:

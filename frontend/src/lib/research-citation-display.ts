@@ -4,7 +4,7 @@ export type CitationDisplaySource = {
   file_name?: string;
   page?: number | string;
   source_id?: string;
-  origins?: Array<{ source_id?: string }>;
+  origins?: Array<{ source_id?: string } | Record<string, unknown>>;
 };
 
 function pagePhrase(page: number | string | undefined): string | null {
@@ -28,7 +28,13 @@ export function buildCitationDisplayMap(sources: CitationDisplaySource[] | undef
     if (!label) return;
     const ids = [
       source.source_id,
-      ...(source.origins || []).map((origin) => origin.source_id),
+      ...(source.origins || []).map((origin) => {
+        if (origin && typeof origin === 'object' && 'source_id' in origin) {
+          const value = (origin as { source_id?: string }).source_id;
+          return typeof value === 'string' ? value : undefined;
+        }
+        return undefined;
+      }),
     ].filter(Boolean) as string[];
     ids.forEach((id) => {
       if (!map.has(id)) map.set(id, label);

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import time
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, TypeVar
 
 from langgraph_runtime.workflows.enums import EvidenceKind, WorkflowNodeType
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
@@ -18,6 +21,11 @@ PARALLEL_EVENT_JOURNAL_LIMIT = 256
 # The configured timeout is enforced inside the worker so it can become a
 # reducer delta. LangGraph retains this slightly later outer watchdog.
 PARALLEL_TIMEOUT_WATCHDOG_GRACE_MS = 250
+PARALLEL_WORKER_PROGRESS_POLL_SECONDS = 15.0
+PARALLEL_WORKER_PROGRESS_EXTENSION_SECONDS = 30.0
+PARALLEL_WORKER_PROGRESS_MAX_EXTENSIONS = 1
+
+_T = TypeVar("_T")
 PARALLEL_RETRY_INITIAL_INTERVAL_SECONDS = 0.25
 PARALLEL_RETRY_BACKOFF_FACTOR = 2.0
 PARALLEL_RETRY_MAX_INTERVAL_SECONDS = 1.0
@@ -28,9 +36,9 @@ PARALLEL_POLICY_FIELDS: Dict[str, Dict[str, Any]] = {
     "max_concurrency": {"type": "integer", "default": 4, "minimum": 1, "maximum": 16, "step": 1, "label": "Maximum concurrency"},
     "max_work_items": {"type": "integer", "default": 8, "minimum": 1, "maximum": 32, "step": 1, "label": "Maximum work items"},
     "dispatch_timeout_ms": {"type": "integer", "default": 60_000, "minimum": 1_000, "maximum": 300_000, "step": 1_000, "unit": "ms", "label": "Dispatch timeout"},
-    "default_worker_timeout_ms": {"type": "integer", "default": 30_000, "minimum": 1_000, "maximum": 120_000, "step": 1_000, "unit": "ms", "label": "Worker timeout"},
+    "default_worker_timeout_ms": {"type": "integer", "default": 90_000, "minimum": 1_000, "maximum": 120_000, "step": 1_000, "unit": "ms", "label": "Worker timeout"},
     "web_worker_timeout_ms": {"type": "integer", "default": 45_000, "minimum": 1_000, "maximum": 180_000, "step": 1_000, "unit": "ms", "label": "Web worker timeout"},
-    "max_attempts": {"type": "integer", "default": 2, "minimum": 1, "maximum": 5, "step": 1, "label": "Maximum attempts"},
+    "max_attempts": {"type": "integer", "default": 1, "minimum": 1, "maximum": 5, "step": 1, "label": "Maximum attempts"},
     "minimum_successes": {"type": "integer", "default": 1, "minimum": 1, "maximum": 32, "step": 1, "label": "Minimum successes"},
     "continue_on_partial_failure": {"type": "boolean", "default": True, "label": "Continue with partial evidence"},
     "continue_on_insufficient_successes": {"type": "boolean", "default": False, "label": "Continue when no worker succeeds"},
@@ -175,6 +183,39 @@ def normalized_parallel_policy(value: Any) -> Dict[str, Any]:
         policy[key] = max(policy[key], floor)
     policy["minimum_successes"] = min(policy["minimum_successes"], policy["max_work_items"])
     return policy
+
+
+async def await_worker_with_progress_extension(
+    awaitable: Awaitable[_T],
+    *,
+    timeout_seconds: float,
+    on_progress: Callable[[dict[str, Any]], Awaitable[None]],
+    poll_interval_seconds: float = PARALLEL_WORKER_PROGRESS_POLL_SECONDS,
+    extension_seconds: float = PARALLEL_WORKER_PROGRESS_EXTENSION_SECONDS,
+    max_extensions: int = PARALLEL_WORKER_PROGRESS_MAX_EXTENSIONS,
+) -> _T:
+    """Wait for a worker while emitting progress heartbeats and extending the deadline once."""
+
+    task = asyncio.ensure_future(awaitable)
+    deadline = time.perf_counter() + max(0.001, float(timeout_seconds))
+    extensions_used = 0
+    while True:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            raise asyncio.TimeoutError()
+        wait_for = min(remaining, poll_interval_seconds)
+        done, _pending = await asyncio.wait({task}, timeout=wait_for)
+        if task in done:
+            return task.result()
+        await on_progress({"remaining_seconds": round(remaining, 2)})
+        if extensions_used < max_extensions:
+            deadline += extension_seconds
+            extensions_used += 1
 
 
 def parallel_timeout_watchdog_seconds(worker_timeout_ms: int, max_attempts: int) -> float:

@@ -228,10 +228,10 @@ def test_terminal_usage_counts_unique_tools_and_preserves_measurement_completene
     assert usage == {
         "operation_id": "operation-1",
         "model_tokens": 20,
-        "model_calls": None,
+        "model_calls": 1,
         "tool_calls": 2,
         "active_runtime_ms": 345,
-        "measured_dimensions": ("tool_calls", "active_runtime_ms", "model_tokens"),
+        "measured_dimensions": ("tool_calls", "active_runtime_ms", "model_tokens", "model_calls"),
         "cumulative": True,
     }
 

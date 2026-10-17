@@ -941,6 +941,31 @@ async def test_scoped_files_allows_linked_document_id():
 
 
 @pytest.mark.asyncio
+async def test_scoped_files_accepts_unique_file_name():
+    context = ToolInvocationContext.from_mapping({"thread_id": "thread-1"})
+    lookup, file_hashes = await _scoped_files(
+        context,
+        requested="paper.pdf",
+        services=_StubDocumentLookupServices({"doc-hash": {"file_name": "paper.pdf", "file_hash": "doc-hash"}}),
+    )
+    assert file_hashes == ["doc-hash"]
+
+
+@pytest.mark.asyncio
+async def test_scoped_files_rejects_ambiguous_file_name():
+    context = ToolInvocationContext.from_mapping({"thread_id": "thread-1"})
+    with pytest.raises(PermissionError, match="Multiple thread documents"):
+        await _scoped_files(
+            context,
+            requested="paper.pdf",
+            services=_StubDocumentLookupServices({
+                "hash-a": {"file_name": "paper.pdf"},
+                "hash-b": {"file_name": "paper.pdf"},
+            }),
+        )
+
+
+@pytest.mark.asyncio
 async def test_scoped_files_rejects_unlinked_document_id():
     context = ToolInvocationContext.from_mapping({"thread_id": "thread-1"})
     with pytest.raises(PermissionError, match="not linked"):
