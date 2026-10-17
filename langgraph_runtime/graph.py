@@ -93,7 +93,10 @@ from langgraph_runtime.workflows.parallel_runtime import (
     worker_terminal_delta,
     work_item_proposals,
 )
-from langgraph_runtime.workflows.parallel_contracts import ParallelEventName
+from langgraph_runtime.workflows.parallel_contracts import (
+    ParallelEventName,
+    await_worker_with_progress_extension,
+)
 from langgraph_runtime.workflows.node_catalog import (
     get_node_type_metadata,
     node_type_capabilities,
@@ -1093,7 +1096,15 @@ class NodeRegistry:
                 else worker_timeout_seconds
             )
             worker_call = self._run_sequential_tool_worker(node_name, branch_state, config)
-            output = await asyncio.wait_for(worker_call, timeout=attempt_timeout_seconds)
+
+            async def _worker_progress(data: Dict[str, Any]) -> None:
+                await emit(ParallelEventName.WORKER_PROGRESS, {"attempt": attempt, **data})
+
+            output = await await_worker_with_progress_extension(
+                worker_call,
+                timeout_seconds=attempt_timeout_seconds,
+                on_progress=_worker_progress,
+            )
         except GraphBubbleUp:
             raise
         except ChatRunCancellationRequested:

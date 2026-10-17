@@ -35,7 +35,11 @@ _UNPUBLISHED_CANVAS_CLAIM_LINE = re.compile(
     r"^\s*here(?:'s| is)\s+(?:a\s+)?(?:the\s+)?research canvas\b.*$",
     re.IGNORECASE,
 )
-_MAX_ROUNDS = 3
+_MAX_ROUNDS = 2
+_DRAFT_ERROR_CODES = frozenset({
+    "publish_canvas_invalid_draft",
+    "publish_canvas_invalid_component",
+})
 _DRAFT_COACHING = (
     f"publish_canvas failed. {CANVAS_PUBLISH_DRAFT_HINT} "
     "Each claim needs text and source_ids copied from the Citation menu. "
@@ -187,6 +191,7 @@ async def synthesize_with_canvas_publish(
     model_calls = 0
     model_tokens = 0
     last_publish_error: str | None = None
+    last_publish_error_code: str | None = None
     last_response: Any = None
     bound = llm.bind_tools([create_mcp_langchain_tool(_PUBLISH_TOOL)]) if emit_enabled else llm
 
@@ -243,6 +248,7 @@ async def synthesize_with_canvas_publish(
             except CanvasDraftNormalizeError as exc:
                 tool_call_id = str((tool_runtime.get("configurable") or {}).get("tool_call_id") or call_id)
                 last_publish_error = exc.message
+                last_publish_error_code = "publish_canvas_invalid_draft"
                 normalized = {
                     "ok": False,
                     "content": exc.message,
@@ -296,6 +302,7 @@ async def synthesize_with_canvas_publish(
             append_tool_event_for_node(state, {**normalized, "tool_name": _PUBLISH_TOOL, "caller_node": node}, tool_input=tool_input, config=tool_runtime)
             tool_body = _tool_message_body(normalized)
             if not _tool_ok(normalized):
+                last_publish_error_code = str((normalized.get("error") or {}).get("code") or "") or None
                 last_publish_error = (
                     str((normalized.get("error") or {}).get("message") or normalized.get("content") or tool_body)
                 )[:700]
@@ -305,7 +312,11 @@ async def synthesize_with_canvas_publish(
                 published = True
             else:
                 failed_attempts += 1
-        if published or failed_attempts:
+        if published:
+            break
+        if failed_attempts and last_publish_error_code in _DRAFT_ERROR_CODES:
+            break
+        if failed_attempts:
             continue
         break
 

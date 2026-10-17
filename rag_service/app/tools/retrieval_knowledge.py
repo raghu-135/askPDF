@@ -191,10 +191,31 @@ def _stable_chunk_source_id(chunk: Any, embedding_model: str) -> str:
     return stable_source_id(file_hash, generation, chunk_id)
 
 
+def _resolve_requested_document_id(requested: str, lookup: dict[str, Any]) -> str | None:
+    if requested in lookup:
+        return requested
+    wanted = str(requested or "").strip().casefold()
+    if not wanted:
+        return None
+    matches = [
+        file_hash
+        for file_hash, meta in lookup.items()
+        if isinstance(meta, dict) and str(meta.get("file_name") or "").strip().casefold() == wanted
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise PermissionError(
+            "Multiple thread documents share that file name; pass document_id as the file_hash instead"
+        )
+    return None
+
+
 async def _scoped_files(context: ToolInvocationContext, requested: str | None = None, services: DefaultToolServices | None = None) -> tuple[dict[str, Any], list[str]]:
     lookup = await (services or get_tool_services()).document_lookup(context.thread_id or "")
     if requested:
-        if requested not in lookup:
+        resolved = _resolve_requested_document_id(requested, lookup)
+        if resolved is None:
             known = sorted(lookup.keys())
             logger.warning(
                 "document scope mismatch | thread_id=%s requested_prefix=%s known_count=%s known_prefixes=%s",
@@ -204,7 +225,7 @@ async def _scoped_files(context: ToolInvocationContext, requested: str | None = 
                 [item[:6] for item in known[:8]],
             )
             raise PermissionError("The requested document is not linked to this thread")
-        return lookup, [requested]
+        return lookup, [resolved]
     return lookup, list(lookup.keys())
 
 

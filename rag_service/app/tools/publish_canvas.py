@@ -39,7 +39,7 @@ class PublishCanvasRequest(BaseModel):
     title: Optional[str] = Field(default=None, max_length=160)
     summary: Optional[str] = Field(default=None, max_length=400)
     claims: Optional[list[dict[str, Any]]] = None
-    spec: Optional[Any] = None
+    spec: Optional[CanvasSpec] = None
     supersedes_id: Optional[str] = Field(default=None, max_length=64)
     idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=128)
 

@@ -250,6 +250,31 @@ def evidence_packets(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     return normalized
 
 
+def _evidence_source_families(source_ids: list[str]) -> set[str]:
+    families: set[str] = set()
+    for source_id in source_ids:
+        if source_id.startswith("doc:"):
+            families.add("document")
+        elif source_id.startswith("web:"):
+            families.add("web")
+        elif source_id.startswith("conversation:"):
+            families.add("conversation")
+        elif source_id.startswith("memory:"):
+            families.add("memory")
+    return families
+
+
+def _assessment_provenance_complete(assessment: Dict[str, Any], source_ids: list[str]) -> bool:
+    explicit = assessment.get("provenance_complete")
+    if explicit is True:
+        return True
+    if explicit is False:
+        return False
+    if not source_ids:
+        return False
+    return len(_evidence_source_families(source_ids)) == 1
+
+
 def corrective_evidence_packets(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Build the bounded, grade-eligible evidence view for corrective synthesis."""
 
@@ -278,10 +303,10 @@ def corrective_evidence_packets(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         })
         if not (
             assessment.get("relevant") is True
-            and assessment.get("provenance_complete") is True
+            and _assessment_provenance_complete(assessment, source_ids)
             and assessment.get("instruction_injection_risk") is not True
             and confidence >= policy["minimum_relevance_confidence"]
-            and len(source_ids) == 1
+            and len(source_ids) >= 1
         ):
             continue
         selected.append({

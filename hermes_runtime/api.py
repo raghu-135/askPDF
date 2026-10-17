@@ -65,11 +65,15 @@ def _runtime_usage_snapshot(
     usage["tool_calls"] = len(started_tool_calls)
     usage["active_runtime_ms"] = max(0, int(active_runtime_ms))
     measured = ["tool_calls", "active_runtime_ms"]
-    if any(
-        usage.get(key) is not None
-        for key in ("model_tokens", "total_tokens", "input_tokens", "output_tokens")
-    ):
+    token_dims = ("model_tokens", "total_tokens", "input_tokens", "output_tokens")
+    if any(usage.get(key) is not None for key in token_dims):
         measured.append("model_tokens")
+    if usage.get("model_calls") is None:
+        token_total = int(usage.get("model_tokens") or usage.get("total_tokens") or 0)
+        if token_total <= 0:
+            token_total = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+        if token_total > 0:
+            usage["model_calls"] = 1
     if usage.get("model_calls") is not None:
         measured.append("model_calls")
     usage["measured_dimensions"] = measured

@@ -59,6 +59,17 @@ def test_reassemble_section_chunks_in_reading_order_despite_rerank_scores():
     assert groups[1][0]["metadata"]["section_id"] == "s2"
 
 
+def test_reassemble_keeps_distinct_chunks_when_table_id_missing():
+    chunks = [
+        _chunk(file_hash="f1", section_id="s1", chunk_index=0, text="table-one", chunk_id="table-one-0"),
+        _chunk(file_hash="f1", section_id="s1", chunk_index=1, text="table-two", chunk_id="table-two-0"),
+    ]
+    groups = reassemble_document_chunks_by_reading_order(chunks)
+    assert len(groups) == 2
+    assert _combine_group_bodies(groups[0]) == "table-one"
+    assert _combine_group_bodies(groups[1]) == "table-two"
+
+
 def test_group_document_chunks_emits_one_passage_per_section():
     chunks = [
         _chunk(file_hash="f1", section_id="s1", chunk_index=1, text="B", rerank_score=0.9),
