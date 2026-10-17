@@ -9,6 +9,7 @@ import {
   formatBudgetMeterLine,
   effectiveObjectiveRequestsLiveWeb,
   guidanceWaivesWebBenchmarks,
+  humanizeReviewFindingCode,
   objectiveRequestsLiveWeb,
   reviewLimitationItems,
   normalizeReviewGapText,
@@ -102,6 +103,16 @@ test('normalizeReviewGapText extracts structured gap messages', () => {
 test('resultReviewContinueLabel shortens when no limitations', () => {
   assert.equal(resultReviewContinueLabel(0), 'Continue with guidance');
   assert.match(resultReviewContinueLabel(2), /another tranche/i);
+});
+
+test('humanizeReviewFindingCode maps uppercase critic codes to readable text', () => {
+  const items = reviewLimitationItems({
+    gaps: [],
+    warnings: [{ code: 'INSUFFICIENT_EVIDENCE', details: {} }],
+  });
+  assert.equal(items.length, 1);
+  assert.match(items[0].text, /evidence does not support/i);
+  assert.equal(humanizeReviewFindingCode('MISSING_CONTENT'), humanizeReviewFindingCode('missing content'));
 });
 
 test('reviewLimitationItems drops review findings that repeat gap topics', () => {

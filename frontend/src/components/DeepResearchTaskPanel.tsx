@@ -59,6 +59,9 @@ import {
 } from '../lib/chat-sentence-cache';
 import type { ChatTraceDescriptor } from './ChatInterface';
 import { AGENT_SSE_RECONNECT_INTERVAL_MS, AGENT_TASK_POLL_INTERVAL_MS } from '../lib/agent-ui-config';
+import { REVIEW_LIMITATIONS_MAX_HEIGHT, reviewPanelFlexWeights } from '../lib/deep-research-review-panel-layout';
+import { isAgentRunActivelyStreaming } from '../lib/trace-tab-live';
+import { useResizablePanelRatio } from '../hooks/useResizablePanelRatio';
 import {
   ConversationComposer,
   ConversationArtifactList,
@@ -390,6 +393,7 @@ export default function DeepResearchTaskPanel({
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
   const panelRef = useRef<HTMLDivElement>(null);
+  const { ratio: reviewPanelRatio, resizing: reviewPanelResizing, onResizeStart: onReviewPanelResizeStart } = useResizablePanelRatio(panelRef, 0.58);
   const selectedRun = runs[runIndex] || null;
   const selectedCapabilitiesState = useAgentRunCapabilities(selectedRun?.id, threadId, `${selectedRun?.status}:${selectedRun?.runtime_binding_status}:${selectedRun?.pending_interrupt?.interrupt_id}:${selectedRun?.pending_interrupt?.status}:${selectedRun?.pending_interrupt?.resume_version}:${task?.version}`);
   const activeCapabilitiesState = useAgentRunCapabilities(
@@ -618,24 +622,33 @@ export default function DeepResearchTaskPanel({
     if (!selectedRun || !onOpenTrace) return;
     const run = selectedRun;
     const taskId = task?.id;
-    const running = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required', 'awaiting_human'].includes(run.status);
-    const descriptor = {
-      id: run.id,
-      threadId,
-      messageId: `agent-task:${taskId}:${run.id}`,
-      label: `Deep Research · attempt ${run.attempt}`,
-      status: run.status,
-      running,
+    const syncTrace = (attemptRun: AgentTaskRun, runDetails?: Awaited<ReturnType<typeof getAgentRun>>) => {
+      const status = runDetails?.status ?? attemptRun.status;
+      onOpenTrace({
+        id: attemptRun.id,
+        threadId,
+        messageId: `agent-task:${taskId}:${attemptRun.id}`,
+        label: `Deep Research · attempt ${attemptRun.attempt}`,
+        status,
+        running: isAgentRunActivelyStreaming(status),
+        runDetails,
+        onRunDetailsChange: (next) => {
+          onOpenTrace({
+            id: next.id,
+            threadId,
+            messageId: `agent-task:${taskId}:${next.id}`,
+            label: `Deep Research · attempt ${attemptRun.attempt}`,
+            status: next.status,
+            running: isAgentRunActivelyStreaming(next.status),
+            runDetails: next,
+            activate: false,
+          });
+        },
+      });
     };
-    onOpenTrace(descriptor);
+    syncTrace(run);
     const details = await getAgentRun(run.id, threadId);
-    const detailsRunning = !['completed', 'failed', 'cancelled', 'expired', 'recovery_required', 'awaiting_human'].includes(details.status);
-    onOpenTrace({
-      ...descriptor,
-      status: details.status,
-      running: detailsRunning,
-      runDetails: details,
-    });
+    syncTrace(run, details);
   };
 
   const decide = async (
@@ -772,6 +785,10 @@ export default function DeepResearchTaskPanel({
   const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
+  const reviewFlexWeights = useMemo(
+    () => reviewPanelFlexWeights(reviewPanelRatio),
+    [reviewPanelRatio],
+  );
   const reviewPanelHeader = pendingInterrupt ? (
     <>
       <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
@@ -782,7 +799,7 @@ export default function DeepResearchTaskPanel({
         todoTitles={reviewTodoTitles}
       />
       {reviewPanelOpen ? (
-        <Box sx={{ flexShrink: 0, maxHeight: 'min(32vh, 240px)', overflowY: 'auto', pr: 0.25 }}>
+        <Box sx={{ flexShrink: 0, maxHeight: REVIEW_LIMITATIONS_MAX_HEIGHT, overflowY: 'auto', pr: 0.25 }}>
           <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
         </Box>
       ) : null}
@@ -835,16 +852,23 @@ export default function DeepResearchTaskPanel({
     ref={panelRef}
     sx={{ p: 1 }}
     transcriptSx={reviewPanelOpen ? {
-      flex: '0 0 auto',
-      flexShrink: 0,
-      minHeight: 96,
-      maxHeight: '22vh',
+      flex: `${reviewFlexWeights.transcript} 1 0`,
+      minHeight: 72,
+      minWidth: 0,
       overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
     } : {
       flex: 1,
       minHeight: 0,
     }}
-    decisionSx={reviewPanelOpen ? { flex: '1 1 0', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' } : undefined}
+    decisionSx={reviewPanelOpen ? {
+      flex: `${reviewFlexWeights.decision} 1 0`,
+      minHeight: 0,
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
+    } : undefined}
     header={<ConversationHeader
       models={models}
       model={frozen ? String(task?.configuration?.llm_model || model) : model}
@@ -902,7 +926,7 @@ export default function DeepResearchTaskPanel({
         />
       ) : null}
     </>}
-    transcript={<ConversationTranscriptFrame sx={reviewPanelOpen ? { flex: '0 0 auto', overflow: 'hidden', maxHeight: '100%' } : undefined}>{items.map((item) => <TimelineBubble
+    transcript={<ConversationTranscriptFrame sx={reviewPanelOpen ? { flex: '1 1 auto', minHeight: 0, overflow: 'auto' } : undefined}>{items.map((item) => <TimelineBubble
       key={item.id}
       item={item}
       taskId={task?.id || ''}
@@ -930,6 +954,9 @@ export default function DeepResearchTaskPanel({
       rootRef={panelRef}
       horizontalInset={1}
       fillColumn
+      panelRatio={reviewPanelRatio}
+      resizing={reviewPanelResizing}
+      onResizeStart={onReviewPanelResizeStart}
       fixedHeader={reviewPanelHeader}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField
@@ -957,6 +984,9 @@ export default function DeepResearchTaskPanel({
       rootRef={panelRef}
       horizontalInset={1}
       fillColumn
+      panelRatio={reviewPanelRatio}
+      resizing={reviewPanelResizing}
+      onResizeStart={onReviewPanelResizeStart}
       fixedHeader={reviewPanelHeader}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField

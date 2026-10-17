@@ -34,13 +34,25 @@ export const TASK_CONTROL_CATALOG: ReadonlyArray<{
   { action: 'retry', operation: 'task.retry', label: 'retry' },
 ];
 
-export type RuntimeInterruptResponseOperation = 'run.resume' | 'run.approval.respond' | 'task.budget_review.respond';
+export type RuntimeInterruptResponseOperation =
+  | 'run.resume'
+  | 'run.approval.respond'
+  | 'task.budget_review.respond'
+  | 'task.result_review.respond';
 
 export function runtimeInterruptResponseOperation(
   interrupt: { response_operation?: unknown } | null | undefined,
 ): RuntimeInterruptResponseOperation | undefined {
   const operation = interrupt?.response_operation;
-  return operation === 'run.resume' || operation === 'run.approval.respond' || operation === 'task.budget_review.respond' ? operation : undefined;
+  if (
+    operation === 'run.resume'
+    || operation === 'run.approval.respond'
+    || operation === 'task.budget_review.respond'
+    || operation === 'task.result_review.respond'
+  ) {
+    return operation;
+  }
+  return undefined;
 }
 
 export type RuntimeOperationAvailability = {

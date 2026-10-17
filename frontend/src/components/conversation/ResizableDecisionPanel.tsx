@@ -3,6 +3,7 @@ import { Box, IconButton, Typography, useMediaQuery, useTheme } from '@mui/mater
 import CloseIcon from '@mui/icons-material/Close';
 import { useResizablePanelRatio } from '../../hooks/useResizablePanelRatio';
 import { ResizablePanelHandle } from './ResizablePanelHandle';
+import { REVIEW_DECISION_PANEL_GRID_ROWS } from '../../lib/deep-research-review-panel-layout';
 
 export function ResizableDecisionPanel({
   title,
@@ -17,6 +18,9 @@ export function ResizableDecisionPanel({
   horizontalInset = 0,
   minHeight = 0,
   fillColumn = false,
+  panelRatio,
+  onResizeStart: externalOnResizeStart,
+  resizing: externalResizing,
 }: {
   title: React.ReactNode;
   children: React.ReactNode;
@@ -30,16 +34,23 @@ export function ResizableDecisionPanel({
   horizontalInset?: number;
   minHeight?: number;
   fillColumn?: boolean;
+  panelRatio?: number;
+  onResizeStart?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  resizing?: boolean;
 }) {
   const theme = useTheme();
   const narrow = useMediaQuery(theme.breakpoints.down('sm'));
   const initialRatio = narrow ? narrowDefaultRatio : defaultRatio;
-  const { ratio, resizing, onResizeStart } = useResizablePanelRatio(rootRef || { current: null }, initialRatio);
+  const internal = useResizablePanelRatio(rootRef || { current: null }, initialRatio);
+  const ratio = panelRatio ?? internal.ratio;
+  const resizing = externalResizing ?? internal.resizing;
+  const onResizeStart = externalOnResizeStart ?? internal.onResizeStart;
 
   return (
     <Box sx={{
-      display: 'flex',
-      flexDirection: 'column',
+      display: fillColumn ? 'grid' : 'flex',
+      flexDirection: fillColumn ? undefined : 'column',
+      gridTemplateRows: fillColumn ? REVIEW_DECISION_PANEL_GRID_ROWS : undefined,
       flex: fillColumn ? '1 1 0' : undefined,
       minWidth: 0,
       mb: 1,
@@ -48,11 +59,11 @@ export function ResizableDecisionPanel({
       borderRadius: 1,
       maxHeight: fillColumn ? '100%' : `calc(100dvh * ${ratio})`,
       height: fillColumn ? '100%' : undefined,
-      minHeight: fillColumn ? minHeight || 0 : minHeight,
+      minHeight: fillColumn ? 0 : minHeight,
       overflow: 'hidden',
       borderTop: '1px solid',
       borderColor: variant === 'conflict' ? 'warning.main' : variant === 'approval' ? 'info.main' : 'divider',
-      flexShrink: 0,
+      flexShrink: fillColumn ? 1 : 0,
     }}>
       <ResizablePanelHandle resizing={resizing} onResizeStart={onResizeStart} label="Resize decision panel" />
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, pb: 1, flexShrink: 0 }}>
@@ -66,7 +77,7 @@ export function ResizableDecisionPanel({
         )}
       </Box>
       {fixedHeader ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 1, pb: 1, flexShrink: 0 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 1, pb: 1, flexShrink: 0, minHeight: 0, overflow: 'hidden' }}>
           {fixedHeader}
         </Box>
       ) : null}
@@ -79,12 +90,11 @@ export function ResizableDecisionPanel({
         pb: footer ? 0 : 1,
         overflowY: 'auto',
         overflowX: 'hidden',
-        minHeight: fillColumn ? 'min(42vh, 100%)' : 0,
-        flex: 1,
+        minHeight: 0,
       }}>
         {children}
       </Box>
-      {footer ? <Box sx={{ flexShrink: 0, px: 1, pb: 1 }}>{footer}</Box> : null}
+      {footer ? <Box sx={{ flexShrink: 0, px: 1, pb: 1, minHeight: 0 }}>{footer}</Box> : null}
     </Box>
   );
 }

@@ -88,6 +88,8 @@ test('distinct runtime interactions are evaluated independently', () => {
 test('interrupt response operations fail closed when missing or unknown', () => {
   assert.equal(runtimeInterruptResponseOperation({ response_operation: 'run.resume' }), 'run.resume');
   assert.equal(runtimeInterruptResponseOperation({ response_operation: 'run.approval.respond' }), 'run.approval.respond');
+  assert.equal(runtimeInterruptResponseOperation({ response_operation: 'task.result_review.respond' }), 'task.result_review.respond');
+  assert.equal(runtimeInterruptResponseOperation({ response_operation: 'task.budget_review.respond' }), 'task.budget_review.respond');
   assert.equal(runtimeInterruptResponseOperation({}), undefined);
   assert.equal(runtimeInterruptResponseOperation({ response_operation: 'run.unknown' }), undefined);
 });

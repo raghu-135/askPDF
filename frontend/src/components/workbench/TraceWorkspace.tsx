@@ -8,6 +8,7 @@ import type { AgentRunDetails, AgentRunResumeAction, AgentTraceRefs } from '../.
 import type { TraceRunView } from '../agent-debug/agent-trace-projection';
 import NestedInstanceTabs from './NestedInstanceTabs';
 import WorkspaceEmptyState from './WorkspaceEmptyState';
+import { isTraceTabLive } from '../../lib/trace-tab-live';
 
 export type TraceRunTab = {
   id: string;
@@ -57,7 +58,7 @@ export default function TraceWorkspace({
     label: (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
         <Typography variant="body2" noWrap sx={{ maxWidth: 170 }}>{tab.label}</Typography>
-        {tab.running && <Chip size="small" color="primary" label="Live" sx={{ height: 20 }} />}
+        {isTraceTabLive(tab) && <Chip size="small" color="primary" label="Live" sx={{ height: 20 }} />}
         {tab.error && <Chip size="small" color="error" label="Failed" sx={{ height: 20 }} />}
         <Tooltip title="Close trace">
           <IconButton
@@ -102,7 +103,7 @@ export default function TraceWorkspace({
           loading={activeTab.loading}
           error={activeTab.error}
           liveTraceView={activeTab.liveTraceView}
-          running={Boolean(activeTab.running)}
+          running={isTraceTabLive(activeTab)}
           suspendHeavyContent={suspendHeavyContent}
           onRunDetailsChange={activeTab.onRunDetailsChange}
           onResumeAction={activeTab.onResumeAction}
