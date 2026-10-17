@@ -581,6 +581,23 @@ async def test_failed_provisional_synthesis_rejects_internal_partial_acceptance(
         }})
 
 
+def test_structured_output_strategy_prefers_prompt_validated_json_for_gemini():
+    assert (
+        deep_research_nodes._structured_output_strategy_for_model(
+            "google/gemini-2.5-flash",
+            "provider_json_schema",
+        )
+        == "prompt_validated_json"
+    )
+    assert (
+        deep_research_nodes._structured_output_strategy_for_model(
+            "openai/gpt-4.1-mini",
+            "provider_json_schema",
+        )
+        == "provider_json_schema"
+    )
+
+
 def test_provider_json_schema_rejected_detects_gemini_invalid_argument():
     class Provider400(Exception):
         status_code = 400
@@ -599,7 +616,7 @@ async def test_call_model_falls_back_when_provider_rejects_json_schema(monkeypat
     structured = SimpleNamespace(ainvoke=AsyncMock(side_effect=Provider400("INVALID_ARGUMENT")))
     model = SimpleNamespace(
         with_structured_output=lambda *args, **kwargs: structured,
-        ainvoke=AsyncMock(return_value=SimpleNamespace(content='{"objective":"ok"}')),
+        ainvoke=AsyncMock(return_value=SimpleNamespace(content='{"objective":"ok","success_criteria":["x"],"todos":[]}')),
     )
 
     class Span:
@@ -635,3 +652,45 @@ async def test_call_model_falls_back_when_provider_rejects_json_schema(monkeypat
     assert '"objective":"ok"' in text
     model.ainvoke.assert_awaited()
     structured.ainvoke.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_call_model_gemini_skips_provider_json_schema_on_first_attempt(monkeypatch):
+    structured = SimpleNamespace(ainvoke=AsyncMock(side_effect=AssertionError("provider schema must not run")))
+    model = SimpleNamespace(
+        with_structured_output=lambda *args, **kwargs: structured,
+        ainvoke=AsyncMock(return_value=SimpleNamespace(content='{"objective":"planned","success_criteria":["a"],"todos":[]}')),
+    )
+
+    class Span:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *_args):
+            return False
+
+    services = SimpleNamespace(
+        consume_budget=AsyncMock(),
+        execution_span=lambda enabled=True: Span(),
+        cancellation=Token(),
+    )
+    monkeypatch.setattr(deep_research_nodes, "get_llm", lambda *args, **kwargs: model)
+    monkeypatch.setattr(deep_research_nodes, "execution_model_client", lambda _config: None)
+    monkeypatch.setattr(deep_research_nodes, "services_from_config", lambda *_args, **_kwargs: services)
+    monkeypatch.setattr(deep_research_nodes, "run_cancellable", lambda work, _token: work)
+
+    async def invoke_direct(func, messages, **kwargs):
+        return await func(messages)
+
+    monkeypatch.setattr(deep_research_nodes, "invoke_llm_for_node", invoke_direct)
+    text, _metadata = await deep_research_nodes._call_model(
+        {"llm_model": "google/gemini-2.5-flash", "agent_task_id": "task-1"},
+        {},
+        "deep_task_planner",
+        [],
+        structured_schema=DeepResearchPlanProposal,
+        structured_output_strategy="provider_json_schema",
+        meter_research=False,
+    )
+    assert '"objective":"planned"' in text
+    model.ainvoke.assert_awaited()

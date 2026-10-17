@@ -67,6 +67,84 @@ async def _chunk_rows_for_table_id(file_hash: str, table_id: str) -> list[Any]:
             return list(result.scalars().all())
 
 
+async def _chunk_rows_ordered(file_hash: str) -> list[Any]:
+    async with async_session_maker() as session:
+        async with session.begin():
+            result = await session.execute(
+                select(DocumentChunk)
+                .where(DocumentChunk.file_hash == file_hash)
+                .order_by(DocumentChunk.chunk_order)
+            )
+            return list(result.scalars().all())
+
+
+async def _chunk_row_by_order_index(file_hash: str, index: int) -> Any | None:
+    if index < 0:
+        return None
+    rows = await _chunk_rows_ordered(file_hash)
+    if index >= len(rows):
+        return None
+    return rows[index]
+
+
+async def _repair_stale_chunk_locator(
+    file_hash: str,
+    locator: str,
+    *,
+    claim_text: str,
+    embedding_model: str | None = None,
+) -> str | None:
+    """Remap invented ordinal locators (e.g. c-0) to real chunk ids for this file."""
+    kind, token = parse_document_source_locator(locator)
+    if kind != "chunk":
+        return None
+    if await _chunk_locator_exists(file_hash, token):
+        return token
+    candidate_row: Any | None = None
+    if token.isdigit():
+        candidate_row = await _chunk_row_by_order_index(file_hash, int(token))
+    if candidate_row is None:
+        rows = await _chunk_rows_ordered(file_hash)
+        if not rows:
+            return None
+        claim = str(claim_text or "").strip()
+        if claim:
+            by_id = await _parsed_sentence_catalog(file_hash)
+            best_score = 0.0
+            for row in rows:
+                row_token = parse_document_source_locator(
+                    format_document_source_locator({"chunk_id": row.chunk_id or row.source_id}),
+                )[1]
+                scroll_id, _highlight, found = await _readable_sentence_ids_for_chunk(
+                    file_hash,
+                    row_token,
+                    embedding_model=embedding_model,
+                    claim_text=claim,
+                )
+                if not found or scroll_id is None:
+                    continue
+                item = by_id.get(scroll_id) or {}
+                score = _sentence_claim_overlap_score(claim, str(item.get("text") or ""))
+                if score > best_score:
+                    best_score = score
+                    candidate_row = row
+        if candidate_row is None:
+            candidate_row = rows[0]
+    repaired_locator = format_document_source_locator({"chunk_id": candidate_row.chunk_id or candidate_row.source_id})
+    repaired_token = parse_document_source_locator(repaired_locator)[1]
+    if not repaired_token or not await _chunk_locator_exists(file_hash, repaired_token):
+        return None
+    if repaired_token != token:
+        logger.info(
+            "canvas compile repaired stale locator doc:%s:%s -> doc:%s:%s",
+            file_hash,
+            locator,
+            file_hash,
+            repaired_locator,
+        )
+    return repaired_token
+
+
 async def _chunk_row_for_locator(
     file_hash: str,
     locator: str,
@@ -345,12 +423,28 @@ async def _citation_for_document_locator(
             quote = (file_hash, first) if first is not None else None
             sentence_ids = readable
     else:
+        chunk_token = token
         first, readable, found = await _readable_sentence_ids_for_chunk(
             file_hash,
-            token,
+            chunk_token,
             embedding_model=embedding_model,
             claim_text=default_label,
         )
+        if not found:
+            repaired_token = await _repair_stale_chunk_locator(
+                file_hash,
+                locator,
+                claim_text=default_label,
+                embedding_model=embedding_model,
+            )
+            if repaired_token:
+                chunk_token = repaired_token
+                first, readable, found = await _readable_sentence_ids_for_chunk(
+                    file_hash,
+                    chunk_token,
+                    embedding_model=embedding_model,
+                    claim_text=default_label,
+                )
         if not found:
             _raise_unresolved_document_locator(file_hash, locator, reason="chunk row not found (stale c- locator or re-chunked document)")
         if not readable:
@@ -483,12 +577,18 @@ async def resolve_draft_claims(
         quote: Optional[tuple[str, int]] = None
         label = claim.text.strip()[:160] or "Source"
         for source_id in claim.source_ids:
-            citation, claim_quote = await _resolve_source_id(
-                source_id,
-                thread_file_hashes=thread_file_hashes,
-                embedding_model=embedding_model,
-                default_label=label,
-            )
+            try:
+                citation, claim_quote = await _resolve_source_id(
+                    source_id,
+                    thread_file_hashes=thread_file_hashes,
+                    embedding_model=embedding_model,
+                    default_label=label,
+                )
+            except CanvasCompileError as exc:
+                if exc.code not in {"unknown_chunk", "unknown_sentence"}:
+                    raise
+                logger.warning("canvas compile dropping unresolvable source_id %s: %s", source_id, exc)
+                continue
             citations.append(citation)
             if claim_quote and quote is None:
                 quote = claim_quote
