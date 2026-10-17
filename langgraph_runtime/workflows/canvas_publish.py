@@ -506,7 +506,14 @@ async def publish_deep_research_canvas_draft(
         config=tool_runtime,
     )
     if not _tool_ok(normalized):
-        return None
+        error = normalized.get("error") if isinstance(normalized.get("error"), Mapping) else {}
+        return {
+            "ok": False,
+            "error": {
+                "code": str(error.get("code") or "publish_canvas_failed"),
+                "message": str(error.get("message") or normalized.get("content") or "publish_canvas failed"),
+            },
+        }
     artifacts = normalized.get("artifacts") if isinstance(normalized.get("artifacts"), Mapping) else {}
     canvas = artifacts.get("canvas") if isinstance(artifacts, Mapping) else None
     if isinstance(canvas, Mapping) and canvas.get("id"):

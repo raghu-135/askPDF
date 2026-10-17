@@ -322,6 +322,16 @@ def _todo_payload(todo: Any) -> Dict[str, Any]:
     return payload
 
 
+def _structured_output_strategy_for_model(model_name: str, preferred: str) -> str:
+    """Gemini/OpenRouter reject large planner json_schema payloads; validate JSON in-process instead."""
+    if preferred != "provider_json_schema":
+        return preferred
+    lowered = str(model_name or "").casefold()
+    if "gemini" in lowered or lowered.startswith("google/"):
+        return "prompt_validated_json"
+    return preferred
+
+
 def _provider_json_schema_rejected(exc: BaseException) -> bool:
     """Gemini/OpenRouter often reject json_schema with a non-retryable 400."""
     retryable, _reason = is_retryable_model_error(str(exc))
@@ -396,6 +406,7 @@ async def _call_model(
         strategy = structured_output_strategy or configured_strategy or (
             "plain_text" if structured_schema is None else "provider_json_schema"
         )
+        strategy = _structured_output_strategy_for_model(model_name, strategy)
         if strategy not in {"plain_text", "prompt_validated_json", "provider_json_schema"}:
             raise AgentRuntimeError(
                 "structured_output_strategy_invalid",
@@ -417,7 +428,9 @@ async def _call_model(
                 "structured_output_strategy_invalid",
                 "provider_json_schema strategy requires a structured schema.",
             )
-        if strategy == "provider_json_schema":
+        if strategy == "prompt_validated_json":
+            invoke = model.ainvoke
+        elif strategy == "provider_json_schema":
             if not hasattr(model, "with_structured_output"):
                 raise AgentRuntimeError(
                     "structured_output_setup_failed",
@@ -1953,6 +1966,7 @@ Do not end the report with promises to continue extraction later; describe only 
     }
     if canvas_draft is not None:
         update["task_canvas_draft"] = dict(canvas_draft)
+        update["task_canvas_publish_required"] = True
     return update
 
 

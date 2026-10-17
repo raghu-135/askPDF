@@ -103,24 +103,85 @@ def test_canonical_source_id_matches_runtime_citation_menu_format():
 
 
 @pytest.mark.asyncio
-async def test_compile_raises_when_chunk_locator_does_not_resolve():
+async def test_compile_repairs_stale_ordinal_chunk_locator():
     file_hash = "b" * 32
-    chunk_token = "src_stale_after_rechunk"
-    source_id = f"doc:{file_hash}:c-{chunk_token}"
+    stale_source_id = f"doc:{file_hash}:c-0"
+    live_token = "chunk-page-1"
     draft = CanvasPublishDraft.model_validate({
         "layout": "matrix",
-        "title": "Stale chunk",
-        "claims": [{"text": "Claim", "source_ids": [source_id]}],
+        "title": "Stale ordinal",
+        "claims": [{"text": "Page one summary", "source_ids": [stale_source_id]}],
     })
+    live_row = SimpleNamespace(chunk_id=live_token, source_id="src_live", chunk_order=0)
+
+    async def fake_readable(file_hash_arg, locator, **kwargs):
+        if locator == "0":
+            return None, [], False
+        if locator == live_token:
+            return 12, [12, 13], True
+        return None, [], False
+
     with (
         patch(
-            "app.services.canvas_compiler._readable_sentence_ids_for_chunk",
-            new=AsyncMock(return_value=(None, [], False)),
+            "app.services.canvas_compiler._chunk_row_by_order_index",
+            new=AsyncMock(return_value=live_row),
         ),
-        pytest.raises(CanvasCompileError) as exc,
+        patch(
+            "app.services.canvas_compiler._readable_sentence_ids_for_chunk",
+            new=AsyncMock(side_effect=fake_readable),
+        ),
+        patch(
+            "app.services.canvas_compiler._sentence_exists",
+            new=AsyncMock(return_value=True),
+        ),
     ):
-        await compile_canvas_draft(draft, thread_file_hashes={file_hash}, embedding_model="embed-model")
-    assert exc.value.code == "unknown_chunk"
+        spec = await compile_canvas_draft(draft, thread_file_hashes={file_hash}, embedding_model="embed-model")
+    sources = next(
+        block
+        for section in spec.sections
+        for block in section.blocks
+        if block.type == "sources"
+    )
+    assert sources.citations[0].sentence_ids == [12, 13]
+
+
+@pytest.mark.asyncio
+async def test_compile_drops_unknown_source_id_when_sibling_resolves():
+    file_hash = "b" * 32
+    good_id = f"doc:{file_hash}:c-chunk-2"
+    bad_id = f"doc:{file_hash}:c-invented"
+    draft = CanvasPublishDraft.model_validate({
+        "layout": "matrix",
+        "title": "Mixed citations",
+        "claims": [{"text": "Claim", "source_ids": [bad_id, good_id]}],
+    })
+
+    async def fake_resolve(source_id, **kwargs):
+        if source_id == bad_id:
+            raise CanvasCompileError("unknown_chunk", "missing")
+        from app.models.canvas import CanvasCitation
+
+        return (
+            CanvasCitation(
+                kind="document",
+                label="Claim",
+                file_hash=file_hash,
+                sentence_id=2,
+                sentence_ids=[2, 3],
+            ),
+            (file_hash, 2),
+        )
+
+    with patch("app.services.canvas_compiler._resolve_source_id", new=AsyncMock(side_effect=fake_resolve)):
+        spec = await compile_canvas_draft(draft, thread_file_hashes={file_hash}, embedding_model="embed-model")
+    sources = next(
+        block
+        for section in spec.sections
+        for block in section.blocks
+        if block.type == "sources"
+    )
+    assert len(sources.citations) == 1
+    assert sources.citations[0].sentence_id == 2
 
 
 @pytest.mark.asyncio

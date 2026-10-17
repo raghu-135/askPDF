@@ -271,12 +271,40 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
                 "task_canvas_published": True,
                 "task_canvas_ref": {"id": published["id"], "title": published.get("title") or "Research canvas"},
             }
+        elif published and published.get("ok") is False:
+            error = published.get("error") if isinstance(published.get("error"), dict) else {}
+            code = str(error.get("code") or "publish_canvas_failed")
+            message = str(
+                error.get("message")
+                or "The research canvas could not be published; the summary was not delivered on canvas."
+            )
+            canvas_update = {
+                "task_canvas_publish_failed": {"code": code, "message": message},
+                "task_result_warnings": [
+                    *[
+                        dict(value)
+                        for value in state.get("task_result_warnings") or []
+                        if isinstance(value, dict)
+                    ],
+                    {
+                        "code": "research_canvas_publish_failed",
+                        "message": message,
+                        "details": {"tool_error_code": code},
+                    },
+                ],
+                "task_incomplete_reasons": list(dict.fromkeys([
+                    *[str(value) for value in state.get("task_incomplete_reasons") or [] if str(value).strip()],
+                    "research_canvas_unpublished",
+                ])),
+            }
     data = {
         "status": NodeEventStatus.COMPLETED.value,
         "answer_chars": len(state.get("final_answer") or ""),
         "output_refs": state_evidence_refs(state),
         "output_preview": {"answer": compact_preview(state.get("final_answer"))},
     }
+    if canvas_update.get("task_canvas_publish_failed"):
+        data["canvas_publish_failed"] = dict(canvas_update["task_canvas_publish_failed"])
     if canvas_update.get("task_canvas_ref"):
         data["canvas_ref"] = canvas_update["task_canvas_ref"]
     final_answer = str(state.get("final_answer") or "")
