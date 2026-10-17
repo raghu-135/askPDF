@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Citation navigation fixture</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 24px; }
+      #viewer { position: relative; width: 480px; height: 240px; border: 1px solid #ccc; margin-top: 16px; }
+      [data-pdf-highlight-box] {
+        position: absolute;
+        left: 40px;
+        top: 120px;
+        width: 320px;
+        height: 18px;
+        background: rgba(0, 180, 255, 0.28);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Canvas citation navigation fixture</h1>
+    <p>Simulates workspace state: citation applied, then nested document tab onChange for the same document id.</p>
+    <button type="button">Open citation from canvas</button>
+    <button type="button">Nested tab onChange (same doc)</button>
+    <p>currentPdfId: <span id="current-id">null</span></p>
+    <div id="viewer"></div>
+    <script type="module">
+      const normalize = (value) => value.trim().toLowerCase();
+      const shouldPreserve = (pending, tab) => Boolean(
+        pending && tab && normalize(pending.fileHash) === normalize(tab.fileHash),
+      );
+      const shouldClear = (previousId, nextId, pending, tab) => {
+        if (shouldPreserve(pending, tab)) return false;
+        return previousId !== nextId;
+      };
+
+      let activeDocumentId = null;
+      let currentPdfId = null;
+      let pending = null;
+      const tab = { id: 'doc-1', fileHash: 'c'.repeat(32) };
+      const target = { fileHash: tab.fileHash, sentenceIds: [227], play: false };
+
+      const render = () => {
+        document.getElementById('current-id').textContent = String(currentPdfId);
+        const viewer = document.getElementById('viewer');
+        viewer.innerHTML = currentPdfId == null ? '' : '<div data-pdf-highlight-box="true"></div>';
+      };
+
+      const applyHighlight = (value) => {
+        currentPdfId = value.sentenceIds[0];
+        render();
+      };
+
+      const handleActiveDocumentChange = (documentId) => {
+        const previousDocumentId = activeDocumentId;
+        activeDocumentId = documentId;
+        if (shouldPreserve(pending, tab)) {
+          applyHighlight(pending);
+        } else if (shouldClear(previousDocumentId, documentId, pending, tab)) {
+          pending = null;
+          currentPdfId = null;
+          render();
+        }
+      };
+
+      document.querySelectorAll('button')[0].addEventListener('click', () => {
+        pending = target;
+        handleActiveDocumentChange(tab.id);
+        pending = target;
+      });
+
+      document.querySelectorAll('button')[1].addEventListener('click', () => {
+        handleActiveDocumentChange(tab.id);
+      });
+
+      render();
+    </script>
+  </body>
+</html>

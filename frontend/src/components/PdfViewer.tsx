@@ -137,6 +137,7 @@ type Props = {
   sentences: Sentence[] | null;
   currentId: number | null;
   highlightSentenceIds?: number[] | null;
+  documentCitationScrollToken?: number;
   onJump: (id: number) => void;
   autoScroll: boolean;
   isResizing?: boolean;
@@ -422,6 +423,7 @@ function EmbedPdfDocumentBody({
   sentences,
   currentId,
   highlightSentenceIds = null,
+  documentCitationScrollToken = 0,
   onJump,
   autoScroll,
   isResizing,
@@ -536,9 +538,16 @@ function EmbedPdfDocumentBody({
     const highlightIds = highlightIdSet(currentId, highlightSentenceIds);
     let attempts = 0;
     const scrollToHighlight = () => {
+      if (!scrollRef.current) {
+        if (attempts < 24) {
+          attempts += 1;
+          window.setTimeout(scrollToHighlight, 120);
+        }
+        return;
+      }
       const bbox = firstHighlightableBBox(sentences, [...highlightIds]);
       if (!bbox) {
-        if (attempts < 12) {
+        if (attempts < 24) {
           attempts += 1;
           window.setTimeout(scrollToHighlight, 120);
         }
@@ -555,7 +564,15 @@ function EmbedPdfDocumentBody({
       });
     };
     scrollToHighlight();
-  }, [currentId, highlightSentenceIds, autoScroll, sentences, isHistoryProcessingRef]);
+  }, [
+    currentId,
+    documentCitationScrollToken,
+    highlightSentenceIds,
+    autoScroll,
+    sentences,
+    pdfLoaded,
+    isHistoryProcessingRef,
+  ]);
 
   const scrollToAnnotation = useCallback(
     (anno: PdfAnnotationObject) => {
@@ -897,6 +914,7 @@ function EmbedPdfDocumentBody({
                 ).map((bbox, idx) => (
                   <div
                     key={`highlight-box-${bbox.page}-${bbox.x}-${bbox.y}-${idx}`}
+                    data-pdf-highlight-box="true"
                     style={{
                       position: "absolute",
                       left: `${(bbox.x / bbox.page_width) * 100}%`,
@@ -1063,6 +1081,7 @@ const PdfViewer = React.memo(function PdfViewer({
   sentences,
   currentId,
   highlightSentenceIds = null,
+  documentCitationScrollToken = 0,
   onJump,
   autoScroll,
   isResizing,
@@ -1135,6 +1154,7 @@ const PdfViewer = React.memo(function PdfViewer({
               sentences={sentences}
               currentId={currentId}
               highlightSentenceIds={highlightSentenceIds}
+              documentCitationScrollToken={documentCitationScrollToken}
               onJump={onJump}
               autoScroll={autoScroll}
               isResizing={isResizing}

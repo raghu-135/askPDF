@@ -139,17 +139,51 @@ def web_evidence_plan_gaps(
     return []
 
 
-_FALSE_CANVAS_LIMITATION_PATTERN = re.compile(
-    r"no\s+(?:research\s+)?canvas(?:\s+content)?(?:\s+provided)?|"
-    r"no\s+document\s+citations?(?:\s+for\s+claims)?|"
-    r"(?:does\s+not\s+follow|did\s+not\s+follow).{0,40}publish\s+canvas|"
-    r"publish_canvas\s+tool",
+_NEGATIVE_LIMITATION_PATTERN = re.compile(
+    r"\b(?:no|not|missing|without|lack(?:s|ing)?|absent|never|did\s+not|does\s+not|didn't|doesn't)\b",
     re.IGNORECASE,
 )
 
 
+def _limitation_denies_canvas_presence(text: str) -> bool:
+    lowered = str(text or "").casefold()
+    if "canvas" not in lowered:
+        return False
+    return bool(_NEGATIVE_LIMITATION_PATTERN.search(lowered))
+
+
+def _limitation_denies_document_citations(text: str) -> bool:
+    lowered = str(text or "").casefold()
+    if "citation" not in lowered:
+        return False
+    return bool(_NEGATIVE_LIMITATION_PATTERN.search(lowered))
+
+
+def _limitation_denies_publish_canvas_tool(text: str) -> bool:
+    lowered = str(text or "").casefold()
+    if "canvas" not in lowered or "publish" not in lowered:
+        return False
+    return bool(
+        _NEGATIVE_LIMITATION_PATTERN.search(lowered)
+        or re.search(r"\b(?:follow|instruction|tool)\b", lowered)
+    )
+
+
 def is_false_canvas_absence_limitation(text: str) -> bool:
-    return bool(_FALSE_CANVAS_LIMITATION_PATTERN.search(str(text or "")))
+    return (
+        _limitation_denies_canvas_presence(text)
+        or _limitation_denies_document_citations(text)
+        or _limitation_denies_publish_canvas_tool(text)
+    )
+
+
+def canvas_absence_limitations_suppressed(state: Mapping[str, Any] | None) -> bool:
+    if not isinstance(state, Mapping):
+        return False
+    if state.get("task_canvas_published") or state.get("task_canvas_publish_required"):
+        return True
+    draft = state.get("task_canvas_draft")
+    return isinstance(draft, Mapping) and bool(draft)
 
 
 def filter_false_canvas_absence_limitations(issues: list[str]) -> list[str]:
