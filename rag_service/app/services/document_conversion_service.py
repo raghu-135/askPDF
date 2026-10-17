@@ -312,6 +312,108 @@ def _bboxes_from_element_provenance(
     return bboxes
 
 
+def _bbox_height(bbox: Mapping[str, Any]) -> float:
+    try:
+        y0 = float(bbox.get("y0", bbox.get("y", 0)))
+        y1 = float(bbox.get("y1", y0))
+        return max(0.0, y1 - y0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _tighten_sentence_bbox_from_words(sentence: dict[str, Any]) -> None:
+    words = sentence.get("words") or []
+    if not words or not isinstance(words, list):
+        return
+    bboxes = sentence.get("bboxes") or []
+    if not bboxes or _bbox_height(bboxes[0]) <= 40:
+        return
+    def _line_bbox(line_words: list[dict[str, Any]]) -> dict[str, Any]:
+        line_x0 = min(float(w.get("x0", 0)) for w in line_words)
+        line_y0 = min(float(w.get("top", 0)) for w in line_words)
+        line_x1 = max(float(w.get("x1", 0)) for w in line_words)
+        line_y1 = max(float(w.get("bottom", 0)) for w in line_words)
+        page_width = float(line_words[0].get("page_width") or sentence.get("page_width") or 0)
+        page_height = float(line_words[0].get("page_height") or sentence.get("page_height") or 0)
+        return {
+            "page": int(sentence.get("page") or line_words[0].get("page") or 1),
+            "x0": line_x0,
+            "y0": line_y0,
+            "x1": line_x1,
+            "y1": line_y1,
+            "page_width": page_width,
+            "page_height": page_height,
+        }
+
+    line_bboxes: list[dict[str, Any]] = []
+    words_sorted = sorted(words, key=lambda word: float(word.get("top", 0)))
+    current_line = [words_sorted[0]]
+    current_top = float(words_sorted[0].get("top", 0))
+    for word in words_sorted[1:]:
+        top = float(word.get("top", 0))
+        if abs(top - current_top) > 5:
+            line_bboxes.append(_line_bbox(current_line))
+            current_line = [word]
+            current_top = top
+        else:
+            current_line.append(word)
+    line_bboxes.append(_line_bbox(current_line))
+    if line_bboxes:
+        sentence["bboxes"] = line_bboxes
+        sentence["bbox"] = line_bboxes[0]
+        sentence["page"] = line_bboxes[0].get("page")
+
+
+def _split_shared_oversized_table_bboxes(sentences: list[dict[str, Any]]) -> None:
+    groups: dict[tuple[str, int], list[tuple[int, dict[str, Any]]]] = {}
+    for index, sentence in enumerate(sentences):
+        element_ids = sentence.get("source_element_ids") or []
+        if not element_ids:
+            continue
+        bboxes = sentence.get("bboxes") or []
+        if not bboxes or _bbox_height(bboxes[0]) <= 45:
+            continue
+        try:
+            page = int(sentence.get("page") or bboxes[0].get("page") or 0)
+        except (TypeError, ValueError):
+            continue
+        if page <= 0:
+            continue
+        groups.setdefault((str(element_ids[0]), page), []).append((index, sentence))
+
+    for (_element_id, _page), members in groups.items():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda item: item[0])
+        parent = (members[0][1].get("bboxes") or [None])[0]
+        if not isinstance(parent, Mapping):
+            continue
+        try:
+            x0 = float(parent.get("x0", parent.get("x", 0)))
+            y0 = float(parent.get("y0", parent.get("y", 0)))
+            x1 = float(parent.get("x1", x0))
+            y1 = float(parent.get("y1", y0))
+        except (TypeError, ValueError):
+            continue
+        total_height = max(0.0, y1 - y0)
+        if total_height <= 45:
+            continue
+        row_height = total_height / len(members)
+        for row_index, (_sentence_index, sentence) in enumerate(members):
+            row_y0 = y0 + row_index * row_height
+            row_y1 = row_y0 + row_height
+            row_bbox = {
+                **dict(parent),
+                "x0": x0,
+                "y0": row_y0,
+                "x1": x1,
+                "y1": row_y1,
+            }
+            sentence["bboxes"] = [row_bbox]
+            sentence["bbox"] = row_bbox
+            sentence["page"] = parent.get("page", sentence.get("page"))
+
+
 def _apply_provenance_bbox_fallback(
     sentences: list[dict[str, Any]],
     *,
@@ -520,6 +622,9 @@ def _align_coordinates(
         )
     if dimensions:
         _apply_page_dimensions_to_sentences(canonical_sentences, dimensions)
+    for sentence in canonical_sentences:
+        _tighten_sentence_bbox_from_words(sentence)
+    _split_shared_oversized_table_bboxes(canonical_sentences)
     return canonical_sentences
 
 

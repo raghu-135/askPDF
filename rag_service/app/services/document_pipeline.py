@@ -16,7 +16,7 @@ from functools import lru_cache
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-EXTRACTION_PIPELINE_VERSION = "docling-pdf-v9"
+EXTRACTION_PIPELINE_VERSION = "docling-pdf-v10"
 CANONICAL_SCHEMA_VERSION = "docling-canonical-v2"
 RETRIEVAL_CHUNKING_VERSION = "table-pack-v8"
 RETRIEVAL_SOURCE_VERSION = "document-retrieval-v3"

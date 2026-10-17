@@ -152,10 +152,17 @@ async def test_compile_repairs_stale_ordinal_chunk_locator():
             return 12, [12, 13], True
         return None, [], False
 
+    async def fake_chunk_exists(_file_hash, locator):
+        return locator == live_token
+
     with (
         patch(
             "app.services.canvas_compiler._chunk_row_by_order_index",
             new=AsyncMock(return_value=live_row),
+        ),
+        patch(
+            "app.services.canvas_compiler._chunk_locator_exists",
+            new=AsyncMock(side_effect=fake_chunk_exists),
         ),
         patch(
             "app.services.canvas_compiler._readable_sentence_ids_for_chunk",
