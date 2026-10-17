@@ -29,7 +29,13 @@ from app.runtime.behavior import continuation_is_linked
 from app.services.content_store import get_content_store, task_artifact_content_key
 from app.time_utils import utc_now
 from runtime_protocol.contracts import TaskOrchestrationDelta
-from runtime_protocol.research_gaps import dedupe_critic_issues, filter_stale_index_readiness_gaps
+from runtime_protocol.research_gaps import (
+    dedupe_critic_issues,
+    filter_stale_index_readiness_gaps,
+    gap_display_line,
+    guidance_waives_web_benchmarks,
+    limitation_topic_keys,
+)
 from app.runtime.budgets import configured_budget_value
 
 
@@ -302,13 +308,39 @@ def _scrub_review_warnings(warnings: list[dict[str, Any]], gaps: list[str]) -> l
     return scrubbed
 
 
-def _enrich_result_gaps(budget: Mapping[str, Any], gaps: list[str], task_result: Mapping[str, Any]) -> list[str]:
+def _task_guidance_texts(task_config: Mapping[str, Any] | None) -> list[str]:
+    texts: list[str] = []
+    for entry in dict(task_config or {}).get("result_review_context") or []:
+        if isinstance(entry, Mapping):
+            followup = str(entry.get("followup_input") or "").strip()
+            if followup:
+                texts.append(followup)
+    return texts
+
+
+def _drop_waived_web_gaps(gaps: list[str], guidance_texts: list[str]) -> list[str]:
+    if not guidance_waives_web_benchmarks(*guidance_texts):
+        return gaps
+    return [
+        gap for gap in gaps
+        if "web_off" not in limitation_topic_keys(gap)
+    ]
+
+
+def _enrich_result_gaps(
+    budget: Mapping[str, Any],
+    gaps: list[str],
+    task_result: Mapping[str, Any],
+    *,
+    guidance_texts: list[str] | None = None,
+) -> list[str]:
     todo_titles = _todo_title_index(task_result)
     merged = list(dict.fromkeys(
-        _enrich_gap_label(str(value), todo_titles)
+        _enrich_gap_label(gap_display_line(value), todo_titles)
         for value in gaps
-        if str(value).strip()
+        if gap_display_line(value)
     ))
+    merged = _drop_waived_web_gaps(merged, guidance_texts or [])
     limits = budget.get("tranche_limits") if isinstance(budget.get("tranche_limits"), Mapping) else {}
     usage = budget.get("tranche_usage") if isinstance(budget.get("tranche_usage"), Mapping) else {}
     tool_limit = int(limits.get("tool_calls") or 0) if limits else 0
@@ -494,11 +526,18 @@ async def apply_neutral_task_completion(
 
             warnings = [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]
             provisional_text = str(task_result.get("text") or "")
+            guidance_texts = _task_guidance_texts(task.config_json)
+            raw_gaps = list(dict.fromkeys(
+                gap_display_line(value)
+                for value in task_result.get("gaps") or []
+                if gap_display_line(value)
+            ))
             gaps = _filter_interrupt_gaps(
                 _enrich_result_gaps(
                     budget,
-                    list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip())),
+                    raw_gaps,
                     task_result,
+                    guidance_texts=guidance_texts,
                 ),
                 provisional_text,
                 task_result,
@@ -973,11 +1012,18 @@ async def apply_runtime_task_delta(
                 if result_status == "completed" and task_result:
                     warnings = [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]
                     provisional_text = str(task_result.get("text") or "")
+                    guidance_texts = _task_guidance_texts(task.config_json)
+                    raw_gaps = list(dict.fromkeys(
+                        gap_display_line(value)
+                        for value in task_result.get("gaps") or []
+                        if gap_display_line(value)
+                    ))
                     gaps = _filter_interrupt_gaps(
                         _enrich_result_gaps(
                             task.budgets_json if isinstance(task.budgets_json, Mapping) else {},
-                            list(dict.fromkeys(str(value) for value in task_result.get("gaps") or [] if str(value).strip())),
+                            raw_gaps,
                             task_result,
+                            guidance_texts=guidance_texts,
                         ),
                         provisional_text,
                         task_result,

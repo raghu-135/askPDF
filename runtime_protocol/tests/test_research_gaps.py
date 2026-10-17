@@ -1,7 +1,10 @@
 from runtime_protocol.research_gaps import (
     dedupe_critic_issues,
     filter_stale_index_readiness_gaps,
+    gap_display_line,
+    web_evidence_plan_gaps,
 )
+from runtime_protocol.task_results import normalize_runtime_task_result
 
 
 def test_filter_stale_index_readiness_gaps_with_paren_citation_text():
@@ -44,3 +47,26 @@ def test_filter_stale_index_gaps_kept_without_document_evidence():
     gaps = ["Document index is not ready for this thread."]
     filtered = filter_stale_index_readiness_gaps(gaps, manifest=[], evidence_texts=[])
     assert filtered == gaps
+
+
+def test_gap_display_line_prefers_message_on_structured_gap():
+    assert gap_display_line({"code": "MISSING_SALES_FIGURES", "message": "Sales figures were not found."}) == (
+        "Sales figures were not found."
+    )
+
+
+def test_normalize_runtime_task_result_structured_gaps():
+    result = normalize_runtime_task_result({
+        "status": "completed_with_warnings",
+        "text": "Partial answer",
+        "gaps": [{"code": "MISSING_SALES_FIGURES", "message": "Sales figures were not found."}],
+    })
+    assert result.gaps == ("Sales figures were not found.",)
+
+
+def test_web_evidence_plan_gaps_respects_guidance_waiver():
+    assert web_evidence_plan_gaps(
+        "Compare using web benchmarks",
+        "off",
+        "Skip web benchmarks and use the PDF only.",
+    ) == []

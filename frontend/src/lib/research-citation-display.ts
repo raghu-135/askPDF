@@ -49,6 +49,7 @@ function docIdFallbackLabel(sourceId: string): string | null {
   if (parts.length < 3) return null;
   const locator = parts.slice(2).join(':');
   if (/^\d+$/.test(locator)) return `document, page ${locator}`;
+  if (/^c-\d+$/i.test(locator)) return `document, section ${locator}`;
   return `document, section ${locator}`;
 }
 
@@ -61,11 +62,50 @@ export function rewriteDocCitationTokens(content: string, displayMap: Map<string
     result = result.replace(new RegExp(`\`${escaped}\``, 'g'), replacement);
     result = result.replace(new RegExp(`(?<![\`\\w])${escaped}(?![\`\\w])`, 'g'), replacement);
   });
-  const docPattern = /doc:[^:\s`]+:[^\s`,.)]+/g;
+  const docPattern = /doc:[^:\s`]+:[^\s`,.)]+/gi;
   result = result.replace(docPattern, (match) => {
     if (displayMap.has(match)) return `${displayMap.get(match)!} (\`${match}\`)`;
     const fallback = docIdFallbackLabel(match);
     return fallback ? `${fallback} (\`${match}\`)` : match;
   });
+  const parenDocPattern = /\((doc:[^:\s)]+:[^\s),]+)\)/gi;
+  result = result.replace(parenDocPattern, (match, sourceId: string) => {
+    const id = String(sourceId || '').trim();
+    if (!id) return match;
+    const label = displayMap.get(id) || docIdFallbackLabel(id);
+    return label ? `${label} (\`${id}\`)` : match;
+  });
   return result;
+}
+
+export function citationSourcesFromTimelineItems(
+  items: Array<{
+    sources?: Array<{
+      kind?: string;
+      title?: string;
+      file_hash?: string;
+      page?: number;
+      origins?: Array<{ artifact_id?: string; source_id?: string } | Record<string, unknown>>;
+    }>;
+  }>,
+): CitationDisplaySource[] {
+  const mapped: CitationDisplaySource[] = [];
+  items.forEach((item) => {
+    (item.sources || []).forEach((source) => {
+      const fileHash = source.file_hash;
+      const locator = source.page ?? 0;
+      const docId = fileHash ? `doc:${fileHash}:${locator}` : undefined;
+      mapped.push({
+        kind: source.kind,
+        label: source.title,
+        file_name: source.title,
+        page: source.page,
+        source_id: docId,
+        origins: (source.origins || []).map((origin) => ({
+          source_id: (origin as { artifact_id?: string }).artifact_id,
+        })),
+      });
+    });
+  });
+  return mapped;
 }

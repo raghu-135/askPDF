@@ -56,8 +56,8 @@ export function DeepResearchIssueList({
       >
         {items.length} limitation{items.length === 1 ? '' : 's'} identified
       </Button>
-      <Collapse in={open} sx={{ overflow: 'visible' }}>
-        <Box component="ul" sx={{ m: 0, pl: 0, listStyle: 'none', typography: 'body2', color: 'text.secondary' }}>
+      <Collapse in={open}>
+        <Box component="ul" sx={{ m: 0, pl: 0, listStyle: 'none', typography: 'body2', color: 'text.secondary', pb: 0.5 }}>
           {items.map((item, index) => (
             <Box component="li" key={`${index}-${item.text.slice(0, 24)}`} sx={{ display: 'flex', gap: 0.75, alignItems: 'flex-start', mb: 0.75 }}>
               <Chip
@@ -184,7 +184,7 @@ export function DeepResearchProvisionalAnswer({
           >
             Provisional report
           </Button>
-          <Collapse in={open} sx={{ overflow: 'visible' }}>
+          <Collapse in={open}>
             <Stack spacing={0.5} sx={{ pt: 0.5 }}>
               <ConversationMarkdownWithCitations content={displayContent} citationSources={citationSources} />
             </Stack>

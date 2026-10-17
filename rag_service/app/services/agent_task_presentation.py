@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from urllib.parse import urlparse
 
 
@@ -122,3 +122,74 @@ def timeline_run_error(run: Any) -> dict[str, Any]:
             "details": dict(summary.get("location") or {}),
         }
     return stored
+
+
+_TIMELINE_TYPE_ORDER = {
+    "objective": 0,
+    "research_guidance": 10,
+    "plan": 20,
+    "replan": 25,
+    "todo_result": 30,
+    "todo_failure": 31,
+    "approval": 35,
+    "research_report": 40,
+    "research_canvas": 50,
+    "run_failure": 60,
+}
+
+
+def timeline_sort_key(item: Mapping[str, Any]) -> tuple[str, int, str]:
+    timestamp = str(item.get("timestamp") or "")
+    item_type = str(item.get("type") or "")
+    order = int(item.get("sort_order") or _TIMELINE_TYPE_ORDER.get(item_type, 45))
+    return (timestamp, order, str(item.get("id") or ""))
+
+
+def followup_guidance_entries(task_config: Mapping[str, Any] | None, run: Any) -> list[dict[str, str]]:
+    config = dict(task_config or {})
+    run_id = str(getattr(run, "id", "") or "")
+    parent_run_id = str(getattr(run, "parent_run_id", "") or "")
+    entries: list[dict[str, str]] = []
+    for entry in config.get("result_review_context") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        source_run_id = str(entry.get("source_run_id") or "")
+        followup = str(entry.get("followup_input") or "").strip()
+        if not followup:
+            continue
+        if parent_run_id and source_run_id == parent_run_id:
+            entries.append({"followup": followup, "key": str(entry.get("idempotency_key") or source_run_id)})
+        elif not parent_run_id and source_run_id == run_id:
+            entries.append({"followup": followup, "key": str(entry.get("idempotency_key") or source_run_id)})
+    return entries
+
+
+async def timeline_report_markdown(run: Any, artifacts: list[Any]) -> str | None:
+    pending = dict(getattr(run, "pending_interrupt_json", None) or {})
+    provisional = str(pending.get("provisional_answer") or "").strip()
+    if provisional:
+        return provisional
+    final_report = next(
+        (
+            artifact for artifact in artifacts
+            if str(getattr(artifact, "kind", "")) == "final_report"
+            and str(getattr(artifact, "validity", "")) == "valid"
+        ),
+        None,
+    )
+    if final_report is None:
+        return None
+    summary = dict(getattr(final_report, "summary_json", None) or {})
+    excerpt = str(summary.get("text") or summary.get("excerpt") or "").strip()
+    if excerpt:
+        return excerpt
+    object_key = str(getattr(final_report, "object_key", "") or "").strip()
+    if not object_key:
+        return None
+    from app.services.content_store import get_content_store
+
+    try:
+        content = (await get_content_store().read(object_key)).decode("utf-8", errors="replace").strip()
+    except FileNotFoundError:
+        return None
+    return content or None

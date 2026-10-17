@@ -59,10 +59,30 @@ def _objects(value: Any) -> tuple[Mapping[str, Any], ...]:
     return tuple(dict(item) for item in value if isinstance(item, Mapping)) if isinstance(value, (list, tuple)) else ()
 
 
+def _gap_line(item: Any) -> str | None:
+    if isinstance(item, str):
+        text = item.strip()
+        return text or None
+    if isinstance(item, Mapping):
+        for key in ("message", "summary", "text", "description"):
+            raw = item.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+        code = str(item.get("code") or "").strip()
+        return code.replace("_", " ") if code else None
+    if item is None:
+        return None
+    text = str(item).strip()
+    return text or None
+
+
 def _strings(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         return (value,) if value.strip() else ()
-    return tuple(str(item).strip() for item in value if str(item).strip()) if isinstance(value, (list, tuple)) else ()
+    if isinstance(value, (list, tuple)):
+        lines = [_gap_line(item) for item in value]
+        return tuple(line for line in lines if line)
+    return ()
 
 
 def normalize_runtime_task_result(value: Any, *, artifacts: tuple[RuntimeArtifact, ...] = (), usage: Mapping[str, Any] | None = None, framework_details: Mapping[str, Any] | None = None, structured_output_requested: bool = False, structured_validation_error: Exception | None = None) -> RuntimeTaskResult:

@@ -11,6 +11,8 @@ import {
   guidanceWaivesWebBenchmarks,
   objectiveRequestsLiveWeb,
   reviewLimitationItems,
+  normalizeReviewGapText,
+  resultReviewContinueLabel,
 } from '../src/lib/deep-research-decision-ui.ts';
 
 test('budgetUsageFromInterrupt reads tranche usage from pending usage payload', () => {
@@ -87,6 +89,19 @@ test('guidanceWaivesWebBenchmarks suppresses web mismatch banner', () => {
     ),
     false,
   );
+});
+
+test('normalizeReviewGapText extracts structured gap messages', () => {
+  const text = normalizeReviewGapText({
+    code: 'MISSING_SALES_FIGURES',
+    message: 'Sales figures were not found in the document.',
+  });
+  assert.equal(text, 'Sales figures were not found in the document.');
+});
+
+test('resultReviewContinueLabel shortens when no limitations', () => {
+  assert.equal(resultReviewContinueLabel(0), 'Continue with guidance');
+  assert.match(resultReviewContinueLabel(2), /another tranche/i);
 });
 
 test('reviewLimitationItems drops review findings that repeat gap topics', () => {

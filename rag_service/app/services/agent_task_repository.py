@@ -2277,6 +2277,17 @@ async def respond_to_budget_review(
                 budget = normalize_budget_state(task.budgets_json, (task.config_json or {}).get("limits") or {})
                 replace_jsonb_field(task, "budgets_json", reset_tranche(budget))
                 if guidance:
+                    config = dict(task.config_json or {})
+                    review_context = list(config.get("result_review_context") or [])
+                    review_context.append({
+                        "source_run_id": run.id,
+                        "source_artifact_id": pending.get("provisional_artifact_id"),
+                        "followup_input": " ".join(guidance.split()).strip(),
+                        "idempotency_key": idempotency_key,
+                        "source": "budget_review",
+                    })
+                    config["result_review_context"] = review_context[-5:]
+                    replace_jsonb_field(task, "config_json", config)
                     correction_id = str(uuid.uuid4())
                     observed_plan_revision = int((await session.execute(
                         select(func.coalesce(func.max(AgentTaskPlanRevision.revision), 0)).where(

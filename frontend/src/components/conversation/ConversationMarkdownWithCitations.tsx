@@ -1,11 +1,13 @@
 import React, { useMemo } from 'react';
 import { Chip, Stack } from '@mui/material';
 import type { CitationDisplaySource } from '../../lib/research-citation-display';
+import { buildCitationDisplayMap, rewriteDocCitationTokens } from '../../lib/research-citation-display';
 import { ConversationMarkdown } from './ConversationMarkdown';
 
-const DOC_CITATION_PATTERN = /([^\n`]+?,\s*page\s+\d+)\s*\(`(doc:[^`]+)`\)/gi;
+const DOC_CITATION_PATTERN = /([^\n`]+?,\s*(?:page\s+\d+|section\s+c-\d+))\s*\(`(doc:[^`]+)`\)/gi;
 const SOURCE_BRACKET_PATTERN = /\[Source:\s*([^\]]+)\]/gi;
 const PAREN_PDF_PAGE_PATTERN = /\(([^)]+\.pdf,\s*page\s+\d+)\)/gi;
+const PAREN_DOC_LOCATOR_PATTERN = /\((doc:[^:\s)]+:[^\s),]+)\)/gi;
 
 type Segment = { type: 'markdown' | 'chip'; value: string; sourceId?: string };
 
@@ -47,6 +49,20 @@ function collectCitationSegments(text: string): Segment[] {
     }
     match = parenPattern.exec(text);
   }
+  const parenDocPattern = new RegExp(PAREN_DOC_LOCATOR_PATTERN.source, 'gi');
+  match = parenDocPattern.exec(text);
+  while (match) {
+    const overlaps = hits.some((hit) => match!.index >= hit.index && match!.index < hit.index + hit.length);
+    if (!overlaps) {
+      const sourceId = match[1].trim();
+      hits.push({
+        index: match.index,
+        length: match[0].length,
+        segment: { type: 'chip', value: sourceId.replace(/^doc:[^:]+:/, 'section ').replace(/^doc:/, ''), sourceId },
+      });
+    }
+    match = parenDocPattern.exec(text);
+  }
   hits.sort((a, b) => a.index - b.index);
   const parts: Segment[] = [];
   let lastIndex = 0;
@@ -71,10 +87,12 @@ export function ConversationMarkdownWithCitations({
   citationSources?: CitationDisplaySource[];
 }) {
   const segments = useMemo(() => {
-    const text = String(content || '');
-    if (!text.trim()) return [{ type: 'markdown' as const, value: text }];
+    const raw = String(content || '');
+    if (!raw.trim()) return [{ type: 'markdown' as const, value: raw }];
+    const map = buildCitationDisplayMap(citationSources);
+    const text = rewriteDocCitationTokens(raw, map);
     return collectCitationSegments(text);
-  }, [content]);
+  }, [content, citationSources]);
 
   if (segments.length === 1 && segments[0].type === 'markdown') {
     return <ConversationMarkdown content={segments[0].value} />;
