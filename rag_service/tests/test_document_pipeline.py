@@ -201,11 +201,23 @@ def test_table_projection_does_not_invent_headers_for_native_cells():
     assert structure["rows"] == [["A", "B"]]
 
 
-def test_pipeline_versions_are_extraction_v5_and_table_pack_v6():
+def test_pipeline_versions_are_extraction_v7_and_table_pack_v8():
     from app.services.document_pipeline import EXTRACTION_PIPELINE_VERSION, RETRIEVAL_CHUNKING_VERSION
 
-    assert EXTRACTION_PIPELINE_VERSION == "docling-pdf-v6"
-    assert RETRIEVAL_CHUNKING_VERSION == "table-pack-v7"
+    assert EXTRACTION_PIPELINE_VERSION == "docling-pdf-v7"
+    assert RETRIEVAL_CHUNKING_VERSION == "table-pack-v8"
+
+
+def test_default_sentence_split_uses_spacy_sents_not_tokens():
+    from app.services.document_pipeline import _default_sentence_split
+
+    text = "First sentence here. Second sentence follows."
+    sentences = _default_sentence_split(text)
+    assert len(sentences) == 2
+    assert sentences[0].startswith("First")
+    assert sentences[1].startswith("Second")
+    token_count = len(text.split())
+    assert len(sentences) < token_count
 
 
 def test_oversized_table_rows_prefix_headers_once_and_preserve_synthetic_provenance():

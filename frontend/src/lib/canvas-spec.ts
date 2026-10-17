@@ -150,6 +150,7 @@ export const documentCitationTarget = (
     fileHash: citation.file_hash,
     sentenceId,
     sentenceIds: sentenceId != null ? [sentenceId] : undefined,
+    play: false,
   };
 };
 

@@ -27,3 +27,10 @@ test('transformSentences treats a missing payload as empty instead of throwing',
     page_height: 200,
   }]);
 });
+
+test('transformSentences omits placeholder boxes when coordinates are missing', () => {
+  const transformed = transformSentences([
+    { id: 2, text: 'No coords', label: 'text', page: 1, page_width: 100, page_height: 200 },
+  ]);
+  assert.deepEqual(transformed[0].bboxes, []);
+});
