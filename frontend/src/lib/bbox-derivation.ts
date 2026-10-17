@@ -41,6 +41,11 @@ export type BackendSentence = {
   pages?: number[];  // For multi-page sentences
 };
 
+const positivePageDimension = (value: unknown): number | null => {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+};
+
 export function deriveBBoxes(sentence: BackendSentence): BBox[] {
   // Use bboxes array if available (multi-line sentences), otherwise use single bbox
   const bboxSources = sentence.bboxes || [sentence.bbox];
@@ -52,33 +57,43 @@ export function deriveBBoxes(sentence: BackendSentence): BBox[] {
     return [];
   }
 
-  return validBboxes.map((bbox) => {
+  const derived: BBox[] = [];
+  for (const bbox of validBboxes) {
     // Handle both old format [x0, y0, x1, y1] and new format with page info
     if (Array.isArray(bbox)) {
-      // Old format: [x0, y0, x1, y1]
       const [x0, y0, x1, y1] = bbox;
-      return {
+      const pageWidth = positivePageDimension(sentence.page_width);
+      const pageHeight = positivePageDimension(sentence.page_height);
+      if (!pageWidth || !pageHeight) {
+        continue;
+      }
+      derived.push({
         page: sentence.page,
         x: x0,
-        y: y0,  // Already top-left origin from backend
+        y: y0,
         width: x1 - x0,
         height: y1 - y0,
-        page_width: sentence.page_width,
-        page_height: sentence.page_height,
-      };
-    } else {
-      // New format: { page, x0, y0, x1, y1, page_width, page_height }
-      return {
-        page: bbox.page,
-        x: bbox.x0,
-        y: bbox.y0,
-        width: bbox.x1 - bbox.x0,
-        height: bbox.y1 - bbox.y0,
-        page_width: bbox.page_width,
-        page_height: bbox.page_height,
-      };
+        page_width: pageWidth,
+        page_height: pageHeight,
+      });
+      continue;
     }
-  });
+    const pageWidth = positivePageDimension(bbox.page_width ?? sentence.page_width);
+    const pageHeight = positivePageDimension(bbox.page_height ?? sentence.page_height);
+    if (!pageWidth || !pageHeight) {
+      continue;
+    }
+    derived.push({
+      page: bbox.page,
+      x: bbox.x0,
+      y: bbox.y0,
+      width: bbox.x1 - bbox.x0,
+      height: bbox.y1 - bbox.y0,
+      page_width: pageWidth,
+      page_height: pageHeight,
+    });
+  }
+  return derived;
 }
 
 /**

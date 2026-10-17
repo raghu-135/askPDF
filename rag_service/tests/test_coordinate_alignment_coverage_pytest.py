@@ -65,7 +65,12 @@ def test_provenance_fallback_assigns_non_zero_bbox():
             "bboxes": [],
         }
     ]
-    aligned = _align_coordinates(canonical, [], elements_by_id={"el-1": element})
+    aligned = _align_coordinates(
+        canonical,
+        [],
+        elements_by_id={"el-1": element},
+        page_dimensions={1: (612.0, 792.0)},
+    )
     assert aligned[0]["alignment_precision"] == "coarse"
     assert _sentence_has_bbox(aligned[0])
 
@@ -86,13 +91,20 @@ def test_alignment_bbox_coverage_on_multi_column_pdf(alignment_columns_pdf_bytes
     sections, elements = derive_hierarchy(payload)
     payload["sections"] = sections
     payload["elements"] = elements
+    from app.services.document_conversion_service import _merge_page_dimensions, _page_size_map_from_pdf
+
     candidates = parse_with_pdfplumber(data, docling_doc, filename)
     sentences = project_sentences(payload)
     elements_by_id = {str(item["element_id"]): item for item in elements}
+    page_dimensions = _merge_page_dimensions(
+        _page_size_map_from_pdf(data),
+        {},
+    )
     aligned = _align_coordinates(
         sentences,
         candidates,
         elements_by_id=elements_by_id,
+        page_dimensions=page_dimensions,
     )
     readable = [item for item in aligned if item.get("readable")]
     assert readable, "expected readable sentences from fixture PDF"
