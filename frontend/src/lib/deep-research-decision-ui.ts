@@ -181,6 +181,32 @@ export function normalizeReviewGapText(
   return enrichReviewGapLine(String(gap || ''), todoTitles);
 }
 
+const REVIEW_FINDING_CODE_LABELS: Record<string, string> = {
+  INSUFFICIENT_EVIDENCE: 'The available evidence does not support a confident answer for this objective.',
+  MISSING_CONTENT: 'Required content was missing from the sources that were reviewed.',
+  MISSING_EVIDENCE: 'Expected evidence was not found in the retrieved sources.',
+  INCOMPLETE_EVIDENCE: 'The retrieved evidence is incomplete for this objective.',
+  UNSUPPORTED_CLAIM: 'The report includes claims that are not adequately supported by cited evidence.',
+  evidence_critic_issues: 'Evidence review identified issues that need attention.',
+};
+
+export function humanizeReviewFindingCode(code: string): string {
+  const trimmed = String(code || '').trim();
+  if (!trimmed) return trimmed;
+  const underscored = trimmed.toUpperCase().replace(/\s+/g, '_');
+  if (REVIEW_FINDING_CODE_LABELS[underscored]) return REVIEW_FINDING_CODE_LABELS[underscored];
+  if (REVIEW_FINDING_CODE_LABELS[trimmed]) return REVIEW_FINDING_CODE_LABELS[trimmed];
+  const words = trimmed.replace(/_/g, ' ').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function humanizeReviewFindingText(text: string): string {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return trimmed;
+  if (/^[A-Z][A-Z0-9_ ]+$/.test(trimmed)) return humanizeReviewFindingCode(trimmed);
+  return trimmed;
+}
+
 export function enrichReviewGapLine(
   gap: string,
   todoTitles?: Record<string, string>,
@@ -232,19 +258,21 @@ export function reviewLimitationItems(
       issues.forEach((issue) => {
         let message = '';
         if (typeof issue === 'string') {
-          message = issue;
+          message = humanizeReviewFindingText(issue);
         } else if (issue && typeof issue === 'object') {
-          message = String(
+          const raw = String(
             (issue as { message?: string }).message
             || (issue as { summary?: string }).summary
+            || (issue as { code?: string }).code
             || code,
           );
+          message = humanizeReviewFindingText(raw);
         }
         if (!message || isNoiseCriticIssue(message) || isRedundantFinding(message, gapKeys, gapTopics)) return;
         items.push({ kind: 'finding', text: message });
       });
     } else if (code !== 'evidence_critic_issues') {
-      const fallback = code.replaceAll('_', ' ');
+      const fallback = humanizeReviewFindingCode(code);
       if (!isRedundantFinding(fallback, gapKeys, gapTopics)) {
         items.push({ kind: 'finding', text: fallback });
       }
