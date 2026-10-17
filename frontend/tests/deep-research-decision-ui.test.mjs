@@ -5,6 +5,7 @@ import {
   buildDecisionLeadLine,
   budgetUsageFromInterrupt,
   countReviewIssues,
+  formatBudgetDimensionChip,
   formatBudgetMeterLine,
 } from '../src/lib/deep-research-decision-ui.ts';
 
@@ -31,11 +32,17 @@ test('buildDecisionLeadLine mentions budget exhaustion for result review', () =>
       trancheLimits: { model_calls: 3 },
       exhaustedDimensions: ['model_calls'],
     },
-    issueCount: 2,
-    gapCount: 1,
+    gapCount: 5,
+    reviewFindingCount: 3,
+    limitationCount: 8,
   });
   assert.match(line, /Research budget for model calls/i);
-  assert.match(line, /more budget/i);
+  assert.match(line, /8 limitations/i);
+  assert.match(line, /5 gaps/i);
+});
+
+test('formatBudgetDimensionChip formats active runtime as duration', () => {
+  assert.match(formatBudgetDimensionChip('elapsed_active_ms', 24885, 7200000), /25s/);
 });
 
 test('countReviewIssues totals structured limitation lines', () => {

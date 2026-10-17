@@ -251,8 +251,37 @@ def _budget_usage_payload(budget: Mapping[str, Any]) -> dict[str, Any]:
     return {**dict(budget), "exhausted_dimensions": exhausted_dimensions(budget)}
 
 
+def _todo_title_index(task_result: Mapping[str, Any]) -> dict[str, str]:
+    titles: dict[str, str] = {}
+    for source in (task_result.get("plan_todos"), task_result.get("todos"), task_result.get("task_todos")):
+        if not isinstance(source, list):
+            continue
+        for entry in source:
+            if not isinstance(entry, Mapping):
+                continue
+            todo_id = str(entry.get("id") or "").strip()
+            title = str(entry.get("title") or "").strip()
+            if todo_id and title:
+                titles[todo_id] = title
+    return titles
+
+
+def _enrich_gap_label(gap: str, todo_titles: Mapping[str, str]) -> str:
+    text = str(gap or "").strip()
+    if not text:
+        return text
+    if text in todo_titles:
+        return f"{todo_titles[text]} ({text})"
+    return text
+
+
 def _enrich_result_gaps(budget: Mapping[str, Any], gaps: list[str], task_result: Mapping[str, Any]) -> list[str]:
-    merged = list(dict.fromkeys(str(value) for value in gaps if str(value).strip()))
+    todo_titles = _todo_title_index(task_result)
+    merged = list(dict.fromkeys(
+        _enrich_gap_label(str(value), todo_titles)
+        for value in gaps
+        if str(value).strip()
+    ))
     limits = budget.get("tranche_limits") if isinstance(budget.get("tranche_limits"), Mapping) else {}
     usage = budget.get("tranche_usage") if isinstance(budget.get("tranche_usage"), Mapping) else {}
     tool_limit = int(limits.get("tool_calls") or 0) if limits else 0

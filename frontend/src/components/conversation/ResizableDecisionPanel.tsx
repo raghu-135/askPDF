@@ -8,6 +8,7 @@ export function ResizableDecisionPanel({
   title,
   children,
   footer,
+  fixedHeader,
   variant = 'clarification',
   onClose,
   rootRef,
@@ -15,10 +16,12 @@ export function ResizableDecisionPanel({
   narrowDefaultRatio = 0.32,
   horizontalInset = 0,
   minHeight = 0,
+  fillColumn = false,
 }: {
   title: React.ReactNode;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  fixedHeader?: React.ReactNode;
   variant?: 'clarification' | 'conflict' | 'approval';
   onClose?: () => void;
   rootRef?: React.RefObject<HTMLElement | null>;
@@ -26,6 +29,7 @@ export function ResizableDecisionPanel({
   narrowDefaultRatio?: number;
   horizontalInset?: number;
   minHeight?: number;
+  fillColumn?: boolean;
 }) {
   const theme = useTheme();
   const narrow = useMediaQuery(theme.breakpoints.down('sm'));
@@ -36,17 +40,18 @@ export function ResizableDecisionPanel({
     <Box sx={{
       display: 'flex',
       flexDirection: 'column',
-      flex: 1,
+      flex: fillColumn ? '1 1 0' : undefined,
       mb: 1,
       mx: horizontalInset,
       bgcolor: 'background.default',
       borderRadius: 1,
-      maxHeight: `calc(100dvh * ${ratio})`,
+      maxHeight: fillColumn ? '100%' : `calc(100dvh * ${ratio})`,
+      height: fillColumn ? '100%' : undefined,
       minHeight,
       overflow: 'hidden',
       borderTop: '1px solid',
       borderColor: variant === 'conflict' ? 'warning.main' : variant === 'approval' ? 'info.main' : 'divider',
-      flexShrink: 0,
+      flexShrink: fillColumn ? 1 : 0,
     }}>
       <ResizablePanelHandle resizing={resizing} onResizeStart={onResizeStart} label="Resize decision panel" />
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, pb: 1, flexShrink: 0 }}>
@@ -59,7 +64,22 @@ export function ResizableDecisionPanel({
           </IconButton>
         )}
       </Box>
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 1, pb: footer ? 0 : 1, overflowY: 'auto', minHeight: 0, flex: 1 }}>
+      {fixedHeader ? (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 1, pb: 1, flexShrink: 0 }}>
+          {fixedHeader}
+        </Box>
+      ) : null}
+      <Box sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1.5,
+        px: 1,
+        pt: fixedHeader ? 0 : 1,
+        pb: footer ? 0 : 1,
+        overflowY: 'auto',
+        minHeight: 0,
+        flex: 1,
+      }}>
         {children}
       </Box>
       {footer ? <Box sx={{ flexShrink: 0, px: 1, pb: 1 }}>{footer}</Box> : null}

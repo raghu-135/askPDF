@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Alert, Box, Button, Chip, Collapse, Stack, TextField, Typography,
+  Alert, Box, Button, Collapse, TextField, Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { AgentRunPendingInterrupt, AgentTaskSummary } from '../../lib/api';
@@ -8,15 +8,19 @@ import {
   budgetUsageFromInterrupt,
   buildDecisionLeadLine,
   countReviewIssues,
-  formatBudgetDimensionChip,
-  RESEARCH_BUDGET_DIMENSIONS,
-  RESEARCH_BUDGET_TOOLTIP,
   reviewSummaryLines,
 } from '../../lib/deep-research-decision-ui';
+import { DeepResearchBudgetChips } from './DeepResearchBudgetChips';
 import { buildCitationDisplayMap, rewriteDocCitationTokens } from '../../lib/research-citation-display';
 import type { CitationDisplaySource } from '../../lib/research-citation-display';
 import { ConversationDisclosure } from './ConversationDisclosure';
-import { ConversationMarkdown } from './ConversationMarkdown';
+import { ConversationMarkdownWithCitations } from './ConversationMarkdownWithCitations';
+
+const RUNTIME_REPORT_SECTION_PATTERN = /\n##\s+Unresolved required work[\s\S]*$/i;
+
+function stripRuntimeReportSections(markdown: string): string {
+  return markdown.replace(RUNTIME_REPORT_SECTION_PATTERN, '').trimEnd();
+}
 
 export function DeepResearchBudgetSummary({
   pending,
@@ -27,36 +31,19 @@ export function DeepResearchBudgetSummary({
 }) {
   const snapshot = useMemo(() => budgetUsageFromInterrupt(pending, task), [pending, task]);
   if (!snapshot) return null;
-  return (
-    <Stack direction="row" spacing={0.75} flexWrap="wrap" alignItems="center" useFlexGap>
-      <Chip size="small" variant="outlined" label={`Tranche ${snapshot.trancheIndex}`} title={RESEARCH_BUDGET_TOOLTIP} />
-      {RESEARCH_BUDGET_DIMENSIONS.map((key) => {
-        const limit = snapshot.trancheLimits[key];
-        if (limit == null) return null;
-        const used = snapshot.trancheUsage[key] || 0;
-        return (
-          <Chip
-            key={key}
-            size="small"
-            variant="outlined"
-            title={RESEARCH_BUDGET_TOOLTIP}
-            label={formatBudgetDimensionChip(key, used, limit)}
-            sx={{ maxWidth: '100%', height: 'auto', '& .MuiChip-label': { whiteSpace: 'normal', py: 0.25 } }}
-          />
-        );
-      })}
-    </Stack>
-  );
+  return <DeepResearchBudgetChips snapshot={snapshot} />;
 }
 
 export function DeepResearchIssueList({
   pending,
   defaultExpanded,
+  todoTitles,
 }: {
   pending: AgentRunPendingInterrupt;
   defaultExpanded?: boolean;
+  todoTitles?: Record<string, string>;
 }) {
-  const lines = useMemo(() => reviewSummaryLines(pending), [pending]);
+  const lines = useMemo(() => reviewSummaryLines(pending, todoTitles), [pending, todoTitles]);
   const [open, setOpen] = useState(Boolean(defaultExpanded));
   if (!lines.length) return null;
   return (
@@ -83,18 +70,21 @@ export function DeepResearchDecisionLead({
   pending,
   task,
   isBudgetReview,
+  todoTitles,
 }: {
   pending: AgentRunPendingInterrupt;
   task: AgentTaskSummary | null | undefined;
   isBudgetReview: boolean;
+  todoTitles?: Record<string, string>;
 }) {
   const snapshot = useMemo(() => budgetUsageFromInterrupt(pending, task), [pending, task]);
-  const { warningCount, gapCount } = countReviewIssues(pending);
+  const counts = countReviewIssues(pending, todoTitles);
   const text = buildDecisionLeadLine({
     isBudgetReview,
     snapshot,
-    issueCount: warningCount,
-    gapCount,
+    gapCount: counts.gapCount,
+    reviewFindingCount: counts.reviewFindingCount,
+    limitationCount: counts.limitationCount,
     fallbackBody: pending.body,
   });
   return <Typography variant="body2">{text}</Typography>;
@@ -107,9 +97,6 @@ export function DeepResearchDecisionStickyFooter({
 }) {
   return (
     <Box sx={{
-      position: 'sticky',
-      bottom: 0,
-      zIndex: 1,
       bgcolor: 'background.default',
       borderTop: 1,
       borderColor: 'divider',
@@ -137,17 +124,21 @@ export function DeepResearchGuidanceField({
   onChange: (value: string) => void;
   required?: boolean;
 }) {
+  const fieldId = 'deep-research-guidance-input';
   return (
     <TextField
       fullWidth
       multiline
       minRows={2}
       maxRows={6}
+      id={fieldId}
+      name="research-guidance"
       label={label}
       helperText={helperText}
       required={required}
       value={value}
       onChange={(event) => onChange(event.target.value)}
+      inputProps={{ 'aria-label': label }}
     />
   );
 }
@@ -164,7 +155,7 @@ export function DeepResearchProvisionalAnswer({
   defaultCollapsed?: boolean;
 }) {
   const displayContent = useMemo(() => {
-    const raw = String(content || '');
+    const raw = stripRuntimeReportSections(String(content || ''));
     if (!raw.trim()) return raw;
     const map = buildCitationDisplayMap(citationSources);
     return rewriteDocCitationTokens(raw, map);
@@ -174,11 +165,11 @@ export function DeepResearchProvisionalAnswer({
     if (defaultCollapsed) {
       return (
         <ConversationDisclosure label="Provisional report" defaultExpanded={false}>
-          <ConversationMarkdown content={displayContent} />
+          <ConversationMarkdownWithCitations content={displayContent} citationSources={citationSources} />
         </ConversationDisclosure>
       );
     }
-    return <ConversationMarkdown content={displayContent} />;
+    return <ConversationMarkdownWithCitations content={displayContent} citationSources={citationSources} />;
   }
   if (emptyMessage) {
     return <Alert severity="warning">{emptyMessage}</Alert>;
