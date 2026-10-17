@@ -41,6 +41,7 @@ export function ResizableDecisionPanel({
       display: 'flex',
       flexDirection: 'column',
       flex: fillColumn ? '1 1 0' : undefined,
+      minWidth: 0,
       mb: 1,
       mx: horizontalInset,
       bgcolor: 'background.default',
@@ -48,7 +49,7 @@ export function ResizableDecisionPanel({
       maxHeight: fillColumn ? '100%' : `calc(100dvh * ${ratio})`,
       height: fillColumn ? '100%' : undefined,
       minHeight: fillColumn ? minHeight || 0 : minHeight,
-      overflow: fillColumn ? 'auto' : 'hidden',
+      overflow: 'hidden',
       borderTop: '1px solid',
       borderColor: variant === 'conflict' ? 'warning.main' : variant === 'approval' ? 'info.main' : 'divider',
       flexShrink: fillColumn ? 1 : 0,
@@ -76,10 +77,10 @@ export function ResizableDecisionPanel({
         px: 1,
         pt: fixedHeader ? 0 : 1,
         pb: footer ? 0 : 1,
-        overflowY: fillColumn ? 'visible' : 'auto',
+        overflowY: 'auto',
         overflowX: 'hidden',
-        minHeight: fillColumn ? 'min(42vh, 100%)' : 0,
-        flex: fillColumn ? '1 1 auto' : 1,
+        minHeight: 0,
+        flex: 1,
       }}>
         {children}
       </Box>

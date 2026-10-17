@@ -818,6 +818,27 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
         "primary_content": task.objective, "timestamp": maybe_iso_utc_z(run.started_at),
         "folds": {"technical_details": {"attempt": run.task_attempt}}, "trace_anchor": None,
     }]
+    if run.parent_run_id:
+        review_context = [
+            dict(value) for value in (task.config_json or {}).get("result_review_context") or []
+            if isinstance(value, dict)
+        ]
+        for entry in reversed(review_context):
+            if str(entry.get("source_run_id") or "") != str(run.parent_run_id):
+                continue
+            followup = str(entry.get("followup_input") or "").strip()
+            if not followup:
+                continue
+            items.append({
+                "id": f"guidance:{run_id}:{entry.get('idempotency_key') or entry.get('source_run_id')}",
+                "type": "research_guidance",
+                "status": "completed",
+                "primary_content": followup,
+                "timestamp": maybe_iso_utc_z(run.started_at),
+                "folds": {"technical_details": {"source_run_id": run.parent_run_id}},
+                "trace_anchor": None,
+            })
+            break
     previous_plan_json: dict[str, Any] = {}
     for index, plan in enumerate(plans):
         plan_json = dict(plan.plan_json or {})

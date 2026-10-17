@@ -84,7 +84,7 @@ import {
 import {
   budgetUsageFromTask,
   countReviewIssues,
-  objectiveRequestsLiveWeb,
+  effectiveObjectiveRequestsLiveWeb,
 } from '../lib/deep-research-decision-ui';
 import { DeepResearchBudgetChips } from './conversation/DeepResearchBudgetChips';
 import { formatAgentTaskStatus, formatTimelineItemStatus } from '../lib/deep-research-task-status';
@@ -245,7 +245,7 @@ function TimelineBubble({
   rootRef: React.Ref<HTMLLIElement>;
   onSelectAttempt?: (attempt: number) => void;
 }) {
-  const isObjective = item.type === 'objective';
+  const isObjective = item.type === 'objective' || item.type === 'research_guidance';
   const foldEntries = Object.entries(item.folds || {}).filter(([label, value]) => (
     !['sources', 'artifacts'].includes(label)
     && value != null
@@ -691,10 +691,17 @@ export default function DeepResearchTaskPanel({
   const webSearchField = definitionFields.find((field) => field.id === 'web_search_mode');
   const requestedWebUnavailable = webSearchMode !== 'off' && webSearchField?.enabled === false;
   const effectiveWebMode = frozen ? configuredWebMode : webSearchMode;
+  const reviewGuidanceTexts = useMemo(() => {
+    const context = task?.configuration?.result_review_context;
+    if (!Array.isArray(context)) return [];
+    return context
+      .map((entry) => String((entry as { followup_input?: string }).followup_input || ''))
+      .filter(Boolean);
+  }, [task?.configuration?.result_review_context]);
   const objectiveWebMismatch = Boolean(
     task?.objective
     && effectiveWebMode === 'off'
-    && objectiveRequestsLiveWeb(task.objective),
+    && effectiveObjectiveRequestsLiveWeb(task.objective, reviewGuidanceTexts),
   );
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
   const liveBudgetSnapshot = useMemo(() => budgetUsageFromTask(task), [task]);
@@ -823,12 +830,13 @@ export default function DeepResearchTaskPanel({
       flexShrink: 0,
       minHeight: 120,
       maxHeight: '24vh',
-      overflow: 'hidden',
+      overflowY: 'auto',
+      overflowX: 'hidden',
     } : {
       flex: 1,
       minHeight: 0,
     }}
-    decisionSx={reviewPanelOpen ? { flex: '1 1 0', minHeight: 0, overflow: 'hidden' } : undefined}
+    decisionSx={reviewPanelOpen ? { flex: '1 1 0', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' } : undefined}
     header={<ConversationHeader
       models={models}
       model={frozen ? String(task?.configuration?.llm_model || model) : model}
@@ -886,7 +894,7 @@ export default function DeepResearchTaskPanel({
         />
       ) : null}
     </>}
-    transcript={<ConversationTranscriptFrame sx={reviewPanelOpen ? { flex: 1, minHeight: 0, maxHeight: '100%' } : undefined}>{items.map((item) => <TimelineBubble
+    transcript={<ConversationTranscriptFrame sx={reviewPanelOpen ? { flex: '0 0 auto', overflow: 'visible', maxHeight: 'none' } : undefined}>{items.map((item) => <TimelineBubble
       key={item.id}
       item={item}
       taskId={task?.id || ''}
@@ -945,7 +953,7 @@ export default function DeepResearchTaskPanel({
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField
           label="Guidance for the next research tranche"
-          helperText="Continuing with guidance spends more research budget and may start a linked attempt."
+          helperText="Continuing with guidance resets the budget tranche counters and may start a linked attempt."
           value={reviewGuidance}
           onChange={setReviewGuidance}
           required

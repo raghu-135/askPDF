@@ -7,6 +7,8 @@ import {
   countReviewIssues,
   formatBudgetDimensionChip,
   formatBudgetMeterLine,
+  effectiveObjectiveRequestsLiveWeb,
+  guidanceWaivesWebBenchmarks,
   objectiveRequestsLiveWeb,
   reviewLimitationItems,
 } from '../src/lib/deep-research-decision-ui.ts';
@@ -74,4 +76,24 @@ test('reviewLimitationItems dedupes critic issues that repeat gaps', () => {
 test('objectiveRequestsLiveWeb detects benchmark objectives', () => {
   assert.equal(objectiveRequestsLiveWeb('Compare to typical US bakery benchmarks using web sources'), true);
   assert.equal(objectiveRequestsLiveWeb('Summarize the PDF only'), false);
+});
+
+test('guidanceWaivesWebBenchmarks suppresses web mismatch banner', () => {
+  assert.equal(guidanceWaivesWebBenchmarks('Focus on parts 1-3; skip web benchmarks.'), true);
+  assert.equal(
+    effectiveObjectiveRequestsLiveWeb(
+      'Compare using web sources',
+      ['Focus only on parts 1-3 from the PDF; skip web benchmarks.'],
+    ),
+    false,
+  );
+});
+
+test('reviewLimitationItems drops review findings that repeat gap topics', () => {
+  const items = reviewLimitationItems({
+    gaps: ['The document index is not ready for this thread.'],
+    warnings: [{ code: 'evidence_critic_issues', details: { issues: ['document index not ready', 'Other issue'] } }],
+  });
+  assert.equal(items.filter((item) => item.kind === 'finding').length, 1);
+  assert.equal(items.find((item) => item.kind === 'finding')?.text, 'Other issue');
 });
