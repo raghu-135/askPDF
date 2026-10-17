@@ -72,6 +72,12 @@ def test_provenance_fallback_assigns_non_zero_bbox():
 
 @pytest.mark.slow
 def test_alignment_bbox_coverage_on_multi_column_pdf(alignment_columns_pdf_bytes):
+    try:
+        from app.services.document_pipeline import _sentence_nlp
+
+        _sentence_nlp()
+    except Exception as exc:  # pragma: no cover - environment dependent
+        pytest.skip(f"sentence pipeline unavailable: {exc}")
     data = alignment_columns_pdf_bytes
     filename = "alignment_columns.pdf"
     docling_doc = parse_with_docling(data, filename)
