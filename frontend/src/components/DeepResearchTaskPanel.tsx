@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Box, Button, Chip,
   Divider, IconButton, LinearProgress, ListItemIcon, ListItemText,
-  Menu, MenuItem, Stack, TextField, Tooltip, Typography, useMediaQuery, useTheme,
+  Menu, MenuItem, Paper, Stack, TextField, Tooltip, Typography, useMediaQuery, useTheme,
 } from '@mui/material';
+import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteIcon from '@mui/icons-material/Delete';
 import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
@@ -25,7 +26,6 @@ import {
   getAgentTaskTodos,
   getAgentTaskTimeline,
   listAgentTasks,
-  publishAgentTaskFinalToChat,
   resumeAgentRun,
   respondToAgentTaskResultReview,
   respondToAgentTaskBudgetReview,
@@ -34,6 +34,7 @@ import {
   interruptAgentRunWithInput,
   steerAgentRunLive,
   type AgentTaskRun,
+  type AgentTaskResearchCanvasRef,
   type AgentTaskSummary,
   type AgentTaskTimelineItem,
   type AgentTaskTodo,
@@ -114,6 +115,17 @@ export function DeepResearchTaskPicker({
     }
   };
 
+  const taskPickerSecondary = (task: AgentTaskSummary) => {
+    const status = `${task.status.replaceAll('_', ' ')} · attempt ${task.run_attempt || 0}`;
+    const canvases = task.research_canvases || [];
+    if (!canvases.length) return status;
+    const lead = canvases.find((canvas) => canvas.is_current_on_thread) || canvases[0];
+    const canvasHint = canvases.length === 1
+      ? `Canvas: ${lead.title}`
+      : `${canvases.length} canvases · ${lead.title}`;
+    return `${status} · ${canvasHint}`;
+  };
+
   return <>
     <Tooltip title="Deep Research tasks (long-running objectives separate from thread agent chat)">
       <IconButton
@@ -134,7 +146,7 @@ export function DeepResearchTaskPicker({
       {tasks.map((task) => <MenuItem key={task.id} selected={task.id === selectedTaskId} onClick={() => { onSelect(task.id); setAnchor(null); }}>
         <ListItemText
           primary={task.objective}
-          secondary={`${task.status.replaceAll('_', ' ')} · attempt ${task.run_attempt || 0}`}
+          secondary={taskPickerSecondary(task)}
           slotProps={{ primary: { noWrap: true }, secondary: { noWrap: true } }}
         />
         {['completed', 'failed', 'expired', 'cancelled', 'recovery_required'].includes(task.status) && <IconButton size="small" color="error" disabled={busy} onClick={(event) => void remove(event, task)} aria-label="Delete task">
@@ -147,13 +159,68 @@ export function DeepResearchTaskPicker({
 }
 
 
+function DeepResearchTaskDeliverables({
+  canvases,
+  selectedRunId,
+  onOpenCanvas,
+}: {
+  canvases: AgentTaskResearchCanvasRef[];
+  selectedRunId?: string | null;
+  onOpenCanvas?: (canvas: { id: string; title: string }) => void;
+}) {
+  if (!canvases.length || !onOpenCanvas) return null;
+  return (
+    <Paper variant="outlined" sx={{ mb: 1, p: 1.25, borderRadius: 2 }}>
+      <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
+        Research canvases from this task
+      </Typography>
+      <Stack spacing={0.75}>
+        {canvases.map((canvas) => {
+          const forCurrentRun = Boolean(selectedRunId && canvas.run_id === selectedRunId);
+          return (
+            <Box
+              key={canvas.id}
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                p: 0.5,
+                borderRadius: 1,
+                bgcolor: forCurrentRun ? 'action.selected' : 'transparent',
+              }}
+            >
+              <DashboardOutlinedIcon fontSize="small" color="primary" />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="body2" noWrap sx={{ fontWeight: forCurrentRun ? 600 : 500 }}>
+                  {canvas.title}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" component="div">
+                  {canvas.attempt != null ? `Attempt ${canvas.attempt}` : 'Research run'}
+                  {canvas.is_current_on_thread ? ' · Current on thread' : ' · Older revision'}
+                </Typography>
+              </Box>
+              <Button
+                size="small"
+                sx={{ textTransform: 'none', flexShrink: 0 }}
+                onClick={() => onOpenCanvas({ id: canvas.id, title: canvas.title })}
+              >
+                Open canvas
+              </Button>
+            </Box>
+          );
+        })}
+      </Stack>
+    </Paper>
+  );
+}
+
+
 function TimelineBubble({
   item,
   taskId,
   threadId,
   onSaveToMemory,
-  onAddToChat,
-  addingToChat,
+  onOpenCanvas,
   copied,
   active,
   onCopy,
@@ -165,8 +232,7 @@ function TimelineBubble({
   taskId: string;
   threadId: string;
   onSaveToMemory?: (content: string) => void;
-  onAddToChat?: (item: AgentTaskTimelineItem) => void;
-  addingToChat?: boolean;
+  onOpenCanvas?: (canvas: { id: string; title: string }) => void;
   copied: boolean;
   active: boolean;
   onCopy: () => void;
@@ -192,16 +258,12 @@ function TimelineBubble({
     content={item.primary_content}
     active={active}
     wide={!isObjective}
-    badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${formatTimelineItemStatus(item.status)}`} sx={{ mb: 1 }} color={['todo_failure', 'run_failure'].includes(item.type) ? 'error' : item.type === 'final_report' ? 'success' : 'default'} />}
+    badge={<Chip size="small" label={`${item.type.replaceAll('_', ' ')} · ${formatTimelineItemStatus(item.status)}`} sx={{ mb: 1 }} color={['todo_failure', 'run_failure'].includes(item.type) ? 'error' : item.type === 'research_canvas' ? 'success' : 'default'} />}
     actions={<ConversationMessageActions copied={copied} readActive={active} onCopy={onCopy} onReadAloud={onReadAloud}>
-      {onSaveToMemory && ['todo_result', 'final_report'].includes(item.type) && <Button size="small" onClick={() => onSaveToMemory(item.primary_content)}>Save to memory</Button>}
-      {item.type === 'final_report' && onAddToChat && (
-        <Button
-          size="small"
-          disabled={addingToChat || Boolean(item.published_chat_turn_id) || !item.primary_content}
-          onClick={() => onAddToChat(item)}
-        >
-          {item.published_chat_turn_id ? 'Added to chat' : 'Add to chat'}
+      {onSaveToMemory && item.type === 'todo_result' && <Button size="small" onClick={() => onSaveToMemory(item.primary_content)}>Save to memory</Button>}
+      {item.type === 'research_canvas' && onOpenCanvas && item.canvas_ref && (
+        <Button size="small" onClick={() => onOpenCanvas(item.canvas_ref!)}>
+          Open canvas
         </Button>
       )}
     </ConversationMessageActions>}
@@ -247,6 +309,7 @@ export default function DeepResearchTaskPanel({
   onBack,
   onOpenTrace,
   onSaveToMemory,
+  onOpenCanvas,
   chatSentences,
   setChatSentences,
   setChatPlaybackSourceKey,
@@ -273,6 +336,7 @@ export default function DeepResearchTaskPanel({
   onBack: () => void;
   onOpenTrace?: (trace: ChatTraceDescriptor) => void;
   onSaveToMemory?: (content: string) => void;
+  onOpenCanvas?: (canvas: { id: string; title: string }) => void;
   chatSentences: ConversationSentence[];
   setChatSentences: (sentences: ConversationSentence[]) => void;
   setChatPlaybackSourceKey: (sourceKey: string) => void;
@@ -298,7 +362,6 @@ export default function DeepResearchTaskPanel({
   const [deepResearchDiscoveryError, setDeepResearchDiscoveryError] = useState('');
   const [interactionOperation, setInteractionOperation] = useState<'run.send_followup' | 'run.interrupt_with_input' | 'run.steer_live'>('run.send_followup');
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [addingToChat, setAddingToChat] = useState(false);
   const lastSequence = useRef(0);
   const sequenceRunId = useRef<string | null>(null);
   const taskContextRef = useRef(selectedTaskId);
@@ -396,22 +459,6 @@ export default function DeepResearchTaskPanel({
     setTask(value.task);
     setItems(value.items);
   }, [threadId]);
-
-  const addFinalToChat = useCallback(async (item: AgentTaskTimelineItem) => {
-    const artifactId = item.artifacts?.find((artifact) => artifact.kind === 'final_report')?.id
-      || (item.id.startsWith('final:') ? item.id.slice('final:'.length) : '')
-      || item.artifact_ids?.[0];
-    if (!selectedTaskId || !artifactId || item.published_chat_turn_id) return;
-    setAddingToChat(true);
-    try {
-      await publishAgentTaskFinalToChat(selectedTaskId, threadId, artifactId);
-      if (selectedRun?.id) await refreshTimeline(selectedTaskId, selectedRun.id);
-    } catch (value) {
-      setError(String(value));
-    } finally {
-      setAddingToChat(false);
-    }
-  }, [refreshTimeline, selectedRun?.id, selectedTaskId, threadId]);
 
   useEffect(() => {
     setTask(null);
@@ -691,7 +738,9 @@ export default function DeepResearchTaskPanel({
         file_name: source.title,
         page: source.page,
         source_id: docId,
-        origins: source.origins,
+        origins: (source.origins || []).map((origin) => ({
+          source_id: origin.artifact_id,
+        })),
       };
     })),
     [items],
@@ -789,6 +838,13 @@ export default function DeepResearchTaskPanel({
           label={`Research tranche ${liveBudgetSnapshot.trancheIndex} · ${formatBudgetMeterLine(liveBudgetSnapshot)}`}
         />
       </Box>}
+      {task?.research_canvases?.length ? (
+        <DeepResearchTaskDeliverables
+          canvases={task.research_canvases}
+          selectedRunId={selectedRun?.id}
+          onOpenCanvas={onOpenCanvas}
+        />
+      ) : null}
     </>}
     transcript={<ConversationTranscriptFrame>{items.map((item) => <TimelineBubble
       key={item.id}
@@ -796,8 +852,7 @@ export default function DeepResearchTaskPanel({
       taskId={task?.id || ''}
       threadId={threadId}
       onSaveToMemory={onSaveToMemory}
-      onAddToChat={addFinalToChat}
-      addingToChat={addingToChat}
+      onOpenCanvas={onOpenCanvas}
       copied={copiedId === item.id}
       active={activeItemId === item.id}
       onCopy={() => copyItem(item)}

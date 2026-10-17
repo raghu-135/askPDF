@@ -324,6 +324,9 @@ class RouterRagState(TypedDict, total=False):
     task_draft_metadata: Dict[str, Any]
     task_incomplete_reasons: List[str]
     task_critic_report: Dict[str, Any]
+    task_canvas_draft: Dict[str, Any]
+    task_canvas_published: bool
+    task_canvas_ref: Dict[str, Any]
     task_course_corrections: List[Dict[str, Any]]
     task_correction_outcomes: List[Dict[str, Any]]
     web_search_mode: str

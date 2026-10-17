@@ -334,3 +334,149 @@ async def synthesize_with_canvas_publish(
         "model_tokens": model_tokens,
         "publish_tool_calls": publish_calls,
     }
+
+
+_DRAFT_CAPTURED = "Canvas draft captured for publication after evidence review."
+
+
+async def synthesize_with_canvas_draft(
+    llm: Any,
+    messages: List[Any],
+    *,
+    state: Mapping[str, Any],
+    config: RunnableConfig,
+    node: str,
+    started: float,
+    failure_data: Dict[str, Any] | None = None,
+    consume_usage: Callable[..., Awaitable[Any] | Any] | None = None,
+) -> Dict[str, Any]:
+    """Produce a short answer plus a publish_canvas draft without persisting."""
+
+    conversation = list(messages)
+    retry_attempts, retry_observer = llm_retry_observer()
+    emit_enabled = canvas_emit_enabled(state.get("allowed_tool_ids")) and hasattr(llm, "bind_tools")
+    captured_draft: dict[str, Any] | None = None
+    failed_attempts = 0
+    model_calls = 0
+    model_tokens = 0
+    last_response: Any = None
+    bound = llm.bind_tools([create_mcp_langchain_tool(_PUBLISH_TOOL)]) if emit_enabled else llm
+
+    async def _meter(**usage: int) -> None:
+        if consume_usage is None:
+            return
+        result = consume_usage(**usage)
+        if hasattr(result, "__await__"):
+            await result
+
+    async def _invoke_model(model: Any) -> Any:
+        nonlocal last_response, model_calls, model_tokens
+        last_response = await invoke_llm_for_node(
+            model.ainvoke,
+            conversation,
+            state=state,
+            config=config,
+            node=node,
+            started=started,
+            retry_observer=retry_observer,
+            retry_attempts=retry_attempts,
+            model_name=state.get("llm_model"),
+            failure_data=failure_data,
+        )
+        model_calls += 1
+        metadata = llm_result_metadata(last_response, model_name=state.get("llm_model"), retry_attempts=retry_attempts)
+        token_counts = metadata.get("token_counts") if isinstance(metadata.get("token_counts"), dict) else {}
+        tokens = int(token_counts.get("total") or 0)
+        model_tokens += tokens
+        await _meter(model_calls=1, model_tokens=tokens)
+        return last_response
+
+    for _round in range(_MAX_ROUNDS):
+        model = llm if (captured_draft is not None or not emit_enabled) else bound
+        await _invoke_model(model)
+        calls = _tool_calls(last_response) if emit_enabled else []
+        if not calls or captured_draft is not None:
+            break
+        conversation.append(last_response)
+        for call in calls:
+            call_id = str(call.get("id") or f"{node}:{_PUBLISH_TOOL}")
+            if captured_draft is not None:
+                conversation.append(ToolMessage(content=_DRAFT_CAPTURED, tool_call_id=call_id))
+                continue
+            args = _tool_call_args(call)
+            try:
+                tool_input = prepare_publish_canvas_tool_input(args)
+            except CanvasDraftNormalizeError as exc:
+                conversation.append(ToolMessage(content=f"{exc.message}\n{_DRAFT_COACHING}", tool_call_id=call_id))
+                failed_attempts += 1
+                continue
+            captured_draft = tool_input
+            conversation.append(ToolMessage(content=_DRAFT_CAPTURED, tool_call_id=call_id))
+        if captured_draft or failed_attempts:
+            continue
+        break
+
+    normalized = normalize_ai_response(last_response)
+    answer = strip_prose_publish_canvas(normalized["answer"])
+    answer = strip_unpublished_canvas_claims(answer)
+    return {
+        "answer": answer,
+        "response": last_response,
+        "canvas_draft": captured_draft,
+        "reasoning": normalized["reasoning"],
+        "reasoning_available": normalized["reasoning_available"],
+        "reasoning_format": normalized["reasoning_format"],
+        "retry_attempts": retry_attempts,
+        "model_calls": model_calls,
+        "model_tokens": model_tokens,
+    }
+
+
+async def publish_deep_research_canvas_draft(
+    draft: Mapping[str, Any],
+    *,
+    state: Mapping[str, Any],
+    config: RunnableConfig,
+    node: str,
+) -> dict[str, Any] | None:
+    """Persist a validated deep-research canvas draft via MCP publish_canvas."""
+
+    if not draft:
+        return None
+    started = time.perf_counter()
+    tool_input = dict(draft)
+    tool_input.pop("supersedes_id", None)
+    key = canvas_idempotency_key(state, supersedes_id=None)
+    if key:
+        tool_input["idempotency_key"] = key
+    tool_runtime = tool_config_for_node(
+        state, config, caller_node=node, tool_name=_PUBLISH_TOOL, started=started
+    )
+    try:
+        raw = await invoke_tool_for_node(
+            _PUBLISH_TOOL,
+            tool_input,
+            state=state,
+            config=tool_runtime,
+            node=node,
+            started=started,
+        )
+        normalized = normalize_tool_result(raw, tool_name=_PUBLISH_TOOL, config=tool_runtime)
+    except (ChatRunCancellationRequested, GraphBubbleUp):
+        raise
+    except Exception as exc:
+        normalized = {"ok": False, "error": {"message": str(exc)}}
+    append_tool_event_for_node(
+        state,
+        {**normalized, "tool_name": _PUBLISH_TOOL, "caller_node": node},
+        tool_input=tool_input,
+        config=tool_runtime,
+    )
+    if not _tool_ok(normalized):
+        return None
+    artifacts = normalized.get("artifacts") if isinstance(normalized.get("artifacts"), Mapping) else {}
+    canvas = artifacts.get("canvas") if isinstance(artifacts, Mapping) else None
+    if isinstance(canvas, Mapping) and canvas.get("id"):
+        return {"id": str(canvas["id"]), "title": str(canvas.get("title") or tool_input.get("title") or "Research canvas")}
+    content = str(normalized.get("content") or "")
+    return {"id": "", "title": str(tool_input.get("title") or "Research canvas"), "content": content}

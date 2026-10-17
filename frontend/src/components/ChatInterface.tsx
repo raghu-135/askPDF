@@ -2741,6 +2741,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             onBack={() => setDeepResearchOpen(false)}
             onOpenTrace={onOpenTrace}
             onSaveToMemory={onOpenMemoryReview}
+            onOpenCanvas={onOpenCanvas}
             chatSentences={chatSentences}
             setChatSentences={setChatSentences}
             setChatPlaybackSourceKey={setChatPlaybackSourceKey}

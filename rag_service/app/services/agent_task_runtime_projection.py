@@ -144,36 +144,6 @@ async def _stage_artifacts(
     return staged
 
 
-async def _stage_final_report(
-    *, task_id: str, agent_run_id: str, operation_id: str, text: str
-) -> dict[str, Any] | None:
-    stripped = text.strip()
-    if stripped.startswith("Limitations identified during evidence review:"):
-        return None
-    if stripped.startswith("Unresolved required work") and "Limitations identified" in stripped:
-        return None
-    body = stripped.encode("utf-8")
-    if not body:
-        return None
-    digest = hashlib.sha256(body).hexdigest()
-    artifact_id = str(uuid.uuid5(
-        uuid.NAMESPACE_URL,
-        f"askpdf:{task_id}:{agent_run_id}:final:{operation_id}:{digest}",
-    ))
-    object_key = task_artifact_content_key(task_id, agent_run_id, artifact_id)
-    created, existing = await get_content_store().put_if_absent(object_key, body, expected_sha256=digest)
-    if not created and (existing.sha256 != digest or existing.size != len(body)):
-        raise RuntimeTaskProjectionConflict("final report object conflicts with existing content")
-    if created:
-        _register_staged_content(object_key)
-    return {
-        "id": artifact_id,
-        "object_key": object_key,
-        "sha256": digest,
-        "byte_size": len(body),
-    }
-
-
 def _merge_budget(
     current: Mapping[str, Any],
     incoming: Mapping[str, Any],
@@ -339,8 +309,6 @@ async def apply_neutral_task_completion(
         {"status": runtime_status, "task_result": dict(task_result), "usage": canonical_usage},
         sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str,
     ).encode()).hexdigest()
-    final_stage = None
-
     async with async_session_maker() as session:
         async with session.begin():
             task = (await session.execute(select(AgentTask).where(
@@ -373,11 +341,6 @@ async def apply_neutral_task_completion(
             elif operation.request_fingerprint != fingerprint:
                 raise RuntimeTaskProjectionConflict("runtime completion identity was replayed with different content")
 
-            final_stage = await _stage_final_report(
-                task_id=task_id, agent_run_id=agent_run_id, operation_id=operation_id,
-                text=str(task_result.get("text") or ""),
-            ) if runtime_status == "completed" else None
-
             limits = dict((task.config_json or {}).get("limits") or {})
             budget = normalize_budget_state(task.budgets_json, limits)
             dimension_map = {
@@ -393,51 +356,7 @@ async def apply_neutral_task_completion(
                 budget["lifetime_usage"][target_key] = int(budget["lifetime_usage"].get(target_key) or 0) + int(value)
 
             final_artifact_id: str | None = None
-            if final_stage is not None:
-                existing_final = (await session.execute(select(AgentTaskArtifact).where(
-                    AgentTaskArtifact.agent_run_id == agent_run_id,
-                    AgentTaskArtifact.kind == "final_report",
-                    AgentTaskArtifact.validity == "valid",
-                    AgentTaskArtifact.deleted_at.is_(None),
-                ).with_for_update())).scalar_one_or_none()
-                if existing_final is not None:
-                    if existing_final.sha256 != final_stage["sha256"]:
-                        raise RuntimeTaskProjectionConflict("runtime completion returned conflicting final reports")
-                    final_artifact_id = existing_final.id
-                else:
-                    artifact_count = int((await session.execute(select(func.count(AgentTaskArtifact.id)).where(
-                        AgentTaskArtifact.task_id == task_id,
-                        AgentTaskArtifact.validity != "deleted",
-                    ))).scalar_one())
-                    if artifact_count >= int(limits.get("max_artifacts", 200)):
-                        raise RuntimeTaskProjectionConflict("final report exceeds the product artifact count limit")
-                    if final_stage["byte_size"] > int(limits.get("max_single_artifact_bytes", 10_485_760)):
-                        raise RuntimeTaskProjectionConflict("final report exceeds the product per-object limit")
-                    if int(budget["lifetime_usage"].get("artifact_bytes") or 0) + final_stage["byte_size"] > int(limits.get("max_artifact_bytes", 104_857_600)):
-                        raise RuntimeTaskProjectionConflict("final report exceeds the product artifact byte limit")
-                    budget["lifetime_usage"]["artifact_bytes"] = int(
-                        budget["lifetime_usage"].get("artifact_bytes") or 0
-                    ) + final_stage["byte_size"]
-                    artifact = AgentTaskArtifact(
-                        id=final_stage["id"], task_id=task_id, agent_run_id=agent_run_id,
-                        ownership_key=f"runtime-final:{operation_id}", kind="final_report",
-                        object_key=final_stage["object_key"], media_type="text/plain",
-                        byte_size=final_stage["byte_size"], sha256=final_stage["sha256"],
-                        provenance_json={
-                            "runtime_operation_id": operation_id,
-                            "warnings": list(task_result.get("warnings") or []),
-                            "gaps": list(task_result.get("gaps") or []),
-                            "outcome": task_result.get("status"),
-                        },
-                        source_refs_json={}, retention_until=now + timedelta(days=30),
-                    )
-                    session.add(artifact)
-                    final_artifact_id = artifact.id
-                    await tasks._append_event(
-                        session, task, "artifact.created", agent_run_id=agent_run_id,
-                        artifact_id=artifact.id,
-                        payload={"kind": "final_report", "byte_size": artifact.byte_size, "sha256": artifact.sha256},
-                    )
+            provisional_answer = str(task_result.get("text") or "").strip()
 
             correction_outcomes = {
                 str(value.get("correction_id")): dict(value)
@@ -531,7 +450,7 @@ async def apply_neutral_task_completion(
                     "interrupt_id": f"budget-review:{agent_run_id}:{budget['tranche_index']}",
                     "type": "budget_review", "response_operation": "task.budget_review.respond",
                     "status": "pending", "title": "Research budget reached",
-                    "allowed_actions": ["continue", "steer"] + (["accept_partial"] if final_artifact_id else []),
+                    "allowed_actions": ["continue", "steer"] + (["accept_partial"] if provisional_answer else []),
                     "continuation_semantics": "linked_run" if continuation_is_linked(run) else "checkpoint_same_run",
                     "preserves_run_id": not continuation_is_linked(run),
                     "runtime_operation": "task.budget_review.respond",
@@ -658,7 +577,6 @@ async def apply_runtime_task_delta(
             raise RuntimeTaskProjectionConflict(
                 "runtime delta correction outcomes disagree with the canonical task result"
             )
-    final_stage = None
     artifact_ids = {str(key): str(value) for key, value in (artifact_id_map or {}).items()}
     payload_sha256 = _payload_hash(delta)
 
@@ -689,13 +607,6 @@ async def apply_runtime_task_delta(
                 task_id=task_id, agent_run_id=agent_run_id, artifacts=delta.artifacts
             ) if delta.artifacts else []
             artifact_ids.update({str(value["runtime_id"]): str(value["id"]) for value in staged})
-            final_stage = await _stage_final_report(
-                task_id=task_id,
-                agent_run_id=agent_run_id,
-                operation_id=delta.operation_id,
-                text=str(task_result.get("text") or ""),
-            ) if str(result_envelope.get("status") or "") == "completed" else None
-
             plan_revision = current_plan_revision
             applied_runtime_plan_revision = delta.observed_plan_revision
             expected_runtime_revision = delta.observed_plan_revision + 1
@@ -958,50 +869,6 @@ async def apply_runtime_task_delta(
                 replace_jsonb_field(task, "budgets_json", budget)
                 await tasks._append_event(session, task, "task.budget_updated", agent_run_id=agent_run_id, payload={"tranche_index": budget["tranche_index"], "tranche_usage": budget["tranche_usage"], "lifetime_usage": budget["lifetime_usage"]})
             final_artifact_id: str | None = None
-            if final_stage is not None:
-                existing_final = (await session.execute(select(AgentTaskArtifact).where(
-                    AgentTaskArtifact.agent_run_id == agent_run_id,
-                    AgentTaskArtifact.kind == "final_report",
-                    AgentTaskArtifact.validity == "valid",
-                    AgentTaskArtifact.deleted_at.is_(None),
-                ).with_for_update())).scalar_one_or_none()
-                if existing_final is not None:
-                    if existing_final.sha256 != final_stage["sha256"]:
-                        raise RuntimeTaskProjectionConflict("runtime operation returned conflicting final reports")
-                    final_artifact_id = existing_final.id
-                else:
-                    if artifact_count >= int(limits.get("max_artifacts", 200)):
-                        raise RuntimeTaskProjectionConflict("final report exceeds the product artifact count limit")
-                    if final_stage["byte_size"] > int(limits.get("max_single_artifact_bytes", 10_485_760)):
-                        raise RuntimeTaskProjectionConflict("final report exceeds the product per-object limit")
-                    budget = normalize_budget_state(task.budgets_json, limits)
-                    if int(budget["lifetime_usage"].get("artifact_bytes") or 0) + final_stage["byte_size"] > int(limits.get("max_artifact_bytes", 104_857_600)):
-                        raise RuntimeTaskProjectionConflict("final report exceeds the product artifact byte limit")
-                    budget["lifetime_usage"]["artifact_bytes"] = int(
-                        budget["lifetime_usage"].get("artifact_bytes") or 0
-                    ) + final_stage["byte_size"]
-                    replace_jsonb_field(task, "budgets_json", budget)
-                    final_artifact = AgentTaskArtifact(
-                        id=final_stage["id"], task_id=task_id, agent_run_id=agent_run_id,
-                        ownership_key=f"runtime-final:{delta.operation_id}", kind="final_report",
-                        object_key=final_stage["object_key"], media_type="text/plain",
-                        byte_size=final_stage["byte_size"], sha256=final_stage["sha256"],
-                        provenance_json={
-                            "runtime_operation_id": delta.operation_id,
-                            "warnings": list(task_result.get("warnings") or []),
-                            "gaps": list(task_result.get("gaps") or []),
-                            "outcome": task_result.get("status"),
-                        },
-                        source_refs_json={}, retention_until=utc_now() + timedelta(days=30),
-                    )
-                    session.add(final_artifact)
-                    final_artifact_id = final_artifact.id
-                    artifact_count += 1
-                    await tasks._append_event(
-                        session, task, "artifact.created", agent_run_id=agent_run_id,
-                        artifact_id=final_artifact.id,
-                        payload={"kind": "final_report", "byte_size": final_artifact.byte_size, "sha256": final_artifact.sha256},
-                    )
             if delta.pending_interrupt is not None:
                 operation = str(delta.pending_interrupt.get("operation") or "")
                 if operation == "set" and isinstance(delta.pending_interrupt.get("value"), Mapping):

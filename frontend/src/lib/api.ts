@@ -2444,6 +2444,18 @@ export interface AgentTaskSummary {
     runtime_outcome?: { explanation?: string | null; unresolved_reason?: string | null };
     submitted_at?: string | null;
   }>;
+  research_canvases?: AgentTaskResearchCanvasRef[];
+}
+
+export interface AgentTaskResearchCanvasRef {
+  id: string;
+  title: string;
+  run_id?: string | null;
+  attempt?: number | null;
+  created_at?: string | null;
+  is_current_on_thread: boolean;
+  chat_turn_id?: string | null;
+  supersedes_id?: string | null;
 }
 
 export interface AgentTaskTodo {
@@ -2493,7 +2505,7 @@ export interface AgentTaskRun {
   completed_at?: string | null;
 }
 
-export type AgentTaskTimelineType = 'objective' | 'plan' | 'todo_result' | 'todo_failure' | 'run_failure' | 'approval' | 'replan' | 'final_report';
+export type AgentTaskTimelineType = 'objective' | 'plan' | 'todo_result' | 'todo_failure' | 'run_failure' | 'approval' | 'replan' | 'research_canvas';
 
 export interface AgentTaskTimelineSource {
   id: string;
@@ -2531,6 +2543,7 @@ export interface AgentTaskTimelineItem {
   evidence_manifest?: Array<Record<string, any>>;
   trace_anchor?: Record<string, any> | null;
   published_chat_turn_id?: string | null;
+  canvas_ref?: { id: string; title: string } | null;
 }
 
 export interface AgentTaskSubagentRun {
@@ -2723,10 +2736,28 @@ export async function getAgentTaskRuns(taskId: string, threadId: string): Promis
   return (await response.json()).runs;
 }
 
-export async function getAgentTaskTimeline(taskId: string, runId: string, threadId: string): Promise<{ task: AgentTaskSummary; run: AgentTaskRun; items: AgentTaskTimelineItem[] }> {
+export async function getAgentTaskTimeline(taskId: string, runId: string, threadId: string): Promise<{
+  task: AgentTaskSummary;
+  run: AgentTaskRun;
+  items: AgentTaskTimelineItem[];
+  research_canvases?: AgentTaskResearchCanvasRef[];
+  run_research_canvases?: AgentTaskResearchCanvasRef[];
+}> {
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}/timeline?${taskQuery(threadId)}`);
   if (!response.ok) throw new Error(await readApiError(response));
   return response.json();
+}
+
+export async function getAgentTaskResearchCanvases(
+  taskId: string,
+  threadId: string,
+): Promise<AgentTaskResearchCanvasRef[]> {
+  const response = await fetch(
+    `${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/research-canvases?${taskQuery(threadId)}`,
+  );
+  if (!response.ok) throw new Error(await readApiError(response));
+  const body = await response.json();
+  return body.research_canvases ?? [];
 }
 
 export async function getAgentTaskArtifacts(taskId: string, threadId: string, runId?: string): Promise<AgentTaskArtifact[]> {
@@ -2735,20 +2766,6 @@ export async function getAgentTaskArtifacts(taskId: string, threadId: string, ru
   const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/artifacts?${query}`);
   if (!response.ok) throw new Error(await readApiError(response));
   return (await response.json()).artifacts;
-}
-
-export async function publishAgentTaskFinalToChat(
-  taskId: string,
-  threadId: string,
-  artifactId: string,
-): Promise<{ chat_turn_id: string; user_message_id: string; assistant_message_id: string; duplicate: boolean }> {
-  const response = await fetch(`${API_BASE}/api/agent-tasks/${encodeURIComponent(taskId)}/final-report/chat-turns?${taskQuery(threadId)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ artifact_id: artifactId }),
-  });
-  if (!response.ok) throw new Error(await readApiError(response));
-  return response.json();
 }
 
 export async function deleteAgentTask(taskId: string, threadId: string, version: number): Promise<void> {

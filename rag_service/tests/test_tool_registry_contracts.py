@@ -111,6 +111,7 @@ def test_tool_call_validation_enforces_allowed_caller_nodes():
     validate_tool_call_allowed("publish_canvas", "direct_answer")
     validate_tool_call_allowed("publish_canvas", "answer_reviser")
     validate_tool_call_allowed("publish_canvas", "deep_task_synthesizer")
+    validate_tool_call_allowed("publish_canvas", "finalizer")
 
     try:
         validate_tool_call_allowed("publish_canvas", "retrieval_worker")

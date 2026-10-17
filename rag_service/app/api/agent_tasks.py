@@ -17,11 +17,9 @@ from app.models.deep_research import (
     AgentTaskCommandRequest,
     AgentTaskCourseCorrectionRequest,
     AgentTaskCreateRequest,
-    AgentTaskPublishFinalToChatRequest,
     AgentTaskResultReviewRequest,
 )
 from app.services import agent_task_repository as repository
-from app.services.agent_task_chat_publish import publish_final_report_to_chat
 from app.services.agent_task_runtime import (
     ensure_task_run,
 )
@@ -29,6 +27,10 @@ from app.services.agent_run_cancellation import require_task_cancellation, reque
 from app.services.agent_run_pause import request_task_pause
 from app.services.content_store import get_content_store
 from app.services.agent_task_presentation import plan_diff, timeline_run_error, timeline_sources
+from app.services.agent_task_research_canvases import (
+    attach_research_canvases,
+    list_research_canvas_refs_for_task_ids,
+)
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import maybe_iso_utc_z
 from app.auth import current_principal
@@ -336,7 +338,11 @@ async def list_agent_tasks(thread_id: str, limit: int = Query(default=50, ge=1, 
     if await get_thread(thread_id) is None:
         raise HTTPException(status_code=404, detail={"code": "thread_not_found"})
     tasks = await repository.list_tasks(thread_id, limit=limit, user_id=current_principal())
-    return {"tasks": [await _task_payload(task) for task in tasks]}
+    payloads = [await _task_payload(task) for task in tasks]
+    canvas_refs = await list_research_canvas_refs_for_task_ids(thread_id, [task.id for task in tasks])
+    for payload in payloads:
+        payload["research_canvases"] = canvas_refs.get(payload["id"], [])
+    return {"tasks": payloads}
 
 
 @router.get("/agent-tasks/{task_id}")
@@ -356,6 +362,7 @@ async def get_agent_task(task_id: str, thread_id: str = Query(min_length=1)):
         "ordered_todo_ids": list(plan.ordered_todo_ids_json or []), "content_hash": plan.content_hash,
     }
     payload["course_corrections"] = await repository.list_course_corrections(task.id)
+    await attach_research_canvases(payload, thread_id=thread_id, task_id=task.id)
     return {"task": payload}
 
 
@@ -453,24 +460,6 @@ async def command_agent_task(
             status_code=500,
             detail={"code": "task_run_initialization_failed"},
         ) from exc
-
-
-@router.post("/agent-tasks/{task_id}/final-report/chat-turns")
-async def publish_agent_task_final_report_to_chat(
-    task_id: str,
-    req: AgentTaskPublishFinalToChatRequest,
-    thread_id: str = Query(min_length=1),
-):
-    await _owned_task(task_id, thread_id)
-    try:
-        publication = await publish_final_report_to_chat(
-            task_id=task_id,
-            artifact_id=req.artifact_id,
-            thread_id=thread_id,
-        )
-    except repository.AgentTaskConflict as exc:
-        raise _conflict(exc) from exc
-    return publication
 
 
 @router.post("/agent-tasks/{task_id}/result-review/responses")
@@ -747,6 +736,13 @@ async def get_agent_task_runs(task_id: str, thread_id: str = Query(min_length=1)
     return {"runs": [_run_payload(run) for run in await repository.list_task_runs(task_id)]}
 
 
+@router.get("/agent-tasks/{task_id}/research-canvases")
+async def get_agent_task_research_canvases(task_id: str, thread_id: str = Query(min_length=1)):
+    await _owned_task(task_id, thread_id)
+    refs = await list_research_canvas_refs_for_task_ids(thread_id, [task_id])
+    return {"task_id": task_id, "research_canvases": refs.get(task_id, [])}
+
+
 @router.get("/agent-tasks/{task_id}/artifacts")
 async def get_agent_task_artifacts(
     task_id: str,
@@ -865,21 +861,16 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
         if timeline_type is None:
             continue
         todo = todos.get(attempt.todo_id)
-        attempt_artifacts = [artifact_by_id[value] for value in attempt.output_artifact_ids_json or [] if value in artifact_by_id]
-        report_artifact = next((value for value in attempt_artifacts if value.kind == "intermediate_report"), None)
-        report_content = None
-        if report_artifact is not None:
-            try:
-                report_content = (await get_content_store().read(report_artifact.object_key)).decode("utf-8", errors="replace")[:200_000]
-            except FileNotFoundError:
-                # Preserve the timeline when an artifact predates shared
-                # content-volume mounting or was cleaned up independently.
-                report_content = None
+        attempt_artifacts = [
+            artifact_by_id[value]
+            for value in attempt.output_artifact_ids_json or []
+            if value in artifact_by_id and artifact_by_id[value].kind != "tool_output"
+        ]
         items.append({
             "id": f"subagent:{attempt.id}",
             "type": timeline_type,
             "status": attempt.status,
-            "primary_content": report_content or (todo.result_summary if todo else None) or (todo.title if todo else attempt.todo_id),
+            "primary_content": (todo.result_summary if todo else None) or (todo.title if todo else attempt.todo_id),
             "timestamp": maybe_iso_utc_z(attempt.completed_at or attempt.started_at or attempt.created_at),
             "folds": {
                 "attempts": {"attempt": attempt.attempt, "profile_id": attempt.profile_id, "error": attempt.error_json},
@@ -906,30 +897,26 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
             approval_items[interrupt_id]["status"] = str(payload.get("action") or "resolved")
             approval_items[interrupt_id]["folds"]["decision"] = payload
     items.extend(approval_items.values())
-    final_report = next((artifact for artifact in artifacts if artifact.kind == "final_report" and artifact.validity == "valid"), None)
-    if final_report is not None:
-        final_provenance = dict(final_report.provenance_json or {})
-        evidence_manifest = [value for value in final_provenance.get("evidence_manifest") or [] if isinstance(value, dict)]
-        evidence_ids = {str(value.get("id") or "") for value in evidence_manifest}
-        evidence_artifacts = [artifact for artifact in all_artifacts if artifact.id in evidence_ids and artifact.validity == "valid"]
-        try:
-            final_report_content = (await get_content_store().read(final_report.object_key)).decode("utf-8", errors="replace")[:500_000]
-        except FileNotFoundError:
-            final_report_content = None
+    from app.models.canvas import RESEARCH_CANVAS_ARTIFACT_KIND
+
+    run_canvas = next((
+        artifact for artifact in artifacts
+        if artifact.agent_run_id == run_id
+        and artifact.kind == RESEARCH_CANVAS_ARTIFACT_KIND
+        and artifact.validity == "valid"
+    ), None)
+    if run_canvas is not None:
+        summary = dict(run_canvas.summary_json or {})
+        title = str(summary.get("title") or "Research canvas")
         items.append({
-            "id": f"final:{final_report.id}", "type": "final_report", "status": "incomplete" if final_provenance.get("incomplete") else run.status,
-            "primary_content": final_report_content,
-            "timestamp": maybe_iso_utc_z(final_report.created_at),
-            "folds": {
-                "evidence_gaps": list(final_provenance.get("evidence_gaps") or []),
-                "quality_review": dict(final_provenance.get("quality_review") or {}),
-            },
-            "artifacts": [_artifact_payload(final_report)],
-            "sources": timeline_sources(evidence_artifacts, attempts_by_run=attempts_by_run, selected_run_id=run_id),
-            "evidence_manifest": evidence_manifest,
-            "artifact_ids": [final_report.id],
+            "id": f"canvas:{run_canvas.id}",
+            "type": "research_canvas",
+            "status": run.status,
+            "primary_content": title,
+            "timestamp": maybe_iso_utc_z(run_canvas.created_at),
+            "canvas_ref": {"id": run_canvas.id, "title": title},
             "trace_anchor": {"node_type": "finalizer"},
-            "published_chat_turn_id": final_provenance.get("published_chat_turn_id"),
+            "published_chat_turn_id": run_canvas.chat_turn_id,
         })
     if run.status == "failed":
         run_error = timeline_run_error(run)
@@ -951,7 +938,18 @@ async def get_agent_task_timeline(task_id: str, run_id: str, thread_id: str = Qu
         })
     items.sort(key=lambda item: (item.get("timestamp") or "", item["id"]))
     task_payload = await _task_payload(task)
-    return {"task": task_payload, "run": _run_payload(run), "items": items}
+    await attach_research_canvases(task_payload, thread_id=thread_id, task_id=task.id)
+    research_canvases = list(task_payload.get("research_canvases") or [])
+    run_research_canvases = [
+        canvas for canvas in research_canvases if canvas.get("run_id") == run_id
+    ]
+    return {
+        "task": task_payload,
+        "run": _run_payload(run),
+        "items": items,
+        "research_canvases": research_canvases,
+        "run_research_canvases": run_research_canvases,
+    }
 
 
 @router.get("/agent-tasks/{task_id}/runs/{run_id}/evidence")
@@ -962,18 +960,12 @@ async def get_agent_task_run_evidence(task_id: str, run_id: str, thread_id: str 
     if run is None:
         raise HTTPException(status_code=404, detail={"code": "agent_task_run_not_found"})
     artifacts = await repository.list_artifacts(task_id)
-    final_report = next((
-        artifact for artifact in artifacts
-        if artifact.agent_run_id == run_id and artifact.kind == "final_report" and artifact.validity == "valid"
-    ), None)
-    provenance = dict(final_report.provenance_json or {}) if final_report is not None else {}
-    manifest = [value for value in provenance.get("evidence_manifest") or [] if isinstance(value, dict)]
     return {
         "task_id": task_id,
         "run_id": run_id,
         "attempt": run.task_attempt,
-        "manifest": manifest,
-        "evidence_gaps": [str(value) for value in provenance.get("evidence_gaps") or []],
+        "manifest": [],
+        "evidence_gaps": [],
     }
 
 

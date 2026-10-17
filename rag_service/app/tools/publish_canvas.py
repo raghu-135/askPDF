@@ -20,6 +20,14 @@ from app.models.canvas import (
 )
 from app.models.canvas_draft import CanvasCompileError, CanvasPublishDraft
 from app.services.canvas_compiler import compile_canvas_draft
+from sqlalchemy.future import select
+
+from app.db.connection_sqlmodel import async_session_maker
+from app.db.models_sqlmodel import AgentRun
+from app.services.agent_task_canvas_chat import (
+    ensure_deep_task_canvas_chat_turn,
+    resolve_task_canvas_supersedes_id,
+)
 from app.services.canvas_service import CanvasService, CanvasValidationError, resolve_publish_supersedes_id
 from app.tools.context import ToolInvocationContext
 
@@ -149,12 +157,23 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
 
     service = CanvasService()
     supersedes_warnings: list[str] = []
+    task_id: str | None = None
+    if context.run_id:
+        async with async_session_maker() as session:
+            async with session.begin():
+                run = (
+                    await session.execute(select(AgentRun).where(AgentRun.id == context.run_id))
+                ).scalar_one_or_none()
+        if run is not None and run.task_id:
+            task_id = str(run.task_id)
     resolved_supersedes_id = request.supersedes_id
+    if not resolved_supersedes_id and task_id and context.thread_id:
+        resolved_supersedes_id = await resolve_task_canvas_supersedes_id(context.thread_id, task_id)
     try:
         resolved_supersedes_id, supersedes_warnings = await resolve_publish_supersedes_id(
             service._canvases,
             context.thread_id,
-            request.supersedes_id,
+            resolved_supersedes_id,
         )
     except CanvasValidationError as exc:
         return make_tool_error_result(
@@ -179,6 +198,7 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
                 ),
             ),
             agent_run_id=context.run_id,
+            task_id=task_id,
         )
     except CanvasValidationError as exc:
         return make_tool_error_result(
@@ -190,6 +210,15 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
             user_message=str(exc),
         )
     title = created.get("title") or spec.title
+    if task_id and context.run_id and context.thread_id:
+        await ensure_deep_task_canvas_chat_turn(
+            task_id=task_id,
+            agent_run_id=context.run_id,
+            thread_id=context.thread_id,
+            canvas_id=str(created["id"]),
+            title=title,
+            summary=spec.summary,
+        )
     return make_tool_result(
         tool_name="publish_canvas",
         content=f"Published research canvas {created['id']}: {title}",

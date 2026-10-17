@@ -131,6 +131,7 @@ DB_TEST_FILES = [
     "test_stats_repository_pytest.py",
     "test_repository_transactions_pytest.py",
     "test_agent_task_runtime_projection_pytest.py",
+    "test_agent_task_research_canvases_pytest.py",
     "test_jsonb_operations_pytest.py",
     "test_thread_fork_service_pytest.py",
 ]

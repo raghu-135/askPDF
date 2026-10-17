@@ -779,12 +779,12 @@ _DEEP_NODE_FLOW_METADATA = {
     ),
     NODE_DEEP_TASK_SYNTHESIZER: (
         ["agent_task_id", "question", "task_todos", "task_artifact_manifest", "task_budget_boundary"],
-        ["final_answer", "task_draft_metadata", "task_incomplete_reasons"],
+        ["final_answer", "task_draft_metadata", "task_incomplete_reasons", "task_canvas_draft"],
         SPAN_ANSWER,
     ),
     NODE_EVIDENCE_CRITIC: (
         ["final_answer", "task_artifact_manifest", "task_budget_boundary"],
-        ["final_answer", "task_critic_report", "task_budget_review_route", "task_budget_boundary", "task_course_corrections"],
+        ["final_answer", "task_critic_report", "task_budget_review_route", "task_budget_boundary", "task_course_corrections", "task_canvas_draft"],
         SPAN_CONTROL,
     ),
 }

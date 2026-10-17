@@ -20,7 +20,10 @@ from langgraph_runtime.workflows.enums import NodeEventStatus, WorkflowNodeType
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
-from langgraph_runtime.workflows.canvas_publish import synthesize_with_canvas_publish
+from langgraph_runtime.workflows.canvas_publish import (
+    publish_deep_research_canvas_draft,
+    synthesize_with_canvas_publish,
+)
 from langgraph_runtime.workflows.runtime_invocation import (
     append_event,
     llm_result_metadata,
@@ -248,11 +251,36 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             "reasoning_format": "none",
             "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
         }
+    canvas_update: Dict[str, Any] = {}
+    draft = state.get("task_canvas_draft")
+    if (
+        state.get("agent_task_id")
+        and not state.get("task_canvas_published")
+        and isinstance(draft, dict)
+        and draft
+        and str(state.get("final_answer") or "").strip()
+    ):
+        published = await publish_deep_research_canvas_draft(
+            draft,
+            state=state,
+            config=config,
+            node=WorkflowNodeType.FINALIZER.value,
+        )
+        if published and published.get("id"):
+            canvas_update = {
+                "task_canvas_published": True,
+                "task_canvas_ref": {"id": published["id"], "title": published.get("title") or "Research canvas"},
+            }
     data = {
         "status": NodeEventStatus.COMPLETED.value,
         "answer_chars": len(state.get("final_answer") or ""),
         "output_refs": state_evidence_refs(state),
         "output_preview": {"answer": compact_preview(state.get("final_answer"))},
     }
+    if canvas_update.get("task_canvas_ref"):
+        data["canvas_ref"] = canvas_update["task_canvas_ref"]
     log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
-    return {"node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config)}
+    return {
+        **canvas_update,
+        "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
+    }

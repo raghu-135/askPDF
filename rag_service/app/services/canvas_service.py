@@ -130,6 +130,7 @@ class CanvasService:
         request: CanvasCreateRequest,
         *,
         agent_run_id: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> dict[str, Any]:
         await self._require_thread(thread_id)
         spec = request.spec
@@ -187,7 +188,7 @@ class CanvasService:
         await store.put(object_key, body, expected_sha256=digest)
         artifact = AgentTaskArtifact(
             id=artifact_id,
-            task_id=None,
+            task_id=task_id,
             agent_run_id=agent_run_id,
             thread_id=thread_id,
             chat_turn_id=chat_turn_id,

@@ -623,7 +623,7 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
         evidence_manifest = []
         for value in selected:
             artifact_id = str(value.get("artifact_id") or value.get("id") or "").strip()
-            if not artifact_id or value.get("kind") not in {"tool_output", "intermediate_report", "context_summary"}:
+            if not artifact_id or value.get("kind") not in {"tool_output", "context_summary"}:
                 continue
             provenance = dict(value.get("provenance") or {}) if isinstance(value.get("provenance"), Mapping) else {}
             inherited = bool(value.get("inherited", provenance.get("inherited", False)))
@@ -641,7 +641,7 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
         return {
             "runtime_artifacts": artifacts,
             "task_artifact_manifest": evidence_manifest,
-            "task_evidence_manifest": [value for value in evidence_manifest if value.get("kind") in {"tool_output", "intermediate_report"}],
+            "task_evidence_manifest": [value for value in evidence_manifest if value.get("kind") == "tool_output"],
             "task_evidence_gaps": [f"{value}:missing" for value in sorted(completed_ids) if value not in by_id],
             "task_context_summary": {
                 "source_hash": _stable_hash([(value.get("id"), value.get("sha256")) for value in evidence_manifest]),
@@ -657,6 +657,14 @@ class RuntimeExecutionServices(DeepResearchExecutionServices):
         contents = dict(self.state.get("runtime_artifact_contents") or {})
         contents.update({str(value.get("artifact_id") or value.get("id")): value.get("content") for value in artifacts if value.get("content") is not None})
         reports: list[str] = []
+        for todo in self.state.get("task_todos") or []:
+            if not isinstance(todo, Mapping) or todo.get("status") != "completed":
+                continue
+            summary = str(todo.get("result_summary") or "").strip()
+            if not summary:
+                continue
+            todo_id = str(todo.get("id") or "todo")
+            reports.append(f"[todo:{todo_id}]\n{summary[:20_000]}")
         for manifest in context.get("task_evidence_manifest") or []:
             artifact_id = str(manifest.get("id") or "").strip()
             content = contents.get(artifact_id)
