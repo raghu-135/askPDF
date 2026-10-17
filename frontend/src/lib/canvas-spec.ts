@@ -146,9 +146,17 @@ export const documentCitationTarget = (
   citation: CanvasCitation,
 ): DocumentCanvasCitationTarget | null => {
   if (citation.kind !== 'document' || !citation.file_hash) return null;
-  const sentenceId = Number.isInteger(citation.sentence_id) ? Number(citation.sentence_id) : null;
+  const coerceId = (value: unknown): number | null => {
+    if (typeof value === 'number' && Number.isInteger(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      if (Number.isInteger(parsed)) return parsed;
+    }
+    return null;
+  };
+  const sentenceId = coerceId(citation.sentence_id);
   const explicitIds = Array.isArray(citation.sentence_ids)
-    ? citation.sentence_ids.filter((value) => Number.isInteger(value)).map((value) => Number(value))
+    ? citation.sentence_ids.map((value) => coerceId(value)).filter((value): value is number => value != null)
     : [];
   const sentenceIds = explicitIds.length > 0
     ? explicitIds

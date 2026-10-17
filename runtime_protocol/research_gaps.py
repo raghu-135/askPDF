@@ -139,6 +139,36 @@ def web_evidence_plan_gaps(
     return []
 
 
+_FALSE_CANVAS_LIMITATION_PATTERN = re.compile(
+    r"no\s+(?:research\s+)?canvas(?:\s+content)?(?:\s+provided)?|"
+    r"no\s+document\s+citations?(?:\s+for\s+claims)?|"
+    r"(?:does\s+not\s+follow|did\s+not\s+follow).{0,40}publish\s+canvas|"
+    r"publish_canvas\s+tool",
+    re.IGNORECASE,
+)
+
+
+def is_false_canvas_absence_limitation(text: str) -> bool:
+    return bool(_FALSE_CANVAS_LIMITATION_PATTERN.search(str(text or "")))
+
+
+def filter_false_canvas_absence_limitations(issues: list[str]) -> list[str]:
+    return [issue for issue in issues if not is_false_canvas_absence_limitation(issue)]
+
+
+def strip_false_canvas_limitations_block(text: str) -> str:
+    raw = str(text or "")
+    match = re.search(r"\n\nLimitations:\s*(.+)$", raw, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return raw.strip()
+    prefix = raw[:match.start()].rstrip()
+    issues = [part.strip() for part in match.group(1).split(";") if part.strip()]
+    kept = filter_false_canvas_absence_limitations(issues)
+    if not kept:
+        return prefix
+    return f"{prefix}\n\nLimitations: {'; '.join(kept)}".strip()
+
+
 def dedupe_critic_issues(issues: list[str], gaps: list[str]) -> list[str]:
     gap_keys = {normalize_limitation_key(value) for value in gaps if str(value).strip()}
     gap_keys = {value for value in gap_keys if value}

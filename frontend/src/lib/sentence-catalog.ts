@@ -58,17 +58,32 @@ export function adjacentReadableId(
   return playlist[nextIndex];
 }
 
+const boxesNearlyEqual = (left: HighlightBBox, right: HighlightBBox): boolean => (
+  left.page === right.page
+  && Math.abs(left.x - right.x) < 1
+  && Math.abs(left.y - right.y) < 1
+  && Math.abs(left.width - right.width) < 1
+  && Math.abs(left.height - right.height) < 1
+);
+
+const boxContains = (outer: HighlightBBox, inner: HighlightBBox, tolerance = 1): boolean => (
+  outer.page === inner.page
+  && inner.x >= outer.x - tolerance
+  && inner.y >= outer.y - tolerance
+  && inner.x + inner.width <= outer.x + outer.width + tolerance
+  && inner.y + inner.height <= outer.y + outer.height + tolerance
+);
+
 export function uniqueHighlightBoxes<T extends HighlightBBox>(boxes: readonly T[]): T[] {
+  const sorted = [...boxes].sort(
+    (left, right) => (right.width * right.height) - (left.width * left.height),
+  );
   const kept: T[] = [];
-  for (const box of boxes) {
-    const duplicate = kept.some((existing) => (
-      existing.page === box.page
-      && Math.abs(existing.x - box.x) < 1
-      && Math.abs(existing.y - box.y) < 1
-      && Math.abs(existing.width - box.width) < 1
-      && Math.abs(existing.height - box.height) < 1
+  for (const box of sorted) {
+    const redundant = kept.some((existing) => (
+      boxesNearlyEqual(existing, box) || boxContains(existing, box)
     ));
-    if (!duplicate) {
+    if (!redundant) {
       kept.push(box);
     }
   }

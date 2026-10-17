@@ -1503,10 +1503,19 @@ class NodeRegistry:
             if revision_count < MAX_ANSWER_REVISIONS
             else AnswerQualityRoute.FINALIZE_CAUTIOUS.value
         )
+        issues = [
+            compact_preview(item, limit=300)
+            for item in parsed.get("issues") or []
+            if str(item).strip()
+        ][:MAX_ANSWER_QUALITY_ISSUES]
+        if state.get("task_canvas_draft") or state.get("task_canvas_published"):
+            from runtime_protocol.research_gaps import filter_false_canvas_absence_limitations
+
+            issues = filter_false_canvas_absence_limitations(issues)
         report = {
             "passed": passed,
             "reason": compact_preview(parsed.get("reason"), limit=800),
-            "issues": [compact_preview(item, limit=300) for item in parsed.get("issues") or [] if str(item).strip()][:MAX_ANSWER_QUALITY_ISSUES],
+            "issues": issues,
             "revision_count": revision_count,
             "contract_repair": contract_repair,
         }

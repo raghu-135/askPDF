@@ -1,7 +1,9 @@
 from runtime_protocol.research_gaps import (
     dedupe_critic_issues,
+    filter_false_canvas_absence_limitations,
     filter_stale_index_readiness_gaps,
     gap_display_line,
+    strip_false_canvas_limitations_block,
     web_evidence_plan_gaps,
 )
 from runtime_protocol.task_results import normalize_runtime_task_result
@@ -62,6 +64,21 @@ def test_normalize_runtime_task_result_structured_gaps():
         "gaps": [{"code": "MISSING_SALES_FIGURES", "message": "Sales figures were not found."}],
     })
     assert result.gaps == ("Sales figures were not found.",)
+
+
+def test_strip_false_canvas_limitations_block_removes_published_canvas_denials():
+    text = (
+        "Summary of the paper.\n\n"
+        "Limitations: No research canvas content provided; No document citations for claims; "
+        "Does not follow instruction to use publish canvas tool"
+    )
+    cleaned = strip_false_canvas_limitations_block(text)
+    assert cleaned == "Summary of the paper."
+    assert filter_false_canvas_absence_limitations([
+        "No research canvas content provided",
+        "No document citations for claims",
+        "Does not follow instruction to use publish canvas tool",
+    ]) == []
 
 
 def test_web_evidence_plan_gaps_respects_guidance_waiver():

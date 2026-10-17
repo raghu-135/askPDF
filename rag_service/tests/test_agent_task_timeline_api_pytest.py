@@ -31,8 +31,11 @@ async def test_timeline_api_emits_research_guidance_without_parent_run_id(monkey
     )
     run = SimpleNamespace(
         id="run-2",
+        task_id="task-1",
         parent_run_id=None,
         task_attempt=2,
+        runtime_binding_status=None,
+        metrics_json={},
         started_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         completed_at=None,
         status="running",

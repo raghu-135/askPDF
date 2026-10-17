@@ -97,6 +97,16 @@ def test_strip_false_canvas_absence_prose_removes_denials_when_draft_exists():
     assert "28.4" in cleaned
 
 
+def test_strip_false_canvas_absence_prose_removes_limitations_block_exact_retest_wording():
+    text = (
+        "Evidence summary.\n\n"
+        "Limitations: No research canvas content provided; No document citations for claims; "
+        "Does not follow instruction to use publish canvas tool"
+    )
+    cleaned = strip_false_canvas_absence_prose(text)
+    assert cleaned == "Evidence summary."
+
+
 def test_strip_unpublished_canvas_claims_removes_false_publish_narration():
     text = "Here is a research canvas comparing the two papers.\n\nThe BLEU score is 28.4."
     cleaned = strip_unpublished_canvas_claims(text)
