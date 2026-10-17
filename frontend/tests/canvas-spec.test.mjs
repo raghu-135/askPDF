@@ -6,7 +6,7 @@ import { documentCitationTarget, layoutCanvasDag, canvasSpecCounts } from '../sr
 test('document citations expose file hash and sentence id', () => {
   assert.deepEqual(
     documentCitationTarget({ kind: 'document', label: 'Paper', file_hash: 'abc', sentence_id: 4 }),
-    { fileHash: 'abc', sentenceId: 4 },
+    { fileHash: 'abc', sentenceId: 4, sentenceIds: [4] },
   );
   assert.equal(documentCitationTarget({ kind: 'web', label: 'Note', url: 'https://example.com' }), null);
 });
