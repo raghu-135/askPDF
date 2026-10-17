@@ -66,6 +66,16 @@ def test_normalize_runtime_task_result_structured_gaps():
     assert result.gaps == ("Sales figures were not found.",)
 
 
+def test_strip_false_canvas_limitations_block_removes_retest_variant_wording():
+    text = (
+        "Evidence summary.\n\n"
+        "Limitations: No research canvas content present in the draft answer.; "
+        "No document citations provided for any claims.; "
+        "Does not follow the instruction to use publish canvas tool."
+    )
+    assert strip_false_canvas_limitations_block(text) == "Evidence summary."
+
+
 def test_strip_false_canvas_limitations_block_removes_published_canvas_denials():
     text = (
         "Summary of the paper.\n\n"

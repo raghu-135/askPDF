@@ -242,6 +242,75 @@ def _catalog_ids_from_chunk_rows(
     return catalog_ids, readable_ids
 
 
+def _is_table_header_sentence(text: str) -> bool:
+    lowered = str(text or "").casefold().strip()
+    return bool(re.match(r"^table\s+\d+", lowered)) and not re.search(r"\d+\.\d+", lowered)
+
+
+def _resolve_claim_sentence_ids(
+    catalog_ids: list[int],
+    readable_ids: list[int],
+    by_id: dict[int, dict[str, Any]],
+    claim_text: str,
+) -> tuple[int | None, list[int]]:
+    claim = str(claim_text or "").strip()
+    if not catalog_ids:
+        return None, []
+    if not claim:
+        highlight_ids = readable_ids or catalog_ids
+        scroll_id = readable_ids[0] if readable_ids else catalog_ids[0]
+        return scroll_id, highlight_ids
+
+    scored: list[tuple[float, int, bool]] = []
+    for sentence_id in catalog_ids:
+        item = by_id[sentence_id]
+        score = _sentence_claim_overlap_score(claim, str(item.get("text") or ""))
+        if score > 0:
+            scored.append((score, sentence_id, item.get("readable") is not False))
+    if not scored:
+        highlight_ids = readable_ids or catalog_ids
+        scroll_id = readable_ids[0] if readable_ids else (catalog_ids[0] if catalog_ids else None)
+        return scroll_id, highlight_ids
+
+    scored.sort(key=lambda entry: (-entry[0], entry[1]))
+    top_score = scored[0][0]
+    top_ids = [sentence_id for score, sentence_id, _ in scored if score >= top_score - 1e-6]
+
+    claim_numbers = {token for token in _claim_match_tokens(claim) if token.isdigit()}
+    if claim_numbers:
+        selected: list[int] = []
+        covered: set[str] = set()
+        for _, sentence_id, _ in scored:
+            sentence_text = str(by_id[sentence_id].get("text") or "")
+            sentence_numbers = set(re.findall(r"\d+", sentence_text.casefold()))
+            overlap = claim_numbers & sentence_numbers
+            if not overlap:
+                continue
+            new_numbers = overlap - covered
+            if new_numbers or not selected:
+                selected.append(sentence_id)
+                covered |= overlap
+            if covered >= claim_numbers:
+                break
+        if selected:
+            top_ids = selected
+
+    if len(top_ids) > 1:
+        trimmed = [
+            sentence_id
+            for sentence_id in top_ids
+            if not _is_table_header_sentence(str(by_id[sentence_id].get("text") or ""))
+        ]
+        if trimmed:
+            top_ids = trimmed
+
+    readable_matches = [
+        sentence_id for sentence_id in top_ids if by_id[sentence_id].get("readable") is not False
+    ]
+    scroll_id = (readable_matches or top_ids)[0]
+    return scroll_id, top_ids
+
+
 def _sentence_ids_from_chunk_row(
     row: Any,
     by_id: dict[int, dict[str, Any]],
@@ -250,23 +319,7 @@ def _sentence_ids_from_chunk_row(
 ) -> tuple[int | None, list[int]]:
     """Return scroll target (first readable) and highlight ids for a chunk row."""
     catalog_ids, readable_ids = _catalog_ids_from_chunk_rows([row], by_id)
-    claim = str(claim_text or "").strip()
-    if claim and catalog_ids:
-        scored: list[tuple[float, int, bool]] = []
-        for sentence_id in catalog_ids:
-            item = by_id[sentence_id]
-            score = _sentence_claim_overlap_score(claim, str(item.get("text") or ""))
-            if score > 0:
-                scored.append((score, sentence_id, item.get("readable") is not False))
-        if scored:
-            scored.sort(key=lambda entry: (-entry[0], entry[1]))
-            highlight_ids = [sentence_id for _, sentence_id, _ in scored]
-            readable_matches = [sentence_id for _, sentence_id, readable in scored if readable]
-            scroll_id = (readable_matches or highlight_ids)[0]
-            return scroll_id, highlight_ids
-    highlight_ids = readable_ids or catalog_ids
-    scroll_id = readable_ids[0] if readable_ids else (catalog_ids[0] if catalog_ids else None)
-    return scroll_id, highlight_ids
+    return _resolve_claim_sentence_ids(catalog_ids, readable_ids, by_id, claim_text)
 
 
 async def _readable_sentence_ids_for_chunk(
@@ -289,22 +342,12 @@ async def _readable_sentence_ids_for_chunk(
             rows = siblings
     if len(rows) > 1:
         catalog_ids, readable_ids = _catalog_ids_from_chunk_rows(rows, by_id)
-        claim = str(claim_text or "").strip()
-        if claim and catalog_ids:
-            scored: list[tuple[float, int, bool]] = []
-            for sentence_id in catalog_ids:
-                item = by_id[sentence_id]
-                score = _sentence_claim_overlap_score(claim, str(item.get("text") or ""))
-                if score > 0:
-                    scored.append((score, sentence_id, item.get("readable") is not False))
-            if scored:
-                scored.sort(key=lambda entry: (-entry[0], entry[1]))
-                highlight_ids = [sentence_id for _, sentence_id, _ in scored]
-                readable_matches = [sentence_id for _, sentence_id, readable in scored if readable]
-                scroll_id = (readable_matches or highlight_ids)[0]
-                return scroll_id, highlight_ids, True
-        highlight_ids = readable_ids or catalog_ids
-        scroll_id = readable_ids[0] if readable_ids else (catalog_ids[0] if catalog_ids else None)
+        scroll_id, highlight_ids = _resolve_claim_sentence_ids(
+            catalog_ids,
+            readable_ids,
+            by_id,
+            claim_text,
+        )
         return scroll_id, highlight_ids, True
     scroll_id, highlight_ids = _sentence_ids_from_chunk_row(row, by_id, claim_text=claim_text)
     return scroll_id, highlight_ids, True

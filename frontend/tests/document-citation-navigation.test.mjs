@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   citationHighlightIds,
+  shouldClearPdfHighlightOnDocumentActivate,
   shouldPreserveCitationHighlight,
 } from '../src/lib/document-citation-navigation.ts';
 import { shouldClearCurrentOnSourceKeyChange } from '../src/lib/player-source-key.ts';
@@ -58,6 +59,28 @@ test('canvas citation open from canvas tab keeps pending target for documents ac
   assert.equal(currentPdfId, 226);
   assert.deepEqual(highlightIds, [226, 227, 228]);
   assert.equal(pending, target);
+});
+
+test('nested document tab re-activation does not clear an applied citation highlight', () => {
+  const fileHash = 'e'.repeat(32);
+  const documentTab = { id: 'doc-tab-1', fileHash };
+  const target = { fileHash, sentenceIds: [227], play: false };
+  let currentPdfId = 227;
+  let pending = null;
+
+  const handleActiveDocumentChange = (documentId, previousDocumentId, tabs) => {
+    const tab = tabs.find((item) => item.id === documentId);
+    if (shouldPreserveCitationHighlight(pending, tab)) {
+      currentPdfId = citationHighlightIds(pending)[0];
+      return;
+    }
+    if (shouldClearPdfHighlightOnDocumentActivate(previousDocumentId, documentId, pending, tab)) {
+      currentPdfId = null;
+    }
+  };
+
+  handleActiveDocumentChange(documentTab.id, documentTab.id, [documentTab]);
+  assert.equal(currentPdfId, 227);
 });
 
 test('canvas citation survives documents player mount without clearing current id', () => {

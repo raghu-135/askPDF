@@ -1508,9 +1508,12 @@ class NodeRegistry:
             for item in parsed.get("issues") or []
             if str(item).strip()
         ][:MAX_ANSWER_QUALITY_ISSUES]
-        if state.get("task_canvas_draft") or state.get("task_canvas_published"):
-            from runtime_protocol.research_gaps import filter_false_canvas_absence_limitations
+        from runtime_protocol.research_gaps import (
+            canvas_absence_limitations_suppressed,
+            filter_false_canvas_absence_limitations,
+        )
 
+        if canvas_absence_limitations_suppressed(state):
             issues = filter_false_canvas_absence_limitations(issues)
         report = {
             "passed": passed,
@@ -1520,7 +1523,11 @@ class NodeRegistry:
             "contract_repair": contract_repair,
         }
         final_answer = str(state.get("final_answer") or "")
-        if route == AnswerQualityRoute.FINALIZE_CAUTIOUS.value and report["issues"]:
+        if (
+            route == AnswerQualityRoute.FINALIZE_CAUTIOUS.value
+            and report["issues"]
+            and not canvas_absence_limitations_suppressed(state)
+        ):
             final_answer = final_answer.rstrip() + "\n\nLimitations: " + "; ".join(report["issues"])
         data = {
             "status": NodeEventStatus.COMPLETED.value,

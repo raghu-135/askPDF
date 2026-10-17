@@ -8,7 +8,9 @@ import pytest
 from app.agent.evidence_contract import canonical_source_id, format_document_source_locator
 from app.models.canvas_draft import CanvasCompileError, CanvasPublishDraft
 from app.services.canvas_compiler import (
+    _catalog_ids_from_chunk_rows,
     _readable_sentence_ids_for_chunk,
+    _resolve_claim_sentence_ids,
     _sentence_claim_overlap_score,
     _sentence_ids_from_chunk_row,
     compile_canvas_draft,
@@ -27,7 +29,7 @@ def test_chunk_sentence_ids_prefer_claim_overlap_over_first_readable():
     claim = "Transformer big model 28.4 En-De"
     scroll_id, highlight_ids = _sentence_ids_from_chunk_row(row, by_id, claim_text=claim)
     assert scroll_id == 227
-    assert highlight_ids[:2] == [227, 228]
+    assert highlight_ids == [227]
     assert 217 not in highlight_ids
     assert 218 not in highlight_ids
     assert _sentence_claim_overlap_score(claim, by_id[227]["text"]) > _sentence_claim_overlap_score(
@@ -78,6 +80,35 @@ async def test_table_chunk_claim_matching_searches_sibling_table_rows():
     assert scroll_id == 227
     assert 227 in highlight_ids
     assert 218 not in highlight_ids
+    assert len(highlight_ids) == 1
+
+
+def test_table_claim_trim_keeps_one_row_per_claim_number():
+    rows = [
+        SimpleNamespace(sentence_ids=[str(i) for i in range(217, 229)]),
+    ]
+    by_id = {
+        217: {"text": "Table 2 BLEU", "readable": True},
+        218: {"text": "ByteNet 23.75", "readable": True},
+        226: {"text": "Transformer base 27.3", "readable": True},
+        227: {"text": "Transformer big 28.4", "readable": True},
+        228: {"text": "Training took 3.5 days on 8 P100 GPUs", "readable": True},
+    }
+    catalog_ids, readable_ids = _catalog_ids_from_chunk_rows(rows, by_id)
+    _, bleu_ids = _resolve_claim_sentence_ids(
+        catalog_ids,
+        readable_ids,
+        by_id,
+        "Transformer big 28.4 BLEU",
+    )
+    assert bleu_ids == [227]
+    _, cost_ids = _resolve_claim_sentence_ids(
+        catalog_ids,
+        readable_ids,
+        by_id,
+        "Training took 3.5 days on 8 P100 GPUs",
+    )
+    assert cost_ids == [228]
 
 
 def test_chunk_sentence_ids_fall_back_to_first_readable_without_claim_overlap():

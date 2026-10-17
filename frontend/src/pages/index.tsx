@@ -38,6 +38,8 @@ import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
 import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec";
 import {
   citationHighlightIds,
+  normalizeFileHash,
+  shouldClearPdfHighlightOnDocumentActivate,
   shouldPreserveCitationHighlight,
 } from "../lib/document-citation-navigation";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
@@ -79,6 +81,7 @@ export default function Home() {
   const [activeSource, setActiveSource] = useState<'pdf' | 'chat'>('pdf');
   const [currentPdfId, setCurrentPdfId] = useState<number | null>(null);
   const [pdfHighlightSentenceIds, setPdfHighlightSentenceIds] = useState<number[] | null>(null);
+  const [documentCitationScrollToken, setDocumentCitationScrollToken] = useState(0);
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
   const [playRequestId, setPlayRequestId] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -711,18 +714,20 @@ export default function Home() {
     if (!highlightIds.length) return;
     setPdfHighlightSentenceIds(highlightIds);
     setCurrentPdfId(highlightIds[0]);
+    setDocumentCitationScrollToken((value) => value + 1);
     if (target.play !== false) {
       setPlayRequestId(highlightIds[0]);
     }
   }, []);
 
   const handleActiveDocumentChange = useCallback((documentId: string) => {
+    const previousDocumentId = activeDocumentId;
     setActiveDocumentId(documentId);
     const tab = pdfTabs.find((item) => item.id === documentId);
     const pending = pendingDocumentCitationRef.current;
     if (shouldPreserveCitationHighlight(pending, tab)) {
       applyDocumentCitationHighlight(pending!);
-    } else {
+    } else if (shouldClearPdfHighlightOnDocumentActivate(previousDocumentId, documentId, pending, tab)) {
       pendingDocumentCitationRef.current = null;
       setCurrentPdfId(null);
       setPlayRequestId(null);
@@ -739,6 +744,7 @@ export default function Home() {
       });
     }
   }, [
+    activeDocumentId,
     activeTabId,
     applyDocumentCitationHighlight,
     hydrateDocumentOnSelect,
@@ -1002,7 +1008,8 @@ export default function Home() {
   }, [persistWorkspaceResume, workspaceContextKey]);
 
   const handleOpenDocumentCitation = useCallback((target: DocumentCanvasCitationTarget) => {
-    const documentTab = pdfTabs.find((tab) => tab.fileHash === target.fileHash);
+    const normalizedHash = normalizeFileHash(target.fileHash);
+    const documentTab = pdfTabs.find((tab) => normalizeFileHash(tab.fileHash) === normalizedHash);
     if (!documentTab) return;
     pendingDocumentCitationRef.current = target;
     setActiveTabId(DOCUMENTS_TAB_ID);
@@ -1183,6 +1190,7 @@ export default function Home() {
               darkMode={pdfDarkMode}
               currentDocumentSentenceId={activeSource === 'pdf' ? currentPdfId : null}
               highlightSentenceIds={pdfHighlightSentenceIds}
+              documentCitationScrollToken={documentCitationScrollToken}
               onDocumentJump={(id) => {
                 setActiveSource('pdf');
                 setCurrentPdfId(id);

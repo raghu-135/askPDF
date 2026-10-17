@@ -23,11 +23,26 @@ export const citationHighlightIds = (target: DocumentCanvasCitationTarget): numb
   return [];
 };
 
+export const normalizeFileHash = (value: string): string => value.trim().toLowerCase();
+
 export const shouldPreserveCitationHighlight = (
   pending: DocumentCanvasCitationTarget | null,
   documentTab: { fileHash: string } | null | undefined,
 ): boolean => Boolean(
   pending
   && documentTab
-  && pending.fileHash === documentTab.fileHash,
+  && normalizeFileHash(pending.fileHash) === normalizeFileHash(documentTab.fileHash),
 );
+
+/** Nested document tabs re-fire onActiveChange when the workspace mounts; do not clear highlights for the same tab. */
+export const shouldClearPdfHighlightOnDocumentActivate = (
+  previousDocumentId: string | null,
+  nextDocumentId: string,
+  pending: DocumentCanvasCitationTarget | null,
+  documentTab: { fileHash: string } | null | undefined,
+): boolean => {
+  if (shouldPreserveCitationHighlight(pending, documentTab)) {
+    return false;
+  }
+  return previousDocumentId !== nextDocumentId;
+};
