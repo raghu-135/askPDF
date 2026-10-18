@@ -1,3 +1,4 @@
+import os
 import uuid
 
 import pytest
@@ -10,8 +11,14 @@ from app.tools.context import ToolInvocationContext
 async def test_hermes_execution_context_carries_thread_for_document_tools():
     thread_id = f"hermes-thread-linkage-{uuid.uuid4().hex}"
     run_id = f"hermes-run-{uuid.uuid4().hex}"
+    context_window = int(os.environ["HERMES_MODEL_CONTEXT_LENGTH"])
     token = issue_execution_context_token(
-        ToolInvocationContext(thread_id=thread_id, run_id=run_id, embedding_model="test-embed"),
+        ToolInvocationContext(
+            thread_id=thread_id,
+            run_id=run_id,
+            embedding_model="test-embed",
+            context_window=context_window,
+        ),
         task_id=run_id,
         allowed_tools=["search_knowledge"],
     )

@@ -96,11 +96,12 @@ class TestCanvasApi:
     async def test_supersede_and_message_projection(self, client):
         thread = await client.post("/api/threads", json={"name": "Canvas messages"})
         thread_id = thread.json()["id"]
-        turn = await MessageRepository().create_turn(
-            thread_id=thread_id,
-            question="Compare the papers",
-            answer="See the canvas.",
-        )
+        async with async_session_maker() as session:
+            turn = await MessageRepository(session=session).create_turn(
+                thread_id=thread_id,
+                question="Compare the papers",
+                answer="See the canvas.",
+            )
         created = await client.post(
             f"/api/threads/{thread_id}/canvases",
             json={"spec": self.spec("First"), "chat_turn_id": turn.id},

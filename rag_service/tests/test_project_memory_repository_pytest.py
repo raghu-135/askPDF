@@ -776,7 +776,10 @@ async def test_normal_recall_never_falls_back_when_global_representation_is_miss
             return EmptyResult()
 
     project_model = "project-embedding-model"
-    context = SimpleNamespace(embedding_model=project_model)
+    context = SimpleNamespace(
+        embedding_model=project_model,
+        thread=SimpleNamespace(settings={"context_window": 128_000}),
+    )
     global_memory = SimpleNamespace(
         id="global-memory",
         scope_type="user",

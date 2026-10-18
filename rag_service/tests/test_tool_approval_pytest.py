@@ -53,7 +53,7 @@ async def test_once_is_bound_to_run_invocation_tool_and_arguments(test_session_m
     with pytest.raises(asyncio.CancelledError):
         await tool_approval.execute_tool_once("arbitrary_tool", {}, context, invocation_id="cancelled", invoke=cancelled)
     unknown = await tool_approval.execute_tool_once("arbitrary_tool", {}, context, invocation_id="cancelled", invoke=invoke)
-    assert unknown.error.code == "tool_invocation_outcome_unknown"
+    assert unknown.error.code == "run_cancelled"
     invoke.assert_awaited_once()
     started, finish = asyncio.Event(), asyncio.Event()
 

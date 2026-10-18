@@ -47,6 +47,7 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("HERMES_API_TOKEN", "test-hermes-api-token-32-characters")
 os.environ.setdefault("HERMES_RUNTIME_TOKEN", "test-hermes-runtime-token-32-characters")
 os.environ.setdefault("MCP_EXECUTION_CONTEXT_SECRET", "test-mcp-execution-context-secret-32-characters")
+os.environ.setdefault("HERMES_MODEL_CONTEXT_LENGTH", "64000")
 os.environ.setdefault("ASKPDF_ADMIN_TOKEN", "test-control-plane-token-32-characters")
 os.environ.setdefault("ASKPDF_CORS_ORIGINS", "http://localhost:3000")
 os.environ.setdefault("ASKPDF_MCP_URL", "http://127.0.0.1:8000/internal/mcp/")
@@ -274,10 +275,12 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         stats_repo_sqlmodel,
         thread_file_repo_sqlmodel,
         thread_repo_sqlmodel,
+        canvas_repo_sqlmodel,
     )
     from app.services import (
         agent_task_chat_publish,
         agent_task_repository,
+        agent_task_research_canvases,
         agent_task_runtime_projection,
         embedding_materialization_service,
         effective_memory_service,
@@ -306,6 +309,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         stats_repo_sqlmodel,
         thread_file_repo_sqlmodel,
         thread_repo_sqlmodel,
+        canvas_repo_sqlmodel,
         thread_management_service,
         effective_memory_service,
         memory_manager_engine,
@@ -319,6 +323,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         agent_workflow_repository,
         chat_cancellation,
         agent_task_repository,
+        agent_task_research_canvases,
         agent_task_runtime_projection,
         agent_task_chat_publish,
         tool_approval,
@@ -430,6 +435,8 @@ async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[Asy
     finally:
         app.dependency_overrides.clear()
         await _drop_test_schema(engine)
+        await engine.dispose()
+        await _drain_test_loop_tasks()
 
 
 @pytest_asyncio.fixture(scope="function")
