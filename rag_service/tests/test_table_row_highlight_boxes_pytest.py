@@ -149,6 +149,59 @@ def test_resolve_grid_row_uses_table_row_id_not_spanning_cell_row_start():
     assert _resolve_grid_row(sentence, element, sentence["table_cell_ids"], cells) == 2
 
 
+def test_attention_table3_row_header_labels_do_not_stretch_y_extent():
+    """Regression: Docling (A)/(B) labels are row_span=1 with bboxes between two rows."""
+    page_height = 792.0
+    table_bounds = (118.0, 150.0, 494.0, 400.0)
+
+    def body_cell(row: int, top: float, bottom: float, col: int = 1) -> dict:
+        return {
+            "row_start": row,
+            "row_end": row + 1,
+            "row_span": 1,
+            "col_start": col,
+            "col_end": col + 1,
+            "row_header": False,
+            "raw_cell": {
+                "bbox": {"l": 150.0, "t": top, "r": 450.0, "b": bottom, "coord_origin": "TOPLEFT"},
+            },
+        }
+
+    def header_cell(row: int, top: float, bottom: float, text: str) -> dict:
+        return {
+            "row_start": row,
+            "row_end": row + 1,
+            "row_span": 1,
+            "col_start": 0,
+            "col_end": 1,
+            "row_header": True,
+            "text": text,
+            "raw_cell": {
+                "bbox": {"l": 118.0, "t": top, "r": 140.0, "b": bottom, "coord_origin": "TOPLEFT"},
+            },
+        }
+
+    cells = [
+        body_cell(3, 180.1, 188.7),
+        header_cell(4, 185.6, 199.6, "(A)"),
+        body_cell(4, 190.2, 199.6),
+        body_cell(6, 214.6, 223.1),
+        header_cell(7, 220.0, 234.0, "(B)"),
+        body_cell(7, 224.0, 232.6),
+    ]
+    row3 = _row_highlight_box(cells, 3, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    row4 = _row_highlight_box(cells, 4, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    row6 = _row_highlight_box(cells, 6, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    row7 = _row_highlight_box(cells, 7, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    assert row3 and row4 and row6 and row7
+    assert abs(row3["y0"] - 180.1) < 0.05 and abs(row3["y1"] - 188.7) < 0.05
+    assert abs(row4["y0"] - 190.2) < 0.05 and abs(row4["y1"] - 199.6) < 0.05
+    assert abs(row6["y0"] - 214.6) < 0.05 and abs(row6["y1"] - 223.1) < 0.05
+    assert abs(row7["y0"] - 224.0) < 0.05 and abs(row7["y1"] - 232.6) < 0.05
+    assert row3["y1"] <= row4["y0"] + 0.05
+    assert row6["y1"] <= row7["y0"] + 0.05
+
+
 def test_spanning_label_rows_do_not_overlap_adjacent_row_boxes():
     """Row-spanning group labels must not stretch a row's y band to the label cell height."""
     page_height = 792.0
@@ -166,6 +219,8 @@ def test_spanning_label_rows_do_not_overlap_adjacent_row_boxes():
             "row_start": 3,
             "row_end": 4,
             "row_span": 1,
+            "col_start": 1,
+            "row_header": False,
             "raw_cell": {
                 "bbox": {"l": 150.0, "t": 180.0, "r": 450.0, "b": 189.0, "coord_origin": "TOPLEFT"},
             },
@@ -174,6 +229,8 @@ def test_spanning_label_rows_do_not_overlap_adjacent_row_boxes():
             "row_start": 4,
             "row_end": 5,
             "row_span": 1,
+            "col_start": 1,
+            "row_header": False,
             "raw_cell": {
                 "bbox": {"l": 150.0, "t": 190.0, "r": 450.0, "b": 199.0, "coord_origin": "TOPLEFT"},
             },
@@ -182,6 +239,8 @@ def test_spanning_label_rows_do_not_overlap_adjacent_row_boxes():
             "row_start": 5,
             "row_end": 6,
             "row_span": 1,
+            "col_start": 1,
+            "row_header": False,
             "raw_cell": {
                 "bbox": {"l": 150.0, "t": 200.0, "r": 450.0, "b": 209.0, "coord_origin": "TOPLEFT"},
             },
@@ -198,6 +257,8 @@ def test_spanning_label_rows_do_not_overlap_adjacent_row_boxes():
             "row_start": 6,
             "row_end": 7,
             "row_span": 1,
+            "col_start": 1,
+            "row_header": False,
             "raw_cell": {
                 "bbox": {"l": 150.0, "t": 215.0, "r": 450.0, "b": 223.0, "coord_origin": "TOPLEFT"},
             },
@@ -206,6 +267,8 @@ def test_spanning_label_rows_do_not_overlap_adjacent_row_boxes():
             "row_start": 7,
             "row_end": 8,
             "row_span": 1,
+            "col_start": 1,
+            "row_header": False,
             "raw_cell": {
                 "bbox": {"l": 150.0, "t": 224.0, "r": 450.0, "b": 232.0, "coord_origin": "TOPLEFT"},
             },

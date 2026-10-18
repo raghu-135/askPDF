@@ -72,10 +72,20 @@ def _normalized_raw_cells(element: Mapping[str, Any]) -> list[dict[str, Any]]:
             "row_span": row_end - row_start,
             "col_start": col_start,
             "col_end": col_end,
+            "row_header": bool(raw_cell.get("row_header")),
             "text": str(raw_cell.get("text") or ""),
             "raw_cell": raw_cell,
         })
     return normalized
+
+
+def _cell_is_row_header(cell: Mapping[str, Any]) -> bool:
+    if bool(cell.get("row_header")):
+        return True
+    try:
+        return int(cell.get("col_start", -1)) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _grid_row_from_table_row_id(sentence: Mapping[str, Any], element: Mapping[str, Any]) -> int | None:
@@ -138,7 +148,8 @@ def _row_highlight_box(
     page_height: float,
     table_bounds: tuple[float, float, float, float],
 ) -> dict[str, Any] | None:
-    single_row_ys: list[float] = []
+    single_row_body_ys: list[float] = []
+    single_row_all_ys: list[float] = []
     spanning_ys: list[float] = []
     row_touched = False
     table_x0, _table_y0, table_x1, _table_y1 = table_bounds
@@ -155,12 +166,19 @@ def _row_highlight_box(
             continue
         row_touched = True
         if row_span == 1 and row_start == grid_row:
-            single_row_ys.extend([y0, y1])
+            single_row_all_ys.extend([y0, y1])
+            if not _cell_is_row_header(cell):
+                single_row_body_ys.extend([y0, y1])
         elif row_span > 1:
             spanning_ys.extend([y0, y1])
     if not row_touched:
         return None
-    y_values = single_row_ys if single_row_ys else spanning_ys
+    if single_row_body_ys:
+        y_values = single_row_body_ys
+    elif single_row_all_ys:
+        y_values = single_row_all_ys
+    else:
+        y_values = spanning_ys
     if not y_values:
         return None
     x0 = table_x0
