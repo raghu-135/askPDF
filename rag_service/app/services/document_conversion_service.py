@@ -21,7 +21,8 @@ from app.services.document_pipeline import (
     stable_identity,
     sentence_pipeline_identity,
 )
-from app.services.parsing_service import DoclingParseResult, extraction_configuration, parse_with_docling
+from app.services.document_extraction_contract import extraction_configuration
+from app.services.parsing_service import DoclingParseResult, parse_with_docling
 
 
 logger = logging.getLogger(__name__)

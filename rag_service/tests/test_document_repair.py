@@ -14,11 +14,11 @@ from app.tools import retrieval_knowledge
 
 @pytest.fixture(autouse=True)
 def _test_sentence_pipeline_identity(monkeypatch):
-    monkeypatch.setattr(
-        document_projection_service,
-        "sentence_pipeline_identity",
-        lambda: "en_core_web_sm:test-double",
-    )
+    identity = lambda: "en_core_web_sm:test-double"
+    monkeypatch.setattr(document_projection_service, "sentence_pipeline_identity", identity)
+    from app.services import document_conversion_service
+
+    monkeypatch.setattr(document_conversion_service, "sentence_pipeline_identity", identity)
 
 
 @pytest.mark.asyncio
@@ -260,15 +260,47 @@ def test_canonical_schema_version_invalidates_extraction_fingerprint(monkeypatch
         from app.services import document_conversion_service
     except ImportError as exc:
         pytest.skip(f"Docling runtime is unavailable in this host environment: {exc}")
-    monkeypatch.setattr(
-        document_conversion_service,
-        "sentence_pipeline_identity",
-        lambda: "en_core_web_sm:test-double",
-    )
     original = document_conversion_service.current_extraction_fingerprint(b"fixture-pdf")
     monkeypatch.setattr(document_conversion_service, "CANONICAL_SCHEMA_VERSION", "docling-canonical-v-next")
     changed = document_conversion_service.current_extraction_fingerprint(b"fixture-pdf")
     assert changed != original
+
+
+def test_current_extraction_fingerprint_uses_document_extraction_contract():
+    from app.services import document_conversion_service
+    from app.services.document_extraction_contract import extraction_configuration
+
+    config = extraction_configuration(sentence_model="en_core_web_sm:test-double")
+    assert config["generate_parsed_pages"] is True
+    fingerprint = document_conversion_service.current_extraction_fingerprint(b"upload-bytes")
+    contract_fingerprint = document_conversion_service.current_extraction_contract_fingerprint()
+    assert fingerprint
+    assert contract_fingerprint
+    assert fingerprint != contract_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_enqueue_pdf_conversion_computes_extraction_fingerprint(monkeypatch):
+    from app.services import document_conversion_service
+
+    captured: dict = {}
+
+    class Repo:
+        async def get(self, _file_hash):
+            return None
+
+        async def ensure_conversion_job(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace()
+
+    monkeypatch.setattr(document_conversion_service, "get_canonical_document_repo", lambda: Repo())
+    await document_conversion_service.enqueue_pdf_conversion(
+        file_hash="file-hash",
+        data=b"pdf-bytes",
+        file_name="doc.pdf",
+    )
+    assert captured.get("extraction_fingerprint")
+    assert captured.get("generation")
 
 
 def test_page_normalization_expands_compact_ranges():
