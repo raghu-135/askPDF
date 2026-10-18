@@ -78,16 +78,55 @@ def _normalized_raw_cells(element: Mapping[str, Any]) -> list[dict[str, Any]]:
     return normalized
 
 
-def _grid_row_from_cell_ids(cell_ids: list[str], cells: list[dict[str, Any]]) -> int | None:
+def _grid_row_from_table_row_id(sentence: Mapping[str, Any], element: Mapping[str, Any]) -> int | None:
+    """Map projected data row N (table_row_id :row:N) to 0-based Docling grid row."""
+    table_row_id = str(sentence.get("table_row_id") or "")
+    if ":row:" not in table_row_id:
+        return None
+    suffix = table_row_id.rsplit(":row:", 1)[-1]
+    try:
+        data_index = int(suffix)
+    except ValueError:
+        return None
+    structure = element.get("table_structure")
+    if not isinstance(structure, Mapping):
+        return None
+    header_rows = set(structure.get("header_rows") or [])
+    current_data_index = 0
+    for grid_row_index, row in enumerate(structure.get("rows") or []):
+        if grid_row_index in header_rows:
+            continue
+        values = [str(value).strip() for value in row]
+        if not any(values):
+            continue
+        current_data_index += 1
+        if current_data_index == data_index:
+            return grid_row_index
+    return None
+
+
+def _grid_row_from_single_row_cells(cell_ids: list[str], cells: list[dict[str, Any]]) -> int | None:
     rows: set[int] = set()
     for cell_id in cell_ids:
         token = str(cell_id or "").split(":cell:")
         if len(token) != 2 or not token[1].isdigit():
             continue
         index = int(token[1])
-        if 0 <= index < len(cells):
+        if 0 <= index < len(cells) and int(cells[index]["row_span"]) == 1:
             rows.add(int(cells[index]["row_start"]))
     return min(rows) if rows else None
+
+
+def _resolve_grid_row(
+    sentence: Mapping[str, Any],
+    element: Mapping[str, Any],
+    cell_ids: list[str],
+    cells: list[dict[str, Any]],
+) -> int | None:
+    grid_row = _grid_row_from_table_row_id(sentence, element)
+    if grid_row is not None:
+        return grid_row
+    return _grid_row_from_single_row_cells(cell_ids, cells)
 
 
 def _row_highlight_box(
@@ -116,10 +155,10 @@ def _row_highlight_box(
             ys.extend([y0, y1])
         elif row_start <= grid_row < row_end and row_span > 1:
             xs.extend([x0, x1])
-    if not xs:
+    if not ys and not xs:
         return None
-    x0 = max(table_x0, min(xs))
-    x1 = min(table_x1, max(xs))
+    x0 = table_x0
+    x1 = table_x1
     if not ys:
         y0, y1 = table_y0, table_y1
     else:
@@ -191,7 +230,7 @@ def apply_table_row_highlight_boxes(
         if element_id not in table_cells_cache:
             table_cells_cache[element_id] = _normalized_raw_cells(element)
         cells = table_cells_cache[element_id]
-        grid_row = _grid_row_from_cell_ids(cell_ids, cells)
+        grid_row = _resolve_grid_row(row, element, cell_ids, cells)
         table_bounds = _table_bounds_topleft(element, page_height)
         row_box = None
         if grid_row is not None and table_bounds is not None:
