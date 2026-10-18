@@ -51,12 +51,32 @@ os.environ.setdefault("ASKPDF_ADMIN_TOKEN", "test-control-plane-token-32-charact
 os.environ.setdefault("ASKPDF_CORS_ORIGINS", "http://localhost:3000")
 os.environ.setdefault("ASKPDF_MCP_URL", "http://127.0.0.1:8000/internal/mcp/")
 os.environ.setdefault("ASKPDF_MCP_HEALTH_URL", "http://127.0.0.1:8000/health")
+os.environ.setdefault("POSTGRES_POOL_SIZE", "5")
+os.environ.setdefault("POSTGRES_MAX_OVERFLOW", "10")
 os.environ.setdefault("LLM_API_URL", "http://127.0.0.1:1234/v1")
 # Control-plane pytest invokes first-party tools in-process. CI copies
 # `.env.ci` into the test runner, and that file uses loopback HTTP against
 # `rag-service`, which is not part of docker-compose.test.yml.
 os.environ["MCP_TRANSPORT"] = "in_process"
 os.environ.setdefault("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
+for _budget_name, _budget_value in {
+    "DEEP_AGENT_MAX_MODEL_CALLS": "10000",
+    "DEEP_AGENT_MAX_MODEL_TOKENS": "500000",
+    "DEEP_AGENT_MAX_TOOL_CALLS": "100",
+    "DEEP_AGENT_MAX_ACTIVE_RUNTIME_MS": "7200000",
+    "DEEP_AGENT_MAX_DURATION_MS": "7200000",
+    "DEEP_AGENT_MAX_OUTPUT_CHARS": "500000",
+    "DEEP_AGENT_MAX_EVENT_COUNT": "100000",
+    "DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS": "10000",
+    "DEEP_AGENT_LANGGRAPH_MAX_MODEL_TOKENS": "500000",
+    "DEEP_AGENT_LANGGRAPH_MAX_TOOL_CALLS": "100",
+    "DEEP_AGENT_LANGGRAPH_MAX_ACTIVE_RUNTIME_MS": "7200000",
+    "DEEP_AGENT_HERMES_MAX_MODEL_CALLS": "10000",
+    "DEEP_AGENT_HERMES_MAX_MODEL_TOKENS": "500000",
+    "DEEP_AGENT_HERMES_MAX_TOOL_CALLS": "100",
+    "DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS": "7200000",
+}.items():
+    os.environ.setdefault(_budget_name, _budget_value)
 
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,
