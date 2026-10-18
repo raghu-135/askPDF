@@ -149,6 +149,81 @@ def test_resolve_grid_row_uses_table_row_id_not_spanning_cell_row_start():
     assert _resolve_grid_row(sentence, element, sentence["table_cell_ids"], cells) == 2
 
 
+def test_spanning_label_rows_do_not_overlap_adjacent_row_boxes():
+    """Row-spanning group labels must not stretch a row's y band to the label cell height."""
+    page_height = 792.0
+    table_bounds = (118.0, 170.0, 494.0, 250.0)
+    cells = [
+        {
+            "row_start": 3,
+            "row_end": 6,
+            "row_span": 3,
+            "raw_cell": {
+                "bbox": {"l": 118.0, "t": 180.0, "r": 140.0, "b": 210.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+        {
+            "row_start": 3,
+            "row_end": 4,
+            "row_span": 1,
+            "raw_cell": {
+                "bbox": {"l": 150.0, "t": 180.0, "r": 450.0, "b": 189.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+        {
+            "row_start": 4,
+            "row_end": 5,
+            "row_span": 1,
+            "raw_cell": {
+                "bbox": {"l": 150.0, "t": 190.0, "r": 450.0, "b": 199.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+        {
+            "row_start": 5,
+            "row_end": 6,
+            "row_span": 1,
+            "raw_cell": {
+                "bbox": {"l": 150.0, "t": 200.0, "r": 450.0, "b": 209.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+        {
+            "row_start": 6,
+            "row_end": 8,
+            "row_span": 2,
+            "raw_cell": {
+                "bbox": {"l": 118.0, "t": 215.0, "r": 140.0, "b": 234.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+        {
+            "row_start": 6,
+            "row_end": 7,
+            "row_span": 1,
+            "raw_cell": {
+                "bbox": {"l": 150.0, "t": 215.0, "r": 450.0, "b": 223.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+        {
+            "row_start": 7,
+            "row_end": 8,
+            "row_span": 1,
+            "raw_cell": {
+                "bbox": {"l": 150.0, "t": 224.0, "r": 450.0, "b": 232.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+    ]
+    row3 = _row_highlight_box(cells, 3, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    row4 = _row_highlight_box(cells, 4, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    row6 = _row_highlight_box(cells, 6, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    row7 = _row_highlight_box(cells, 7, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    assert row3 and row4 and row6 and row7
+    assert abs(row3["y1"] - 189.0) < 0.6
+    assert abs(row4["y0"] - 190.0) < 0.6 and abs(row4["y1"] - 199.0) < 0.6
+    assert row3["y1"] <= row4["y0"] + 0.5
+    assert abs(row6["y1"] - 223.0) < 0.6
+    assert abs(row7["y0"] - 224.0) < 0.6 and abs(row7["y1"] - 232.0) < 0.6
+    assert row6["y1"] <= row7["y0"] + 0.5
+
+
 def test_spanning_group_rows_get_distinct_y_bands():
     page_height = 792.0
     table_bounds = (118.0, 130.0, 494.0, 380.0)
