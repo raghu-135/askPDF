@@ -99,6 +99,7 @@ UNIT_TEST_FILES = [
     "test_canvas_locator_grammar_pytest.py",
     "test_canvas_citation_resolution_pytest.py",
     "test_coordinate_alignment_coverage_pytest.py",
+    "test_docling_word_alignment_pytest.py",
     "test_evidence_source_locators_pytest.py",
     "test_production_edge_cases.py",
     "test_rerank_reading_order_pytest.py",

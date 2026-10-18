@@ -116,6 +116,29 @@ def _pages_from_provenance(value: Any) -> list[int]:
     return sorted(pages)
 
 
+def _provenance_entries_from_item(item: Mapping[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for prov in item.get("prov") or []:
+        if isinstance(prov, Mapping) and prov.get("bbox"):
+            entries.append(dict(prov))
+    return entries
+
+
+def _alignment_markers_from_raw(
+    raw: Mapping[str, Any],
+    collections: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    markers: list[str] = []
+    marker = raw.get("marker")
+    if marker not in (None, ""):
+        markers.append(str(marker))
+    for child in raw.get("children") or []:
+        ref = _ref_value(child)
+        if ref and ref in collections:
+            markers.extend(_alignment_markers_from_raw(collections[ref], collections))
+    return markers
+
+
 def _text_for_raw_item(item: Mapping[str, Any]) -> str:
     table_label = str(item.get("label") or "") == "table"
     table_caption = ""
@@ -301,6 +324,8 @@ def _collapsed_container_item(
     """Join sibling word/line texts into one block when a container has no own text."""
     parts: list[str] = []
     pages: list[int] = []
+    provenance: list[dict[str, Any]] = []
+    alignment_markers: list[str] = []
     for ref in child_refs:
         child = collections[ref]
         if ref.startswith("#/tables/") or str(child.get("label") or "").casefold() in {"table", "picture"}:
@@ -311,6 +336,8 @@ def _collapsed_container_item(
         if text:
             parts.append(text)
         pages.extend(_pages_from_provenance(child.get("prov")))
+        provenance.extend(_provenance_entries_from_item(child))
+        alignment_markers.extend(_alignment_markers_from_raw(child, collections))
     if not parts:
         return None
     collapsed = dict(parent)
@@ -320,8 +347,12 @@ def _collapsed_container_item(
     label = str(collapsed.get("label") or "").strip().casefold()
     if label in CONTAINER_LABELS or not label:
         collapsed["label"] = "text"
-    if pages and not collapsed.get("prov"):
+    if provenance:
+        collapsed["prov"] = provenance
+    elif pages and not collapsed.get("prov"):
         collapsed["prov"] = [{"page_no": page} for page in sorted(set(pages))]
+    if alignment_markers:
+        collapsed["_alignment_markers"] = alignment_markers
     return collapsed
 
 
@@ -363,6 +394,8 @@ def _merged_word_crumb_item(
 ) -> dict[str, Any]:
     parts: list[str] = []
     pages: list[int] = []
+    provenance: list[dict[str, Any]] = []
+    alignment_markers: list[str] = []
     first = collections[refs[0]]
     for ref in refs:
         item = collections[ref]
@@ -370,13 +403,19 @@ def _merged_word_crumb_item(
         if text:
             parts.append(text)
         pages.extend(_pages_from_provenance(item.get("prov")))
+        provenance.extend(_provenance_entries_from_item(item))
+        alignment_markers.extend(_alignment_markers_from_raw(item, collections))
     merged = dict(first)
     joined = " ".join(parts)
     merged["text"] = joined
     merged["orig"] = joined
     merged["label"] = "text"
-    if pages:
+    if provenance:
+        merged["prov"] = provenance
+    elif pages:
         merged["prov"] = [{"page_no": page} for page in sorted(set(pages))]
+    if alignment_markers:
+        merged["_alignment_markers"] = alignment_markers
     return merged
 
 

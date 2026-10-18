@@ -6,11 +6,7 @@ import copy
 
 import pytest
 
-from app.services.document_conversion_service import (
-    _align_coordinates,
-    _merge_page_dimensions,
-    _page_size_map_from_pdf,
-)
+from app.services.document_conversion_service import _align_sentences_to_cells
 from app.services.document_pipeline import (
     build_canonical_payload,
     derive_hierarchy,
@@ -45,67 +41,30 @@ def _retrieval_chunk_signature(chunks: list[dict]) -> list[dict]:
     ]
 
 
-def _stub_coordinate_candidates(
-    sentences: list[dict],
-    page_dimensions: dict[int, tuple[float, float]],
-) -> list[dict]:
-    """Synthetic pdfplumber rows: enough for alignment without spaCy/pdfplumber sentence NLP."""
-    candidates: list[dict] = []
-    y_cursor = 72.0
-    for sentence in sentences:
-        text = str(sentence.get("text") or "").strip()
-        if not text:
-            continue
-        pages = [int(page) for page in (sentence.get("pages") or [1]) if int(page) > 0]
-        page = pages[0] if pages else 1
-        width, height = page_dimensions.get(page, (612.0, 792.0))
-        bbox = {
-            "page": page,
-            "x0": 72.0,
-            "y0": y_cursor,
-            "x1": 320.0,
-            "y1": y_cursor + 12.0,
-            "page_width": width,
-            "page_height": height,
-        }
-        candidates.append(
-            {
-                "text": text,
-                "pages": pages or [page],
-                "page": page,
-                "label": sentence.get("label") or "text",
-                "bbox": bbox,
-                "bboxes": [bbox],
-                "page_width": width,
-                "page_height": height,
-            }
-        )
-        y_cursor += 14.0
-    return candidates
-
-
 def _sentence_split_whole(text: str) -> list[str]:
     stripped = str(text or "").strip()
     return [stripped] if stripped else []
 
 
 def _chunks_for_fixture_pdf(data: bytes, filename: str, *, align_coordinates: bool) -> list[dict]:
-    docling_doc = parse_with_docling(data, filename)
-    assert docling_doc is not None
-    payload = build_canonical_payload(docling_doc, filename=filename, document_identity="highlight-invariant-fixture")
+    parse_result = parse_with_docling(data, filename)
+    assert parse_result is not None
+    payload = build_canonical_payload(
+        parse_result.document,
+        filename=filename,
+        document_identity="highlight-invariant-fixture",
+    )
     sections, elements = derive_hierarchy(payload)
     payload["sections"] = sections
     payload["elements"] = elements
     sentences = project_sentences(payload, sentence_splitter=_sentence_split_whole)
     if align_coordinates:
         elements_by_id = {str(item["element_id"]): item for item in elements}
-        page_dimensions = _merge_page_dimensions(_page_size_map_from_pdf(data), {})
-        candidates = _stub_coordinate_candidates(sentences, page_dimensions)
-        sentences = _align_coordinates(
+        sentences = _align_sentences_to_cells(
             copy.deepcopy(sentences),
-            candidates,
+            parse_result,
             elements_by_id=elements_by_id,
-            page_dimensions=page_dimensions,
+            docling_json=payload.get("docling"),
         )
     return pack_retrieval_chunks(
         sentences,
