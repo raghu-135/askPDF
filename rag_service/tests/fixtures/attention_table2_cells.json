@@ -1,0 +1,1694 @@
+{
+  "ref": "#/tables/1",
+  "element_id": "74fcf739f0fc218976c919d2b1da9718",
+  "prov": [
+    {
+      "bbox": {
+        "b": 547.6737823486328,
+        "l": 129.54798889160156,
+        "r": 481.9996337890625,
+        "t": 696.7067337036133,
+        "coord_origin": "BOTTOMLEFT"
+      },
+      "page_no": 8,
+      "charspan": [
+        0,
+        0
+      ]
+    }
+  ],
+  "num_rows": 12,
+  "cells": [
+    {
+      "bbox": {
+        "b": 115.82422560707971,
+        "l": 136.671,
+        "r": 162.68334860000002,
+        "t": 107.27234740000006,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "Model",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": true,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 1,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 0
+    },
+    {
+      "bbox": {
+        "b": 107.53522560707972,
+        "l": 311.02099999999996,
+        "r": 337.0333485999999,
+        "t": 98.98334740000007,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "BLEU",
+      "col_span": 2,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": true,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 1,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 0
+    },
+    {
+      "bbox": {
+        "b": 107.53522560707972,
+        "l": 383.2498499999999,
+        "r": 475.3241991999997,
+        "t": 98.98334740000007,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "Training Cost (FLOPs)",
+      "col_span": 2,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": true,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 1,
+      "start_col_offset_idx": 3,
+      "start_row_offset_idx": 0
+    },
+    {
+      "bbox": {
+        "b": 123.45022560707969,
+        "l": 288.72,
+        "r": 318.59783739999995,
+        "t": 114.89834740000003,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "EN-DE",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": true,
+      "end_col_offset_idx": 2,
+      "end_row_offset_idx": 2,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 1
+    },
+    {
+      "bbox": {
+        "b": 123.45022560707969,
+        "l": 330.55295739999997,
+        "r": 359.33490879999994,
+        "t": 114.89834740000003,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "EN-FR",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": true,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 2,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 1
+    },
+    {
+      "bbox": {
+        "b": 123.45022560707969,
+        "l": 387.46929119999993,
+        "r": 417.34712859999985,
+        "t": 114.89834740000003,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "EN-DE",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": true,
+      "end_col_offset_idx": 4,
+      "end_row_offset_idx": 2,
+      "start_col_offset_idx": 3,
+      "start_row_offset_idx": 1
+    },
+    {
+      "bbox": {
+        "b": 123.45022560707969,
+        "l": 440.04193139999984,
+        "r": 468.8238827999998,
+        "t": 114.89834740000003,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "EN-FR",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": true,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 2,
+      "start_col_offset_idx": 4,
+      "start_row_offset_idx": 1
+    },
+    {
+      "bbox": {
+        "b": 134.7572256070797,
+        "l": 136.671,
+        "r": 188.96468740000003,
+        "t": 126.20534740000005,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "ByteNet [18]",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 3,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 2
+    },
+    {
+      "bbox": {
+        "b": 134.7572256070797,
+        "l": 292.4462136,
+        "r": 314.86206359999994,
+        "t": 126.20534740000005,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "23.75",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 2,
+      "end_row_offset_idx": 3,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 2
+    },
+    {
+      "bbox": {
+        "b": 146.14022560707974,
+        "l": 136.671,
+        "r": 234.98193680000003,
+        "t": 137.5883474000001,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "Deep-Att + PosUnk [39]",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 4,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 3
+    },
+    {
+      "bbox": {
+        "b": 146.14022560707974,
+        "l": 336.22187800000006,
+        "r": 353.656428,
+        "t": 137.5883474000001,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "39.2",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 4,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 3
+    },
+    {
+      "bbox": {
+        "b": 145.9761101227666,
+        "l": 435.264,
+        "r": 473.0951582,
+        "t": 135.6948946000001,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "1.0 \u00b7 1020",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 4,
+      "start_col_offset_idx": 4,
+      "start_row_offset_idx": 3
+    },
+    {
+      "bbox": {
+        "b": 157.5222256070798,
+        "l": 136.67100000000005,
+        "r": 208.42164520000006,
+        "t": 148.97034740000015,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "GNMT + RL [38]",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 5,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 4
+    },
+    {
+      "bbox": {
+        "b": 157.5222256070798,
+        "l": 294.93686360000004,
+        "r": 312.3714136,
+        "t": 148.97034740000015,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "24.6",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 2,
+      "end_row_offset_idx": 5,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 4
+    },
+    {
+      "bbox": {
+        "b": 157.5222256070798,
+        "l": 333.731228,
+        "r": 356.1470779999999,
+        "t": 148.97034740000015,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "39.92",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 5,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 4
+    },
+    {
+      "bbox": {
+        "b": 157.35811012276667,
+        "l": 383.24500000000006,
+        "r": 421.0761582,
+        "t": 147.07789460000015,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "2.3 \u00b7 1019",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 4,
+      "end_row_offset_idx": 5,
+      "start_col_offset_idx": 3,
+      "start_row_offset_idx": 4
+    },
+    {
+      "bbox": {
+        "b": 157.35811012276667,
+        "l": 435.264,
+        "r": 473.0951582,
+        "t": 147.07789460000015,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "1.4 \u00b7 1020",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 5,
+      "start_col_offset_idx": 4,
+      "start_row_offset_idx": 4
+    },
+    {
+      "bbox": {
+        "b": 168.90522560707984,
+        "l": 136.67100000000005,
+        "r": 188.02820300000008,
+        "t": 160.3533474000002,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "ConvS2S [9]",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 6,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 5
+    },
+    {
+      "bbox": {
+        "b": 168.90522560707984,
+        "l": 292.4462136000001,
+        "r": 314.8620636,
+        "t": 160.3533474000002,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "25.16",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 2,
+      "end_row_offset_idx": 6,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 5
+    },
+    {
+      "bbox": {
+        "b": 168.90522560707984,
+        "l": 333.731228,
+        "r": 356.1470779999999,
+        "t": 160.3533474000002,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "40.46",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 6,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 5
+    },
+    {
+      "bbox": {
+        "b": 168.7411101227667,
+        "l": 383.24500000000006,
+        "r": 421.0761582,
+        "t": 158.4598946000002,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "9.6 \u00b7 1018",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 4,
+      "end_row_offset_idx": 6,
+      "start_col_offset_idx": 3,
+      "start_row_offset_idx": 5
+    },
+    {
+      "bbox": {
+        "b": 168.7411101227667,
+        "l": 435.264,
+        "r": 473.0951582,
+        "t": 158.4598946000002,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "1.5 \u00b7 1020",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 6,
+      "start_col_offset_idx": 4,
+      "start_row_offset_idx": 5
+    },
+    {
+      "bbox": {
+        "b": 180.2872256070799,
+        "l": 136.67100000000005,
+        "r": 175.68454160000007,
+        "t": 171.73534740000025,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "MoE [32]",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 7,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 6
+    },
+    {
+      "bbox": {
+        "b": 180.2872256070799,
+        "l": 292.4462136000001,
+        "r": 314.8620636,
+        "t": 171.73534740000025,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "26.03",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 2,
+      "end_row_offset_idx": 7,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 6
+    },
+    {
+      "bbox": {
+        "b": 180.2872256070799,
+        "l": 333.731228,
+        "r": 356.1470779999999,
+        "t": 171.73534740000025,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "40.56",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 7,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 6
+    },
+    {
+      "bbox": {
+        "b": 180.12311012276678,
+        "l": 383.24500000000006,
+        "r": 421.0761582,
+        "t": 169.84289460000025,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "2.0 \u00b7 1019",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 4,
+      "end_row_offset_idx": 7,
+      "start_col_offset_idx": 3,
+      "start_row_offset_idx": 6
+    },
+    {
+      "bbox": {
+        "b": 180.12311012276678,
+        "l": 435.26500000000004,
+        "r": 473.0951582,
+        "t": 169.84289460000025,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "1.2 \u00b7 1020",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 7,
+      "start_col_offset_idx": 4,
+      "start_row_offset_idx": 6
+    },
+    {
+      "bbox": {
+        "b": 192.9252256070797,
+        "l": 136.671,
+        "r": 276.7650812,
+        "t": 184.37334740000006,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "Deep-Att + PosUnk Ensemble [39]",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 8,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 7
+    },
+    {
+      "bbox": {
+        "b": 192.9252256070797,
+        "l": 336.221878,
+        "r": 353.65642799999995,
+        "t": 184.37334740000006,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "40.4",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 8,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 7
+    },
+    {
+      "bbox": {
+        "b": 192.76111012276658,
+        "l": 435.264,
+        "r": 473.0951582,
+        "t": 182.47989460000008,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "8.0 \u00b7 1020",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 8,
+      "start_col_offset_idx": 4,
+      "start_row_offset_idx": 7
+    },
+    {
+      "bbox": {
+        "b": 204.30722560707977,
+        "l": 136.67100000000005,
+        "r": 250.20478960000008,
+        "t": 195.75534740000012,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "GNMT + RL Ensemble [38]",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 9,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 8
+    },
+    {
+      "bbox": {
+        "b": 204.30722560707977,
+        "l": 292.4462136000001,
+        "r": 314.8620636,
+        "t": 195.75534740000012,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "26.30",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 2,
+      "end_row_offset_idx": 9,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 8
+    },
+    {
+      "bbox": {
+        "b": 204.30722560707977,
+        "l": 333.731228,
+        "r": 356.1470779999999,
+        "t": 195.75534740000012,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "41.16",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 9,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 8
+    },
+    {
+      "bbox": {
+        "b": 204.14311012276664,
+        "l": 383.24500000000006,
+        "r": 421.0761582,
+        "t": 193.86289460000012,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "1.8 \u00b7 1020",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 4,
+      "end_row_offset_idx": 9,
+      "start_col_offset_idx": 3,
+      "start_row_offset_idx": 8
+    },
+    {
+      "bbox": {
+        "b": 204.14311012276664,
+        "l": 435.264,
+        "r": 473.0951582,
+        "t": 193.86289460000012,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "1.1 \u00b7 1021",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 9,
+      "start_col_offset_idx": 4,
+      "start_row_offset_idx": 8
+    },
+    {
+      "bbox": {
+        "b": 215.68922560707972,
+        "l": 136.67100000000005,
+        "r": 229.8113474000001,
+        "t": 207.13734740000007,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "ConvS2S Ensemble [9]",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 10,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 9
+    },
+    {
+      "bbox": {
+        "b": 215.68922560707972,
+        "l": 292.4462136000001,
+        "r": 314.8620636,
+        "t": 207.13734740000007,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "26.36",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 2,
+      "end_row_offset_idx": 10,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 9
+    },
+    {
+      "bbox": {
+        "b": 215.7051834,
+        "l": 333.73600000000005,
+        "r": 356.15184999999997,
+        "t": 206.74880600000006,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "41.29",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 10,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 9
+    },
+    {
+      "bbox": {
+        "b": 215.5251101227666,
+        "l": 383.24500000000006,
+        "r": 421.0761582,
+        "t": 205.24489460000007,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "7.7 \u00b7 1019",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 4,
+      "end_row_offset_idx": 10,
+      "start_col_offset_idx": 3,
+      "start_row_offset_idx": 9
+    },
+    {
+      "bbox": {
+        "b": 215.5251101227666,
+        "l": 435.264,
+        "r": 473.0951582,
+        "t": 205.24489460000007,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "1.2 \u00b7 1021",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 10,
+      "start_col_offset_idx": 4,
+      "start_row_offset_idx": 9
+    },
+    {
+      "bbox": {
+        "b": 228.8252256070797,
+        "l": 136.671,
+        "r": 240.34181560000007,
+        "t": 220.27334740000003,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "Transformer (base model)",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 11,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 10
+    },
+    {
+      "bbox": {
+        "b": 228.8252256070797,
+        "l": 294.9368636000001,
+        "r": 312.37141360000004,
+        "t": 220.27334740000003,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "27.3",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 2,
+      "end_row_offset_idx": 11,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 10
+    },
+    {
+      "bbox": {
+        "b": 228.8252256070797,
+        "l": 336.22187800000006,
+        "r": 353.656428,
+        "t": 220.27334740000003,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "38.1",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 11,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 10
+    },
+    {
+      "bbox": {
+        "b": 228.6694649256484,
+        "l": 407.339,
+        "r": 427.70605444,
+        "t": 219.9246564,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "3.3 \u00b7",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 4,
+      "end_row_offset_idx": 11,
+      "start_col_offset_idx": 3,
+      "start_row_offset_idx": 10
+    },
+    {
+      "bbox": {
+        "b": 228.6694649256484,
+        "l": 430.253,
+        "r": 450.73688672,
+        "t": 218.3599732,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "1018",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 5,
+      "end_row_offset_idx": 11,
+      "start_col_offset_idx": 4,
+      "start_row_offset_idx": 10
+    },
+    {
+      "bbox": {
+        "b": 240.20722560707964,
+        "l": 136.671,
+        "r": 207.97332820000005,
+        "t": 231.65534739999998,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "Transformer (big)",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": true,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 1,
+      "end_row_offset_idx": 12,
+      "start_col_offset_idx": 0,
+      "start_row_offset_idx": 11
+    },
+    {
+      "bbox": {
+        "b": 240.22318339999993,
+        "l": 294.94100000000003,
+        "r": 312.37555,
+        "t": 231.26680599999997,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "28.4",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 2,
+      "end_row_offset_idx": 12,
+      "start_col_offset_idx": 1,
+      "start_row_offset_idx": 11
+    },
+    {
+      "bbox": {
+        "b": 240.22318339999993,
+        "l": 336.2260144,
+        "r": 353.66056439999994,
+        "t": 231.26680599999997,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "41.8",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 3,
+      "end_row_offset_idx": 12,
+      "start_col_offset_idx": 2,
+      "start_row_offset_idx": 11
+    },
+    {
+      "bbox": {
+        "b": 240.0431101227665,
+        "l": 410.12300000000005,
+        "r": 447.95415820000005,
+        "t": 229.76289459999998,
+        "coord_origin": "TOPLEFT"
+      },
+      "text": "2.3 \u00b7 1019",
+      "col_span": 1,
+      "fillable": false,
+      "row_span": 1,
+      "row_header": false,
+      "row_section": false,
+      "column_header": false,
+      "end_col_offset_idx": 4,
+      "end_row_offset_idx": 12,
+      "start_col_offset_idx": 3,
+      "start_row_offset_idx": 11
+    }
+  ],
+  "table_structure": {
+    "rows": [
+      [
+        "Model",
+        "BLEU",
+        "",
+        "Training Cost (FLOPs)",
+        ""
+      ],
+      [
+        "",
+        "EN-DE",
+        "EN-FR",
+        "EN-DE",
+        "EN-FR"
+      ],
+      [
+        "ByteNet [18]",
+        "23.75",
+        "",
+        "",
+        ""
+      ],
+      [
+        "Deep-Att + PosUnk [39]",
+        "",
+        "39.2",
+        "",
+        "1.0 \u00b7 1020"
+      ],
+      [
+        "GNMT + RL [38]",
+        "24.6",
+        "39.92",
+        "2.3 \u00b7 1019",
+        "1.4 \u00b7 1020"
+      ],
+      [
+        "ConvS2S [9]",
+        "25.16",
+        "40.46",
+        "9.6 \u00b7 1018",
+        "1.5 \u00b7 1020"
+      ],
+      [
+        "MoE [32]",
+        "26.03",
+        "40.56",
+        "2.0 \u00b7 1019",
+        "1.2 \u00b7 1020"
+      ],
+      [
+        "Deep-Att + PosUnk Ensemble [39]",
+        "",
+        "40.4",
+        "",
+        "8.0 \u00b7 1020"
+      ],
+      [
+        "GNMT + RL Ensemble [38]",
+        "26.30",
+        "41.16",
+        "1.8 \u00b7 1020",
+        "1.1 \u00b7 1021"
+      ],
+      [
+        "ConvS2S Ensemble [9]",
+        "26.36",
+        "41.29",
+        "7.7 \u00b7 1019",
+        "1.2 \u00b7 1021"
+      ],
+      [
+        "Transformer (base model)",
+        "27.3",
+        "38.1",
+        "3.3 \u00b7",
+        "1018"
+      ],
+      [
+        "Transformer (big)",
+        "28.4",
+        "41.8",
+        "2.3 \u00b7 1019",
+        ""
+      ]
+    ],
+    "cells": [
+      {
+        "col": 0,
+        "row": 0,
+        "text": "Model",
+        "col_end": 1,
+        "row_end": 1,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": true
+      },
+      {
+        "col": 1,
+        "row": 0,
+        "text": "BLEU",
+        "col_end": 3,
+        "row_end": 1,
+        "col_span": 2,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": true
+      },
+      {
+        "col": 3,
+        "row": 0,
+        "text": "Training Cost (FLOPs)",
+        "col_end": 5,
+        "row_end": 1,
+        "col_span": 2,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": true
+      },
+      {
+        "col": 1,
+        "row": 1,
+        "text": "EN-DE",
+        "col_end": 2,
+        "row_end": 2,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": true
+      },
+      {
+        "col": 2,
+        "row": 1,
+        "text": "EN-FR",
+        "col_end": 3,
+        "row_end": 2,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": true
+      },
+      {
+        "col": 3,
+        "row": 1,
+        "text": "EN-DE",
+        "col_end": 4,
+        "row_end": 2,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": true
+      },
+      {
+        "col": 4,
+        "row": 1,
+        "text": "EN-FR",
+        "col_end": 5,
+        "row_end": 2,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": true
+      },
+      {
+        "col": 0,
+        "row": 2,
+        "text": "ByteNet [18]",
+        "col_end": 1,
+        "row_end": 3,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 1,
+        "row": 2,
+        "text": "23.75",
+        "col_end": 2,
+        "row_end": 3,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 0,
+        "row": 3,
+        "text": "Deep-Att + PosUnk [39]",
+        "col_end": 1,
+        "row_end": 4,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 2,
+        "row": 3,
+        "text": "39.2",
+        "col_end": 3,
+        "row_end": 4,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 4,
+        "row": 3,
+        "text": "1.0 \u00b7 1020",
+        "col_end": 5,
+        "row_end": 4,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 0,
+        "row": 4,
+        "text": "GNMT + RL [38]",
+        "col_end": 1,
+        "row_end": 5,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 1,
+        "row": 4,
+        "text": "24.6",
+        "col_end": 2,
+        "row_end": 5,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 2,
+        "row": 4,
+        "text": "39.92",
+        "col_end": 3,
+        "row_end": 5,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 3,
+        "row": 4,
+        "text": "2.3 \u00b7 1019",
+        "col_end": 4,
+        "row_end": 5,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 4,
+        "row": 4,
+        "text": "1.4 \u00b7 1020",
+        "col_end": 5,
+        "row_end": 5,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 0,
+        "row": 5,
+        "text": "ConvS2S [9]",
+        "col_end": 1,
+        "row_end": 6,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 1,
+        "row": 5,
+        "text": "25.16",
+        "col_end": 2,
+        "row_end": 6,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 2,
+        "row": 5,
+        "text": "40.46",
+        "col_end": 3,
+        "row_end": 6,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 3,
+        "row": 5,
+        "text": "9.6 \u00b7 1018",
+        "col_end": 4,
+        "row_end": 6,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 4,
+        "row": 5,
+        "text": "1.5 \u00b7 1020",
+        "col_end": 5,
+        "row_end": 6,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 0,
+        "row": 6,
+        "text": "MoE [32]",
+        "col_end": 1,
+        "row_end": 7,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 1,
+        "row": 6,
+        "text": "26.03",
+        "col_end": 2,
+        "row_end": 7,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 2,
+        "row": 6,
+        "text": "40.56",
+        "col_end": 3,
+        "row_end": 7,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 3,
+        "row": 6,
+        "text": "2.0 \u00b7 1019",
+        "col_end": 4,
+        "row_end": 7,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 4,
+        "row": 6,
+        "text": "1.2 \u00b7 1020",
+        "col_end": 5,
+        "row_end": 7,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 0,
+        "row": 7,
+        "text": "Deep-Att + PosUnk Ensemble [39]",
+        "col_end": 1,
+        "row_end": 8,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 2,
+        "row": 7,
+        "text": "40.4",
+        "col_end": 3,
+        "row_end": 8,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 4,
+        "row": 7,
+        "text": "8.0 \u00b7 1020",
+        "col_end": 5,
+        "row_end": 8,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 0,
+        "row": 8,
+        "text": "GNMT + RL Ensemble [38]",
+        "col_end": 1,
+        "row_end": 9,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 1,
+        "row": 8,
+        "text": "26.30",
+        "col_end": 2,
+        "row_end": 9,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 2,
+        "row": 8,
+        "text": "41.16",
+        "col_end": 3,
+        "row_end": 9,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 3,
+        "row": 8,
+        "text": "1.8 \u00b7 1020",
+        "col_end": 4,
+        "row_end": 9,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 4,
+        "row": 8,
+        "text": "1.1 \u00b7 1021",
+        "col_end": 5,
+        "row_end": 9,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 0,
+        "row": 9,
+        "text": "ConvS2S Ensemble [9]",
+        "col_end": 1,
+        "row_end": 10,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 1,
+        "row": 9,
+        "text": "26.36",
+        "col_end": 2,
+        "row_end": 10,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 2,
+        "row": 9,
+        "text": "41.29",
+        "col_end": 3,
+        "row_end": 10,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 3,
+        "row": 9,
+        "text": "7.7 \u00b7 1019",
+        "col_end": 4,
+        "row_end": 10,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 4,
+        "row": 9,
+        "text": "1.2 \u00b7 1021",
+        "col_end": 5,
+        "row_end": 10,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 0,
+        "row": 10,
+        "text": "Transformer (base model)",
+        "col_end": 1,
+        "row_end": 11,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 1,
+        "row": 10,
+        "text": "27.3",
+        "col_end": 2,
+        "row_end": 11,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 2,
+        "row": 10,
+        "text": "38.1",
+        "col_end": 3,
+        "row_end": 11,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 3,
+        "row": 10,
+        "text": "3.3 \u00b7",
+        "col_end": 4,
+        "row_end": 11,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 4,
+        "row": 10,
+        "text": "1018",
+        "col_end": 5,
+        "row_end": 11,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 0,
+        "row": 11,
+        "text": "Transformer (big)",
+        "col_end": 1,
+        "row_end": 12,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": true,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 1,
+        "row": 11,
+        "text": "28.4",
+        "col_end": 2,
+        "row_end": 12,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 2,
+        "row": 11,
+        "text": "41.8",
+        "col_end": 3,
+        "row_end": 12,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      },
+      {
+        "col": 3,
+        "row": 11,
+        "text": "2.3 \u00b7 1019",
+        "col_end": 4,
+        "row_end": 12,
+        "col_span": 1,
+        "row_span": 1,
+        "row_header": false,
+        "row_section": false,
+        "column_header": false
+      }
+    ],
+    "headers": [
+      "Model",
+      "BLEU/EN-DE",
+      "BLEU/EN-FR",
+      "Training Cost (FLOPs)/EN-DE",
+      "Training Cost (FLOPs)/EN-FR"
+    ],
+    "num_cols": 5,
+    "num_rows": 12,
+    "header_rows": [
+      0,
+      1
+    ]
+  }
+}

@@ -61,6 +61,12 @@ async def publish_reading_projection(file_hash: str, parsed_data: Dict[str, Any]
         raise ValueError("reading projection must include sentences, generation, and extraction_fingerprint")
     if str(generation) != str(canonical.generation) or str(fingerprint) != str(canonical.extraction_fingerprint):
         raise ValueError("reading projection version does not match canonical document")
+    from app.services.table_row_highlight_boxes import apply_table_row_highlight_boxes
+
+    sentences = apply_table_row_highlight_boxes(
+        list(sentences),
+        document_json if isinstance(document_json, dict) else None,
+    )
     payload = {
         "version": "2.0",
         "sentences": sentences,
