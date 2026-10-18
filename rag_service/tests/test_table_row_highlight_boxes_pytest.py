@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 from app.services.table_row_highlight_boxes import (
+    _resolve_grid_row,
     _row_highlight_box,
+    _table_bounds_topleft,
     apply_table_row_highlight_boxes,
 )
 
@@ -87,8 +89,8 @@ def test_row_highlight_box_ignores_vertical_span_for_row_spanning_cells():
     assert box is not None
     assert box["y0"] == 249.0
     assert box["y1"] == 259.0
-    assert box["x0"] >= 118.0
-    assert box["x1"] <= 500.0
+    assert box["x0"] == 100.0
+    assert box["x1"] == 500.0
 
 
 def test_row_highlight_box_clamps_x_to_table_edges():
@@ -119,7 +121,98 @@ def test_row_highlight_box_clamps_x_to_table_edges():
         table_bounds=table_bounds,
     )
     assert box["x0"] == 136.7
-    assert box["x1"] == 450.7
+    assert box["x1"] == 475.3
+
+
+def test_resolve_grid_row_uses_table_row_id_not_spanning_cell_row_start():
+    element = {
+        "element_id": "tbl-span",
+        "table_structure": {
+            "header_rows": [0],
+            "rows": [
+                ["Header"],
+                ["(C)", "2"],
+                ["", "4"],
+                ["", "8"],
+            ],
+            "cells": [],
+        },
+    }
+    cells = [
+        {"index": 0, "row_start": 7, "row_end": 14, "row_span": 7, "raw_cell": {}},
+        {"index": 1, "row_start": 9, "row_end": 10, "row_span": 1, "raw_cell": {}},
+    ]
+    sentence = {
+        "table_row_id": "tbl-span:row:2",
+        "table_cell_ids": ["tbl-span:cell:0", "tbl-span:cell:1"],
+    }
+    assert _resolve_grid_row(sentence, element, sentence["table_cell_ids"], cells) == 2
+
+
+def test_spanning_group_rows_get_distinct_y_bands():
+    page_height = 792.0
+    table_bounds = (118.0, 130.0, 494.0, 380.0)
+    cells = [
+        {
+            "row_start": 7,
+            "row_end": 14,
+            "row_span": 7,
+            "raw_cell": {
+                "bbox": {"l": 118.0, "t": 238.1, "r": 140.0, "b": 301.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+        {
+            "row_start": 8,
+            "row_end": 9,
+            "row_span": 1,
+            "raw_cell": {
+                "bbox": {"l": 236.0, "t": 249.0, "r": 457.0, "b": 259.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+        {
+            "row_start": 9,
+            "row_end": 10,
+            "row_span": 1,
+            "raw_cell": {
+                "bbox": {"l": 236.0, "t": 260.0, "r": 457.0, "b": 270.0, "coord_origin": "TOPLEFT"},
+            },
+        },
+    ]
+    row8 = _row_highlight_box(cells, 8, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    row9 = _row_highlight_box(cells, 9, page=9, page_width=612.0, page_height=page_height, table_bounds=table_bounds)
+    assert row8 and row9
+    assert abs(row8["y0"] - 249.0) < 0.6
+    assert abs(row9["y0"] - 260.0) < 0.6
+    assert row8["y0"] != row9["y0"]
+    assert row8["x0"] == table_bounds[0]
+    assert row8["x1"] == table_bounds[2]
+
+
+def test_bytenet_row_uses_full_table_width():
+    element = _load_attention_table2_element()
+    element["table_structure"] = {
+        "header_rows": [0, 1],
+        "rows": [[], [], ["ByteNet"], []],
+    }
+    cells = _normalized_cells(element)
+    bytenet_ids = [f"{element['element_id']}:cell:{cell['index']}" for cell in cells if cell["row_start"] == 2]
+    sentence = {
+        "table_row_id": f"{element['element_id']}:row:1",
+        "table_cell_ids": bytenet_ids,
+        "source_element_ids": [element["element_id"]],
+        "page": 8,
+        "pages": [8],
+        "text": "Row 1: ByteNet",
+        "bboxes": [],
+    }
+    page_height = 792.0
+    table_bounds = _table_bounds_topleft(element, page_height)
+    assert table_bounds is not None
+    table_x0, _, table_x1, _ = table_bounds
+    enriched = apply_table_row_highlight_boxes([sentence], {"elements": [element]})
+    box = enriched[0]["bboxes"][0]
+    assert abs(box["x0"] - table_x0) < 0.1
+    assert abs(box["x1"] - table_x1) < 0.1
 
 
 def test_attention_table2_transformer_rows_match_investigated_y_bands():
@@ -146,10 +239,11 @@ def test_apply_table_row_highlight_boxes_preserves_sentence_text():
     ]
     sentences = [{
         "id": 227,
-        "text": "Row 10: Transformer (base model) 27.3",
+        "text": "Row 9: Transformer (base model) 27.3",
         "page": 8,
         "pages": [8],
         "source_element_ids": [element["element_id"]],
+        "table_row_id": f"{element['element_id']}:row:9",
         "table_cell_ids": base_ids,
         "bboxes": [],
     }]
