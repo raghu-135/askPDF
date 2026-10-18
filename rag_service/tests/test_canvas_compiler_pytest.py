@@ -116,7 +116,7 @@ async def test_compile_accepts_src_prefixed_source_id():
         ),
         patch(
             "app.services.canvas_compiler._readable_sentence_ids_for_chunk",
-            new=AsyncMock(return_value=(None, [], True)),
+            new=AsyncMock(return_value=(None, [1], True)),
         ),
     ):
         spec = await compile_canvas_draft(draft, thread_file_hashes={file_hash})

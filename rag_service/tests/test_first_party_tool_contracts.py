@@ -206,6 +206,7 @@ def _knowledge_chunk(
     *,
     table_id: str | None = None,
     chunk_index: int = 0,
+    section_id: str = "sec-1",
 ) -> dict:
     return {
         "file_hash": "file-1",
@@ -221,7 +222,7 @@ def _knowledge_chunk(
             "extraction_fingerprint": "extract-1",
             "chunking_fingerprint": "chunk-1",
             "table_id": table_id,
-            "section_id": "sec-1",
+            "section_id": section_id,
             "chunk_index": chunk_index,
         },
     }
@@ -274,6 +275,7 @@ async def test_search_knowledge_lists_omitted_source_ids_when_hits_exceed_budget
             "x" * 6000,
             table_id="table-1" if index == 0 else None,
             chunk_index=index,
+            section_id=f"sec-{index}",
         )
             for index in range(20)
     ]
@@ -300,7 +302,7 @@ async def test_search_knowledge_lists_omitted_source_ids_when_hits_exceed_budget
     assert "table_id=table-1" in payload["content"]
     assert "Call read_context" in payload["content"]
     assert "Do not repeat search_knowledge" in payload["content"]
-    assert payload["content"].count("x" * 2000) == 0
+    assert payload["content"].count("x" * 6000) == 0
 
 
 @pytest.mark.asyncio
@@ -1000,12 +1002,18 @@ async def test_search_web_returns_web_source_contract(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_warning_paths_still_return_valid_tool_contracts(monkeypatch):
+    from app.tools.contracts import QueryRequest
+    from app.tools.web_search import search_web as search_web_handler
+
     monkeypatch.setattr("app.mcp.server.persist_tool_audit", AsyncMock())
-    raw = await external_research_tools.search_web.ainvoke(
-        {"query": "latest diffusion"},
-        config=_config(caller_node="web_worker", route="web", use_web_search=False),
+    context = ToolInvocationContext.from_mapping(
+        {
+            **_config(caller_node="web_worker", route="web")["configurable"],
+            "use_web_search": False,
+        }
     )
-    payload = normalize_tool_result(raw, tool_name="search_web")
+    raw = await search_web_handler(QueryRequest(query="latest diffusion"), context)
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_web")
 
     assert payload["ok"] is True
     _assert_contract(
