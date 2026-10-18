@@ -36,6 +36,14 @@ test_canvas_emit_pytest.py, test_canvas_layout_skills_pytest.py, and
 test_canvas_api_pytest.py. LangGraph answer-node emit is
 langgraph_runtime/tests/test_canvas_publish_pytest.py.
 
+## Highlight geometry and retrieval
+
+PDF highlight and bbox alignment are display metadata. They must not alter
+chunk boundaries, chunk `body_text`, or `contextualized_text` (embedding inputs).
+Highlight-only changes should not bump `EXTRACTION_PIPELINE_VERSION` or
+`RETRIEVAL_CHUNKING_VERSION`. The guard test is
+`rag_service/tests/test_highlight_retrieval_invariant_pytest.py`.
+
 The backend runner maintains explicit ownership in
 rag_service/tests/test_inventory.json and validates that repository tests are
 assigned or explicitly excluded.
