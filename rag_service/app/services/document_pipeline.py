@@ -18,7 +18,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 EXTRACTION_PIPELINE_VERSION = "docling-pdf-v11"
 CANONICAL_SCHEMA_VERSION = "docling-canonical-v2"
-RETRIEVAL_CHUNKING_VERSION = "table-pack-v8"
+RETRIEVAL_CHUNKING_VERSION = "table-pack-v9"
 RETRIEVAL_SOURCE_VERSION = "document-retrieval-v3"
 READING_EXCLUDED_LABELS = frozenset({
     "page_header",
@@ -730,21 +730,26 @@ def project_sentences(
         if isinstance(table_structure, Mapping):
             headers = [str(value).strip() for value in table_structure.get("headers") or []]
             cells = [dict(value) for value in table_structure.get("cells") or [] if isinstance(value, Mapping)]
-            for row_index, row in enumerate(table_structure.get("rows") or [], start=1):
-                values = [str(value).strip() for value in row]
-                if not any(values) and not cells:
+            header_rows = set(table_structure.get("header_rows") or [])
+            data_index = 0
+            for grid_row_index, row in enumerate(table_structure.get("rows") or []):
+                if grid_row_index in header_rows:
                     continue
+                values = [str(value).strip() for value in row]
+                if not any(values):
+                    continue
+                data_index += 1
                 header_text = " | ".join(value or f"Column {index + 1}" for index, value in enumerate(headers))
-                row_text = _table_row_render(headers, values, row_index, cells)
-                row_prefix = f"Row {row_index}: "
+                row_text = _table_row_render(headers, values, grid_row_index, cells)
+                row_prefix = f"Row {data_index}: "
                 row_cells = [
                     f"{element.get('element_id')}:cell:{cell_index}"
                     for cell_index, cell in enumerate(cells)
-                    if int(cell.get("row", -1)) <= row_index - 1 < int(cell.get("row", -1)) + int(cell.get("row_span", 1))
+                    if int(cell.get("row", -1)) <= grid_row_index < int(cell.get("row", -1)) + int(cell.get("row_span", 1))
                 ]
                 table_rows.append({
                     "text": f"{row_prefix}{row_text}",
-                    "table_row_id": f"{element.get('element_id')}:row:{row_index}",
+                    "table_row_id": f"{element.get('element_id')}:row:{data_index}",
                     "table_headers": header_text,
                     "table_caption": _table_caption_from_element_text(text),
                     "table_row_prefix": row_prefix,
