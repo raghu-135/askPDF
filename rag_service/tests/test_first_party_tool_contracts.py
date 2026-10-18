@@ -269,7 +269,7 @@ async def test_search_knowledge_chunk_level_preserves_reading_order_after_rerank
 async def test_search_knowledge_lists_omitted_source_ids_when_hits_exceed_budget(monkeypatch):
     _patch_ready_manifest(monkeypatch)
     hits = [
-        _knowledge_chunk(f"src-{index}", "x" * 2000, table_id="table-1" if index == 0 else None)
+        _knowledge_chunk(f"src-{index}", "x" * 6000, table_id="table-1" if index == 0 else None)
         for index in range(20)
     ]
     fake_db = SimpleNamespace(search_knowledge_sources=AsyncMock(return_value=hits))
@@ -429,6 +429,7 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
         get_manifest_by_id=AsyncMock(return_value=SimpleNamespace(
             manifest_id="manifest-file-1",
             source_version="ready-file-1",
+            chunking_fingerprint="chunk-1",
         )),
     )
     monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
@@ -439,7 +440,11 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
             "manifest_ready": True,
             "ready": True,
             "source_version": "ready-file-1",
-            "manifest": SimpleNamespace(manifest_id="manifest-file-1", source_version="ready-file-1"),
+            "manifest": SimpleNamespace(
+                manifest_id="manifest-file-1",
+                source_version="ready-file-1",
+                chunking_fingerprint="chunk-1",
+            ),
         }
 
     monkeypatch.setattr(
@@ -515,6 +520,7 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
         get_manifest_by_id=AsyncMock(return_value=SimpleNamespace(
             manifest_id="manifest-file-1",
             source_version="ready-file-1",
+            chunking_fingerprint="chunk-1",
         )),
     )
     monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
@@ -525,7 +531,11 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
             "manifest_ready": True,
             "ready": True,
             "source_version": "ready-file-1",
-            "manifest": SimpleNamespace(manifest_id="manifest-file-1", source_version="ready-file-1"),
+            "manifest": SimpleNamespace(
+                manifest_id="manifest-file-1",
+                source_version="ready-file-1",
+                chunking_fingerprint="chunk-1",
+            ),
         }),
     )
     monkeypatch.setattr(
@@ -802,7 +812,11 @@ async def test_read_context_uses_selected_chunk_manifest_version(monkeypatch):
             "manifest-file-1": "version-selected",
             "manifest-file-2": "version-other",
         }
-        return SimpleNamespace(manifest_id=manifest_id, source_version=versions[manifest_id])
+        return SimpleNamespace(
+            manifest_id=manifest_id,
+            source_version=versions[manifest_id],
+            chunking_fingerprint="chunk-1",
+        )
 
     repo = SimpleNamespace(
         get=AsyncMock(return_value=SimpleNamespace(
@@ -822,13 +836,21 @@ async def test_read_context_uses_selected_chunk_manifest_version(monkeypatch):
                 "ready": True,
                 "canonical_ready": True,
                 "source_version": "version-selected",
-                "manifest": SimpleNamespace(manifest_id="manifest-file-1", source_version="version-selected"),
+                "manifest": SimpleNamespace(
+                    manifest_id="manifest-file-1",
+                    source_version="version-selected",
+                    chunking_fingerprint="chunk-1",
+                ),
             }
         return {
             "ready": True,
             "canonical_ready": True,
             "source_version": "version-other",
-            "manifest": SimpleNamespace(manifest_id="manifest-file-2", source_version="version-other"),
+            "manifest": SimpleNamespace(
+                manifest_id="manifest-file-2",
+                source_version="version-other",
+                chunking_fingerprint="chunk-1",
+            ),
         }
 
     monkeypatch.setattr("app.services.document_projection_service.evaluate_retrieval_readiness", readiness)

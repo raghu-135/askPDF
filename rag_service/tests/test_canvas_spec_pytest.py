@@ -62,11 +62,21 @@ def valid_spec():
                         "relation": "contradicts",
                         "left": {
                             "text": "Paper A claims X.",
-                            "citation": {"kind": "document", "label": "A", "file_hash": "file-a"},
+                            "citation": {
+                                "kind": "document",
+                                "label": "A",
+                                "file_hash": "file-a",
+                                "sentence_id": 2,
+                            },
                         },
                         "right": {
                             "text": "Paper B denies X.",
-                            "citation": {"kind": "document", "label": "B", "file_hash": "file-b"},
+                            "citation": {
+                                "kind": "document",
+                                "label": "B",
+                                "file_hash": "file-b",
+                                "sentence_id": 3,
+                            },
                         },
                     },
                 ],

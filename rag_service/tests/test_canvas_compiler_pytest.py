@@ -6,6 +6,46 @@ from app.models.canvas_draft import CanvasCompileError, CanvasPublishDraft
 from app.services.canvas_compiler import compile_canvas_draft
 
 
+@pytest.fixture(autouse=True)
+def _isolate_canvas_compiler_db_session():
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return None
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return []
+
+    class BeginCtx:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def begin(self):
+            return BeginCtx()
+
+        async def execute(self, *_args, **_kwargs):
+            return FakeResult()
+
+    class SessionMaker:
+        def __call__(self):
+            return FakeSession()
+
+    with patch("app.services.canvas_compiler.async_session_maker", SessionMaker()):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_compile_matrix_draft_builds_sources_and_table():
     draft = CanvasPublishDraft.model_validate({
