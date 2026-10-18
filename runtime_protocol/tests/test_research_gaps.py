@@ -1,4 +1,5 @@
 from runtime_protocol.research_gaps import (
+    canvas_draft_grounded_in_manifest,
     dedupe_critic_issues,
     filter_false_canvas_absence_limitations,
     filter_stale_index_readiness_gaps,
@@ -127,3 +128,15 @@ def test_web_evidence_plan_gaps_respects_guidance_waiver():
         "off",
         "Skip web benchmarks and use the PDF only.",
     ) == []
+
+
+def test_canvas_draft_grounded_in_manifest_requires_manifest_source_id():
+    manifest = [{"source_id": "doc:" + "a" * 32 + ":c-page-1"}]
+    grounded = {
+        "claims": [{"text": "Fact", "source_ids": ["doc:" + "a" * 32 + ":c-page-1"]}],
+    }
+    ungrounded = {
+        "claims": [{"text": "Invented", "source_ids": ["doc:" + "b" * 32 + ":c-0"]}],
+    }
+    assert canvas_draft_grounded_in_manifest(grounded, manifest) is True
+    assert canvas_draft_grounded_in_manifest(ungrounded, manifest) is False

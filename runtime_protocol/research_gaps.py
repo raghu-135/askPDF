@@ -286,6 +286,56 @@ def finalize_canvas_answer_prose(
     return original
 
 
+def _manifest_source_aliases(entry: Mapping[str, Any]) -> set[str]:
+    aliases: set[str] = set()
+    for key in ("source_id", "id", "canonical_source_id"):
+        raw = str(entry.get(key) or "").strip()
+        if raw:
+            aliases.add(raw)
+    file_hash = str(entry.get("file_hash") or entry.get("document_id") or "").strip()
+    chunk_id = str(entry.get("chunk_id") or entry.get("source_id") or "").strip()
+    if file_hash and chunk_id.startswith("src_"):
+        aliases.add(chunk_id)
+        aliases.add(f"doc:{file_hash}:c-{chunk_id.removeprefix('src_')}")
+    return aliases
+
+
+def manifest_source_id_set(manifest: Any) -> set[str]:
+    ids: set[str] = set()
+    if not isinstance(manifest, list):
+        return ids
+    for entry in manifest:
+        if isinstance(entry, Mapping):
+            ids |= _manifest_source_aliases(entry)
+    return ids
+
+
+def canvas_draft_grounded_in_manifest(draft: Mapping[str, Any], manifest: Any) -> bool:
+    """True when at least one claim cites a manifest-backed document source id."""
+    manifest_ids = manifest_source_id_set(manifest)
+    if not manifest_ids:
+        return False
+    claims = draft.get("claims") if isinstance(draft.get("claims"), list) else []
+    for claim in claims:
+        if not isinstance(claim, Mapping):
+            continue
+        source_ids = claim.get("source_ids") if isinstance(claim.get("source_ids"), list) else []
+        for raw in source_ids:
+            source_id = str(raw or "").strip()
+            if not source_id:
+                continue
+            if source_id in manifest_ids:
+                return True
+            if source_id.startswith("doc:"):
+                for manifest_id in manifest_ids:
+                    if manifest_id.startswith("doc:") and source_id.split(":", 2)[1:2] == manifest_id.split(":", 2)[1:2]:
+                        if source_id == manifest_id or source_id.endswith(manifest_id.split(":", 2)[-1]):
+                            return True
+            if source_id.startswith("src_") and source_id in manifest_ids:
+                return True
+    return False
+
+
 def dedupe_critic_issues(issues: list[str], gaps: list[str]) -> list[str]:
     gap_keys = {normalize_limitation_key(value) for value in gaps if str(value).strip()}
     gap_keys = {value for value in gap_keys if value}

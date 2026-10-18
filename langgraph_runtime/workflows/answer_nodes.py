@@ -273,12 +273,27 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         and draft
         and str(state.get("final_answer") or "").strip()
     ):
-        published = await publish_deep_research_canvas_draft(
-            draft,
-            state=state,
-            config=config,
-            node=WorkflowNodeType.FINALIZER.value,
-        )
+        from runtime_protocol.research_gaps import canvas_draft_grounded_in_manifest
+
+        manifest = state.get("task_evidence_manifest") or []
+        if state.get("task_canvas_publish_required") and not canvas_draft_grounded_in_manifest(draft, manifest):
+            published = {
+                "ok": False,
+                "error": {
+                    "code": "publish_canvas_ungrounded",
+                    "message": (
+                        "The canvas draft does not cite retrieved document evidence from this run. "
+                        "Publish was blocked to avoid a fabricated summary."
+                    ),
+                },
+            }
+        else:
+            published = await publish_deep_research_canvas_draft(
+                draft,
+                state=state,
+                config=config,
+                node=WorkflowNodeType.FINALIZER.value,
+            )
         if published and published.get("id"):
             canvas_update = {
                 "task_canvas_published": True,
