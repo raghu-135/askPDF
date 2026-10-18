@@ -114,7 +114,7 @@ def test_builtin_requires_document_tool_call_before_no_evidence_claim() -> None:
         (Path(__file__).parents[1] / "app/workflow_catalog/builtins/hermes_rag_agent.json").read_text()
     )
     prompt = definition["spec_json"]["config"]["system_prompt"]
-    assert "exact namespaced names" in prompt
+    assert "Hermes wire names `mcp__<server>__<tool>`" in prompt
     assert "Tool-discovery results" in prompt and "navigation metadata, not document evidence" in prompt
     assert "only successful search_knowledge or read_context results are evidence" in prompt
     assert {"get_thread_shape", "search_knowledge", "inspect_document", "read_context"}.issubset(
