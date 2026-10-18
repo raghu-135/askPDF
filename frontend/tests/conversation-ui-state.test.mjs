@@ -9,7 +9,7 @@ import {
 test('decision panel ratio remains within canonical bounds', () => {
   assert.equal(clampDecisionPanelRatio(-1), 0.16);
   assert.equal(clampDecisionPanelRatio(0.3), 0.3);
-  assert.equal(clampDecisionPanelRatio(2), 0.58);
+  assert.equal(clampDecisionPanelRatio(2), 0.82);
 });
 
 test('composer button preserves send spinner and stop transitions', () => {

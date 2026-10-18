@@ -94,7 +94,23 @@ export function ResizableDecisionPanel({
       }}>
         {children}
       </Box>
-      {footer ? <Box sx={{ flexShrink: 0, px: 1, pb: 1, minHeight: 0 }}>{footer}</Box> : null}
+      {footer ? (
+        <Box sx={{
+          flexShrink: 0,
+          px: 1,
+          pb: 1,
+          pt: 0.5,
+          minHeight: 0,
+          borderTop: '1px solid',
+          borderColor: 'divider',
+          bgcolor: 'background.paper',
+          position: 'sticky',
+          bottom: 0,
+          zIndex: 2,
+        }}>
+          {footer}
+        </Box>
+      ) : null}
     </Box>
   );
 }

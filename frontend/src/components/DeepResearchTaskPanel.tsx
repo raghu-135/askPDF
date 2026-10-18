@@ -85,6 +85,7 @@ import {
   DeepResearchProvisionalAnswer,
 } from './conversation/DeepResearchDecisionContent';
 import {
+  budgetUsageFromInterrupt,
   budgetUsageFromTask,
   countReviewIssues,
   effectiveObjectiveRequestsLiveWeb,
@@ -393,7 +394,7 @@ export default function DeepResearchTaskPanel({
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
   const panelRef = useRef<HTMLDivElement>(null);
-  const { ratio: reviewPanelRatio, resizing: reviewPanelResizing, onResizeStart: onReviewPanelResizeStart } = useResizablePanelRatio(panelRef, 0.58);
+  const { ratio: reviewPanelRatio, resizing: reviewPanelResizing, onResizeStart: onReviewPanelResizeStart } = useResizablePanelRatio(panelRef, 0.48);
   const selectedRun = runs[runIndex] || null;
   const selectedCapabilitiesState = useAgentRunCapabilities(selectedRun?.id, threadId, `${selectedRun?.status}:${selectedRun?.runtime_binding_status}:${selectedRun?.pending_interrupt?.interrupt_id}:${selectedRun?.pending_interrupt?.status}:${selectedRun?.pending_interrupt?.resume_version}:${task?.version}`);
   const activeCapabilitiesState = useAgentRunCapabilities(
@@ -573,7 +574,7 @@ export default function DeepResearchTaskPanel({
           void refresh().catch((value) => setError(String(value)));
           return;
         }
-        if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(type)) void refresh();
+        if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.|task\.budget_updated)/.test(type)) void refresh();
         if (shouldRefreshAgentTaskTimeline(payload)) {
           void refreshTimeline(taskId, runId).catch((value) => setError(String(value)));
         }
@@ -733,7 +734,10 @@ export default function DeepResearchTaskPanel({
     && effectiveObjectiveRequestsLiveWeb(task.objective, reviewGuidanceTexts),
   );
   const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
-  const liveBudgetSnapshot = useMemo(() => budgetUsageFromTask(task), [task]);
+  const liveBudgetSnapshot = useMemo(
+    () => budgetUsageFromInterrupt(pendingInterrupt, task) ?? budgetUsageFromTask(task),
+    [pendingInterrupt, task],
+  );
   const reviewTodoTitles = useMemo(() => {
     const map: Record<string, string> = {};
     todos.forEach((todo) => {
@@ -915,7 +919,7 @@ export default function DeepResearchTaskPanel({
       {frozen && task && <Alert severity="info" sx={{ mb: 1 }} icon={false}>
         Model, agent, and context window are locked for this task. Start a new Deep Research task to change them.
       </Alert>}
-      {liveBudgetSnapshot && task && !pendingInterrupt && <Box sx={{ mb: 1 }}>
+      {liveBudgetSnapshot && task && <Box sx={{ mb: 1 }}>
         <DeepResearchBudgetChips snapshot={liveBudgetSnapshot} />
       </Box>}
       {task?.research_canvases?.length ? (

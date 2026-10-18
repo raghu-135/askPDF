@@ -1,7 +1,7 @@
 export const clampDecisionPanelRatio = (
   ratio: number,
   min = 0.16,
-  max = 0.58,
+  max = 0.82,
 ) => Math.max(min, Math.min(max, ratio));
 
 export type ConversationComposerButtonState = {

@@ -63,6 +63,12 @@ function AgentRunDebugPanel({
   const pendingInterrupt = runDetails?.pending_interrupt;
   const isTaskOwnedRun = isTaskOwnedAgentRun(runDetails);
   const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? InterruptStatus.Pending : undefined);
+  const runTerminal = ['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(
+    String(runDetails?.status || ''),
+  );
+  const showPendingInterruptBanner = Boolean(
+    pendingInterrupt && !runTerminal && interruptStatus === InterruptStatus.Pending,
+  );
   const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
     ? pendingInterrupt.allowed_actions.map(String)
     : [];
@@ -403,7 +409,7 @@ function AgentRunDebugPanel({
           )}
         </Box>
       )}
-      {pendingInterrupt && (
+      {showPendingInterruptBanner && (
         <Box
           sx={{
             mx: 1,
