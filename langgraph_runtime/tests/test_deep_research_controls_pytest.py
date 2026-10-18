@@ -39,6 +39,11 @@ def test_read_context_expansion_synonyms_are_coerced():
         {"source_id": "src-1", "expansion": "expand"},
     )
     assert payload["expansion"] == "section"
+    payload = coerce_tool_arguments(
+        "read_context",
+        {"source_id": "src-1", "expansion": "long"},
+    )
+    assert payload["expansion"] == "section"
 
 
 def test_usage_summary_unwraps_structured_output_raw():

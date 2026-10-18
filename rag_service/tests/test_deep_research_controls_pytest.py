@@ -16,3 +16,16 @@ def test_inspect_document_request_coerces_int_cursor():
     req = InspectDocumentRequest(document_id="doc-1", cursor=0)
     assert isinstance(req.cursor, str)
     assert req.cursor
+
+
+def test_inspect_document_request_coerces_string_digit_cursor():
+    req = InspectDocumentRequest(document_id="doc-1", cursor="0")
+    assert isinstance(req.cursor, str)
+    assert req.cursor
+
+
+def test_read_context_request_coerces_long_expansion():
+    from app.tools.contracts import ReadContextRequest
+
+    req = ReadContextRequest(source_id="src_abc", expansion="long")
+    assert req.expansion == "section"
