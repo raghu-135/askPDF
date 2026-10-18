@@ -201,11 +201,11 @@ def test_table_projection_does_not_invent_headers_for_native_cells():
     assert structure["rows"] == [["A", "B"]]
 
 
-def test_pipeline_versions_are_extraction_v7_and_table_pack_v8():
+def test_pipeline_versions_are_extraction_v11_and_table_pack_v9():
     from app.services.document_pipeline import EXTRACTION_PIPELINE_VERSION, RETRIEVAL_CHUNKING_VERSION
 
     assert EXTRACTION_PIPELINE_VERSION == "docling-pdf-v11"
-    assert RETRIEVAL_CHUNKING_VERSION == "table-pack-v8"
+    assert RETRIEVAL_CHUNKING_VERSION == "table-pack-v9"
 
 
 def test_default_sentence_split_uses_spacy_sents_not_tokens():
