@@ -59,7 +59,8 @@ def _assert_contract(payload, *, tool_name: str, caller_node: str = "test_node",
     for key in artifact_keys:
         assert key in payload["artifacts"]
     if warning:
-        assert warning in payload["warnings"]
+        expected = warning.value if hasattr(warning, "value") else warning
+        assert expected in payload["warnings"]
 
 
 def _context(**overrides):

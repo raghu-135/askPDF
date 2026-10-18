@@ -119,7 +119,11 @@ async def test_compile_accepts_src_prefixed_source_id():
             new=AsyncMock(return_value=(None, [1], True)),
         ),
     ):
-        spec = await compile_canvas_draft(draft, thread_file_hashes={file_hash})
+        spec = await compile_canvas_draft(
+            draft,
+            thread_file_hashes={file_hash},
+            embedding_model="embed-1",
+        )
     assert spec.title == "Src id"
 
 

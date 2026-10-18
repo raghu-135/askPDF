@@ -191,7 +191,10 @@ class TestNetworkFailureScenarios:
         """Test handling of slow network during model dimension probing."""
         registry = EmbeddingModelRegistry()
         
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
+        with (
+            patch("app.db.vector.model_registry.get_embedding_model") as mock_get_model,
+            patch("app.db.vector.model_registry.should_use_local_embeddings", return_value=True),
+        ):
             mock_model = MagicMock()
             
             # Simulate slow response
