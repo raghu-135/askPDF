@@ -1007,12 +1007,7 @@ async def test_warning_paths_still_return_valid_tool_contracts(monkeypatch):
     from app.tools.web_search import search_web as search_web_handler
 
     monkeypatch.setattr("app.mcp.server.persist_tool_audit", AsyncMock())
-    context = ToolInvocationContext.from_mapping(
-        {
-            **_config(caller_node="web_worker", route="web")["configurable"],
-            "use_web_search": False,
-        }
-    )
+    context = _context(caller_node="web_worker", route="web", use_web_search=False)
     raw = await search_web_handler(QueryRequest(query="latest diffusion"), context)
     payload = normalize_tool_result(raw.to_json(), tool_name="search_web")
 

@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.models.canvas import CanvasCitation
 from app.models.canvas_draft import CanvasCompileError, CanvasPublishDraft
 from app.services.canvas_compiler import compile_canvas_draft
 
@@ -109,15 +110,16 @@ async def test_compile_accepts_src_prefixed_source_id():
         "title": "Src id",
         "claims": [{"text": "Claim", "source_ids": [source_id]}],
     })
-    with (
-        patch(
-            "app.services.canvas_compiler._canonicalize_draft_source_id",
-            new=AsyncMock(return_value=f"doc:{file_hash}:{source_id}"),
-        ),
-        patch(
-            "app.services.canvas_compiler._readable_sentence_ids_for_chunk",
-            new=AsyncMock(return_value=(None, [1], True)),
-        ),
+    citation = CanvasCitation(
+        kind="document",
+        label="Claim",
+        file_hash=file_hash,
+        sentence_id=1,
+        sentence_ids=[1],
+    )
+    with patch(
+        "app.services.canvas_compiler._resolve_src_alias",
+        new=AsyncMock(return_value=(citation, None)),
     ):
         spec = await compile_canvas_draft(
             draft,
