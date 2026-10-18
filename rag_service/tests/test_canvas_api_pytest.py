@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import func, select
 
-from app.db.connection_sqlmodel import async_session_maker
+from app.db import connection_sqlmodel
 from app.db.models_sqlmodel import AgentTask, AgentTaskArtifact
 from app.db.repositories.message_repo_sqlmodel import MessageRepository
 from app.models.canvas import RESEARCH_CANVAS_ARTIFACT_KIND, RESEARCH_CANVAS_MEDIA_TYPE
@@ -72,7 +72,7 @@ class TestCanvasApi:
         assert fetched.status_code == 200
         assert fetched.json()["spec"]["sections"][0]["blocks"][0]["type"] == "stat"
 
-        async with async_session_maker() as session:
+        async with connection_sqlmodel.async_session_maker() as session:
             artifact = (
                 await session.execute(select(AgentTaskArtifact).where(AgentTaskArtifact.id == canvas_id))
             ).scalar_one()
@@ -96,7 +96,7 @@ class TestCanvasApi:
     async def test_supersede_and_message_projection(self, client):
         thread = await client.post("/api/threads", json={"name": "Canvas messages"})
         thread_id = thread.json()["id"]
-        async with async_session_maker() as session:
+        async with connection_sqlmodel.async_session_maker() as session:
             turn = await MessageRepository(session=session).create_turn(
                 thread_id=thread_id,
                 question="Compare the papers",

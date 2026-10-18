@@ -337,6 +337,19 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         monkeypatch.setattr(db_api, attr, None)
 
 
+def _patch_main_background_workers(monkeypatch, main_module) -> None:
+    """Keep API tests from starting DB-backed background loops on the app loop."""
+
+    async def idle_background_worker(stop_event, **_kwargs):
+        await stop_event.wait()
+
+    monkeypatch.setattr(main_module, "run_task_worker", idle_background_worker)
+    monkeypatch.setattr(main_module, "conversion_job_worker", idle_background_worker)
+    monkeypatch.setattr(main_module, "embedding_job_worker", idle_background_worker)
+    monkeypatch.setattr(main_module, "_memory_maintenance_loop", idle_background_worker)
+    monkeypatch.setattr(main_module, "_runtime_readiness_loop", idle_background_worker)
+
+
 @pytest.fixture(scope="function")
 def api_client(test_database_url, monkeypatch) -> Generator:
     """Create a sync FastAPI test client wired to the isolated test database."""
@@ -368,10 +381,7 @@ def api_client(test_database_url, monkeypatch) -> Generator:
 
     import main as main_module
 
-    async def idle_task_worker(*, stop_event, **_kwargs):
-        await stop_event.wait()
-
-    monkeypatch.setattr(main_module, "run_task_worker", idle_task_worker)
+    _patch_main_background_workers(monkeypatch, main_module)
     # The isolated fixture owns test schema creation. Production startup must
     # not call SQLModel.metadata.create_all; migrations are the schema authority.
     asyncio.run(_create_test_schema(engine))
@@ -419,10 +429,7 @@ async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[Asy
 
     import main as main_module
 
-    async def idle_task_worker(*, stop_event, **_kwargs):
-        await stop_event.wait()
-
-    monkeypatch.setattr(main_module, "run_task_worker", idle_task_worker)
+    _patch_main_background_workers(monkeypatch, main_module)
     app = main_module.app
 
     try:
