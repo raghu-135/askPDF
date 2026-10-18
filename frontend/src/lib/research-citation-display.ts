@@ -63,7 +63,6 @@ export function rewriteDocCitationTokens(content: string, displayMap: Map<string
     const label = (displayMap.size ? displayMap.get(id) : undefined) || String(humanLabel || '').trim();
     return `${label} (\`${id}\`)`;
   });
-  if (!displayMap.size) return result;
   displayMap.forEach((label, id) => {
     const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const replacement = `${label} (\`${id}\`)`;
@@ -74,7 +73,7 @@ export function rewriteDocCitationTokens(content: string, displayMap: Map<string
   result = result.replace(docPattern, (match) => {
     if (displayMap.has(match)) return `${displayMap.get(match)!} (\`${match}\`)`;
     const fallback = docIdFallbackLabel(match);
-    return fallback ? `${fallback} (\`${match}\`)` : match;
+    return fallback || match;
   });
   const parenDocPattern = /\((doc:[^:\s)]+:[^\s),]+)\)/gi;
   result = result.replace(parenDocPattern, (match, sourceId: string) => {

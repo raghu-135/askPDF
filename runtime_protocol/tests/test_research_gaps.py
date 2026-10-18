@@ -76,6 +76,26 @@ def test_strip_false_canvas_limitations_block_removes_retest_variant_wording():
     assert strip_false_canvas_limitations_block(text) == "Evidence summary."
 
 
+def test_finalize_canvas_answer_prose_never_returns_empty_when_published():
+    from runtime_protocol.research_gaps import finalize_canvas_answer_prose
+
+    limitations_only = (
+        "Limitations: No draft answer content present for evaluation; "
+        "No citations or document references are provided in the draft answer."
+    )
+    cleaned = finalize_canvas_answer_prose(limitations_only, canvas_published=True)
+    assert cleaned
+    assert "Limitations" not in cleaned
+
+
+def test_canvas_publish_outcome_reads_state_flags():
+    from runtime_protocol.research_gaps import canvas_publish_outcome
+
+    assert canvas_publish_outcome({"task_canvas_published": True}) == "published"
+    assert canvas_publish_outcome({"task_canvas_publish_failed": {"code": "x"}}) == "failed"
+    assert canvas_publish_outcome({}) == "not_attempted"
+
+
 def test_filter_false_canvas_absence_limitations_rejects_evaluator_draft_denials():
     issues = [
         "No draft answer content present for evaluation",

@@ -57,11 +57,27 @@ const bboxOverlapRatio = (left: BBox, right: BBox): number => {
   return smaller > 0 ? intersection / smaller : 0;
 };
 
-export const dedupeOverlappingBBoxes = (boxes: BBox[], overlapThreshold = 0.85): BBox[] => {
-  const sorted = [...boxes].sort((left, right) => bboxArea(left) - bboxArea(right));
+const bboxContainmentRatio = (inner: BBox, outer: BBox): number => {
+  if (inner.page !== outer.page) return 0;
+  const overlapWidth = Math.max(0, Math.min(inner.x + inner.width, outer.x + outer.width) - Math.max(inner.x, outer.x));
+  const overlapHeight = Math.max(0, Math.min(inner.y + inner.height, outer.y + outer.height) - Math.max(inner.y, outer.y));
+  const intersection = overlapWidth * overlapHeight;
+  const innerArea = bboxArea(inner);
+  return innerArea > 0 ? intersection / innerArea : 0;
+};
+
+export const dedupeOverlappingBBoxes = (
+  boxes: BBox[],
+  overlapThreshold = 0.85,
+  containmentThreshold = 0.8,
+): BBox[] => {
+  const sorted = [...boxes].sort((left, right) => bboxArea(right) - bboxArea(left));
   const kept: BBox[] = [];
   for (const candidate of sorted) {
-    if (kept.some((existing) => bboxOverlapRatio(candidate, existing) >= overlapThreshold)) {
+    if (kept.some((existing) => (
+      bboxContainmentRatio(candidate, existing) >= containmentThreshold
+      || bboxOverlapRatio(candidate, existing) >= overlapThreshold
+    ))) {
       continue;
     }
     kept.push(candidate);

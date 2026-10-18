@@ -62,6 +62,7 @@ UNIT_TEST_FILES = [
     "test_control_plane_import_boundary_pytest.py",
     "test_research_gaps_protocol_pytest.py",
     "test_runtime_protocol_package_pytest.py",
+    "test_table_row_bbox_pytest.py",
     "test_hermes_builder_provider_pytest.py",
     "test_hermes_compose_profile_pytest.py",
     "test_hermes_profile_pytest.py",

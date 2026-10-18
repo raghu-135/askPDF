@@ -117,10 +117,10 @@ def strip_prose_publish_canvas(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
-def strip_false_canvas_absence_prose(text: str) -> str:
+def strip_false_canvas_absence_prose(text: str, *, canvas_published: bool = False) -> str:
     """Remove chat lines that deny canvas/citations when a draft was captured."""
 
-    from runtime_protocol.research_gaps import strip_false_canvas_limitations_block
+    from runtime_protocol.research_gaps import finalize_canvas_answer_prose, strip_false_canvas_limitations_block
 
     stripped = strip_false_canvas_limitations_block(str(text or ""))
     kept = [
@@ -128,7 +128,8 @@ def strip_false_canvas_absence_prose(text: str) -> str:
         for line in stripped.splitlines()
         if not _FALSE_CANVAS_ABSENCE_LINE.match(line)
     ]
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    return finalize_canvas_answer_prose(cleaned, canvas_published=canvas_published)
 
 
 def strip_unpublished_canvas_claims(text: str) -> str:
@@ -353,6 +354,10 @@ async def synthesize_with_canvas_publish(
         answer = f"{answer}\n\n{notice}".strip() if answer else notice
     elif emit_enabled and not published and publish_calls == 0:
         answer = strip_unpublished_canvas_claims(answer)
+    if published:
+        from runtime_protocol.research_gaps import finalize_canvas_answer_prose
+
+        answer = finalize_canvas_answer_prose(answer, canvas_published=True)
     return {
         "answer": answer,
         "response": last_response,

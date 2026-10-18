@@ -97,6 +97,16 @@ def test_strip_false_canvas_absence_prose_removes_denials_when_draft_exists():
     assert "28.4" in cleaned
 
 
+def test_strip_false_canvas_absence_prose_uses_fallback_when_only_false_denials_and_published():
+    text = (
+        "Limitations: No draft answer content present for evaluation; "
+        "No citations or document references are provided in the draft answer."
+    )
+    cleaned = strip_false_canvas_absence_prose(text, canvas_published=True)
+    assert cleaned
+    assert "Limitations" not in cleaned
+
+
 def test_strip_false_canvas_absence_prose_removes_limitations_block_exact_retest_wording():
     text = (
         "Evidence summary.\n\n"

@@ -321,13 +321,10 @@ def _bbox_height(bbox: Mapping[str, Any]) -> float:
         return 0.0
 
 
-def _tighten_sentence_bbox_from_words(sentence: dict[str, Any]) -> None:
-    words = sentence.get("words") or []
-    if not words or not isinstance(words, list):
-        return
-    bboxes = sentence.get("bboxes") or []
-    if not bboxes or _bbox_height(bboxes[0]) <= 40:
-        return
+def _line_bboxes_from_words(sentence: dict[str, Any], words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not words:
+        return []
+
     def _line_bbox(line_words: list[dict[str, Any]]) -> dict[str, Any]:
         line_x0 = min(float(w.get("x0", 0)) for w in line_words)
         line_y0 = min(float(w.get("top", 0)) for w in line_words)
@@ -358,10 +355,56 @@ def _tighten_sentence_bbox_from_words(sentence: dict[str, Any]) -> None:
         else:
             current_line.append(word)
     line_bboxes.append(_line_bbox(current_line))
-    if line_bboxes:
-        sentence["bboxes"] = line_bboxes
-        sentence["bbox"] = line_bboxes[0]
-        sentence["page"] = line_bboxes[0].get("page")
+    return line_bboxes
+
+
+def _apply_sentence_bbox_from_words(sentence: dict[str, Any], words: list[dict[str, Any]] | None = None) -> bool:
+    source_words = list(words or sentence.get("words") or [])
+    if not source_words:
+        return False
+    line_bboxes = _line_bboxes_from_words(sentence, source_words)
+    if not line_bboxes:
+        return False
+    sentence["bboxes"] = line_bboxes
+    sentence["bbox"] = line_bboxes[0]
+    sentence["page"] = line_bboxes[0].get("page")
+    return True
+
+
+def _tighten_sentence_bbox_from_words(sentence: dict[str, Any]) -> None:
+    bboxes = sentence.get("bboxes") or []
+    if not bboxes or _bbox_height(bboxes[0]) <= 40:
+        return
+    _apply_sentence_bbox_from_words(sentence)
+
+
+def _words_matching_sentence_text(words: list[dict[str, Any]], sentence_text: str) -> list[dict[str, Any]]:
+    target = _normalize_match_text(sentence_text)
+    if not target or not words:
+        return []
+    by_line: dict[float, list[dict[str, Any]]] = {}
+    for word in words:
+        try:
+            top = round(float(word.get("top", 0)), 1)
+        except (TypeError, ValueError):
+            continue
+        by_line.setdefault(top, []).append(word)
+    matched: list[dict[str, Any]] = []
+    target_tokens = {token for token in target.split() if token}
+    for line_words in sorted(by_line.values(), key=lambda row: float(row[0].get("top", 0))):
+        line_text = _normalize_match_text(" ".join(str(word.get("text") or "") for word in line_words))
+        if not line_text:
+            continue
+        if line_text in target or target in line_text:
+            matched.extend(line_words)
+            continue
+        line_tokens = {token for token in line_text.split() if token}
+        overlap = target_tokens & line_tokens
+        if not overlap:
+            continue
+        if len(overlap) >= max(1, min(len(target_tokens), len(line_tokens)) // 2):
+            matched.extend(line_words)
+    return matched
 
 
 def _split_shared_oversized_table_bboxes(sentences: list[dict[str, Any]]) -> None:
@@ -395,23 +438,19 @@ def _split_shared_oversized_table_bboxes(sentences: list[dict[str, Any]]) -> Non
             y1 = float(parent.get("y1", y0))
         except (TypeError, ValueError):
             continue
-        total_height = max(0.0, y1 - y0)
-        if total_height <= 45:
-            continue
-        row_height = total_height / len(members)
-        for row_index, (_sentence_index, sentence) in enumerate(members):
-            row_y0 = y0 + row_index * row_height
-            row_y1 = row_y0 + row_height
-            row_bbox = {
-                **dict(parent),
-                "x0": x0,
-                "y0": row_y0,
-                "x1": x1,
-                "y1": row_y1,
-            }
-            sentence["bboxes"] = [row_bbox]
-            sentence["bbox"] = row_bbox
-            sentence["page"] = parent.get("page", sentence.get("page"))
+        word_pool: list[dict[str, Any]] = []
+        for _sentence_index, sentence in members:
+            word_pool.extend(sentence.get("words") or [])
+        for _sentence_index, sentence in members:
+            bboxes = sentence.get("bboxes") or []
+            if not bboxes or _bbox_height(bboxes[0]) <= 45:
+                continue
+            text = str(sentence.get("text") or "")
+            if _apply_sentence_bbox_from_words(sentence):
+                continue
+            row_words = _words_matching_sentence_text(word_pool, text)
+            if row_words:
+                _apply_sentence_bbox_from_words(sentence, row_words)
 
 
 def _apply_provenance_bbox_fallback(
