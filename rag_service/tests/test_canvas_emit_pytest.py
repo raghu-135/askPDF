@@ -93,8 +93,11 @@ def test_hitl_canvas_publish_asks_before_durable_write():
 @pytest.mark.asyncio
 async def test_publish_canvas_rejects_invalid_components(monkeypatch):
     monkeypatch.setattr("app.tools.publish_canvas.get_thread_files", AsyncMock(return_value=[]))
-    invalid = PublishCanvasRequest.model_validate(
-        {"spec": {**valid_spec(), "sections": [{"title": "Bad", "blocks": [{"type": "iframe", "src": "https://evil.example"}]}]}}
+    invalid = PublishCanvasRequest.model_construct(
+        spec={
+            **valid_spec(),
+            "sections": [{"title": "Bad", "blocks": [{"type": "iframe", "src": "https://evil.example"}]}],
+        },
     )
     invalid_result = await invoke_publish_canvas(
         invalid,

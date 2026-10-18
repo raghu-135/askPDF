@@ -269,8 +269,13 @@ async def test_search_knowledge_chunk_level_preserves_reading_order_after_rerank
 async def test_search_knowledge_lists_omitted_source_ids_when_hits_exceed_budget(monkeypatch):
     _patch_ready_manifest(monkeypatch)
     hits = [
-        _knowledge_chunk(f"src-{index}", "x" * 6000, table_id="table-1" if index == 0 else None)
-        for index in range(20)
+        _knowledge_chunk(
+            f"src-{index}",
+            "x" * 6000,
+            table_id="table-1" if index == 0 else None,
+            chunk_index=index,
+        )
+            for index in range(20)
     ]
     fake_db = SimpleNamespace(search_knowledge_sources=AsyncMock(return_value=hits))
 
