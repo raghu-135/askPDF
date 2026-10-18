@@ -135,8 +135,13 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         "canvas_published": published["published"],
     }
     log_node_end(state, node_name, started, data)
+    from runtime_protocol.research_gaps import finalize_canvas_answer_prose
+
+    answer_text = published["answer"]
+    if published.get("published"):
+        answer_text = finalize_canvas_answer_prose(answer_text, canvas_published=True)
     update: Dict[str, Any] = {
-        "final_answer": published["answer"],
+        "final_answer": answer_text,
         "reasoning": published["reasoning"],
         "reasoning_available": published["reasoning_available"],
         "reasoning_format": published["reasoning_format"],
@@ -144,6 +149,11 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
     }
     if published.get("published"):
         update["task_canvas_published"] = True
+    elif int(published.get("publish_tool_calls") or 0) > 0:
+        update["task_canvas_publish_failed"] = {
+            "code": "publish_canvas_failed",
+            "message": "The research canvas could not be published for this answer.",
+        }
     return update
 
 
@@ -312,9 +322,9 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         data["canvas_ref"] = canvas_update["task_canvas_ref"]
     final_answer = str(state.get("final_answer") or "")
     if canvas_update.get("task_canvas_published"):
-        from runtime_protocol.research_gaps import strip_false_canvas_limitations_block
+        from runtime_protocol.research_gaps import finalize_canvas_answer_prose
 
-        final_answer = strip_false_canvas_limitations_block(final_answer)
+        final_answer = finalize_canvas_answer_prose(final_answer, canvas_published=True)
         data["answer_chars"] = len(final_answer)
         data["output_preview"] = {"answer": compact_preview(final_answer)}
     log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)

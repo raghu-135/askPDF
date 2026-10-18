@@ -15,6 +15,12 @@ test('rewriteDocCitationTokens replaces doc ids with readable labels', () => {
   assert.match(rewritten, /`doc:hash:3`/);
 });
 
+test('rewriteDocCitationTokens applies fallback labels without a display map', () => {
+  const rewritten = rewriteDocCitationTokens('See doc:abc1234567890123456789012345678:c-12 for detail.', new Map());
+  assert.match(rewritten, /document, section c-12/);
+  assert.doesNotMatch(rewritten, /doc:abc1234567890123456789012345678:c-12(?!\))/);
+});
+
 test('rewriteDocCitationTokens normalizes combined pdf page and doc id parentheses', () => {
   const map = buildCitationDisplayMap([
     { source_id: 'doc:abc:c-0', file_name: 'zephyr.pdf', page: 1 },

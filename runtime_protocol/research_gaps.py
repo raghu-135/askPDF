@@ -229,7 +229,7 @@ def filter_false_canvas_absence_limitations(issues: list[str]) -> list[str]:
 
 def strip_false_canvas_limitations_block(text: str) -> str:
     raw = str(text or "")
-    match = re.search(r"\n\nLimitations:\s*(.+)$", raw, flags=re.IGNORECASE | re.DOTALL)
+    match = re.search(r"(?:^|\n\n)Limitations:\s*(.+)$", raw, flags=re.IGNORECASE | re.DOTALL)
     if not match:
         return raw.strip()
     prefix = raw[:match.start()].rstrip()
@@ -238,6 +238,52 @@ def strip_false_canvas_limitations_block(text: str) -> str:
     if not kept:
         return prefix
     return f"{prefix}\n\nLimitations: {'; '.join(kept)}".strip()
+
+
+_CANVAS_PUBLISH_CHAT_FALLBACK = "Published a research canvas with cited claims from your documents."
+
+
+def canvas_publish_outcome(state: Mapping[str, Any] | None) -> str:
+    if not isinstance(state, Mapping):
+        return "not_attempted"
+    if state.get("task_canvas_published"):
+        return "published"
+    if state.get("task_canvas_publish_failed"):
+        return "failed"
+    for warning in state.get("task_result_warnings") or []:
+        if isinstance(warning, Mapping) and warning.get("code") == "research_canvas_publish_failed":
+            return "failed"
+    return "not_attempted"
+
+
+def canvas_publish_outcome_note(state: Mapping[str, Any] | None) -> str:
+    outcome = canvas_publish_outcome(state)
+    if outcome == "published":
+        return "Canvas publish outcome: published (research canvas artifact is on this thread)."
+    if outcome == "failed":
+        failed = state.get("task_canvas_publish_failed") if isinstance(state, Mapping) else None
+        message = ""
+        if isinstance(failed, Mapping):
+            message = str(failed.get("message") or "").strip()
+        return (
+            "Canvas publish outcome: failed."
+            + (f" {message}" if message else " The research canvas was not published.")
+        )
+    return "Canvas publish outcome: not attempted (no published research canvas for this run)."
+
+
+def finalize_canvas_answer_prose(
+    text: str,
+    *,
+    canvas_published: bool = False,
+) -> str:
+    original = str(text or "").strip()
+    cleaned = strip_false_canvas_limitations_block(original)
+    if cleaned.strip():
+        return cleaned
+    if canvas_published:
+        return _CANVAS_PUBLISH_CHAT_FALLBACK
+    return original
 
 
 def dedupe_critic_issues(issues: list[str], gaps: list[str]) -> list[str]:

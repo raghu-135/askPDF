@@ -35,10 +35,10 @@ test('transformSentences omits placeholder boxes when coordinates are missing', 
   assert.deepEqual(transformed[0].bboxes, []);
 });
 
-test('dedupeOverlappingBBoxes keeps the smaller precise box', () => {
+test('dedupeOverlappingBBoxes drops line boxes contained in a paragraph box', () => {
   const precise = { page: 1, x: 10, y: 20, width: 30, height: 10, page_width: 400, page_height: 600 };
   const coarse = { page: 1, x: 8, y: 18, width: 40, height: 16, page_width: 400, page_height: 600 };
-  assert.deepEqual(dedupeOverlappingBBoxes([coarse, precise]), [precise]);
+  assert.deepEqual(dedupeOverlappingBBoxes([coarse, precise]), [coarse]);
 });
 
 test('deriveBBoxes drops boxes without page dimensions instead of emitting 0x0', () => {
