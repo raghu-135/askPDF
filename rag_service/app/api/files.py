@@ -478,14 +478,8 @@ async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str, bac
 
         parsed_data = await get_file_parsed_sentences(file_hash)
         from app.services.document_projection_service import evaluate_document_freshness
-        from app.services.file_processing_service import refresh_reading_projection_if_stale
-
         freshness = await evaluate_document_freshness(file_hash, thread.embedding_model, require_reading=True)
         if parsed_data and not (freshness.get("canonical_ready") and freshness.get("reading_ready")):
-            if await refresh_reading_projection_if_stale(file_hash):
-                refreshed = await get_file_parsed_sentences(file_hash)
-                if refreshed is not None:
-                    return refreshed
             file = await get_file(file_hash)
             if file:
                 await queue_file_processing(

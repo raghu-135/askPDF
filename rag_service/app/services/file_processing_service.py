@@ -37,9 +37,6 @@ from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
 
-# Bump when serve/publish-time reading overlay logic changes (row boxes, alignment display).
-READING_PROJECTION_VERSION = "2.0+rowbox-3"
-
 
 async def _enqueue_pdf_conversion(file_hash: str, filename: str) -> None:
     store = get_content_store()
@@ -71,7 +68,7 @@ async def publish_reading_projection(file_hash: str, parsed_data: Dict[str, Any]
         document_json if isinstance(document_json, dict) else None,
     )
     payload = {
-        "version": READING_PROJECTION_VERSION,
+        "version": "2.0",
         "sentences": sentences,
         "generation": str(generation),
         "extraction_fingerprint": str(fingerprint),
@@ -79,44 +76,12 @@ async def publish_reading_projection(file_hash: str, parsed_data: Dict[str, Any]
     current = await get_file_parsed_sentences(file_hash)
     if (
         isinstance(current, dict)
-        and current.get("version") == READING_PROJECTION_VERSION
         and current.get("generation") == payload["generation"]
         and current.get("extraction_fingerprint") == payload["extraction_fingerprint"]
         and isinstance(current.get("sentences"), list)
     ):
         return True
     return await update_file_parsed_sentences(file_hash, json.dumps(payload))
-
-
-async def republish_reading_projection_from_canonical(file_hash: str) -> bool:
-    """Re-apply serve-time reading overlays from persisted canonical JSON (no re-parse)."""
-    canonical = await get_canonical_document_repo().get(file_hash)
-    if canonical is None or canonical.status != "completed":
-        return False
-    document_json = canonical.document_json if isinstance(canonical.document_json, dict) else {}
-    reading = document_json.get("reading_projection")
-    if not isinstance(reading, list):
-        return False
-    return await publish_reading_projection(
-        file_hash,
-        {
-            "generation": canonical.generation,
-            "extraction_fingerprint": canonical.extraction_fingerprint,
-            "sentences": reading,
-        },
-    )
-
-
-async def refresh_reading_projection_if_stale(file_hash: str) -> bool:
-    """Republish reading cache when canonical is current but the overlay version is stale."""
-    from app.services.document_projection_service import evaluate_document_freshness
-
-    freshness = await evaluate_document_freshness(file_hash, require_reading=True)
-    if not freshness.get("canonical_ready") or freshness.get("reading_ready"):
-        return bool(freshness.get("reading_ready"))
-    if freshness.get("reason") != "reading_stale":
-        return False
-    return await republish_reading_projection_from_canonical(file_hash)
 
 
 def _default_file_status(file_hash: str) -> Dict[str, Any]:
@@ -207,13 +172,6 @@ async def queue_file_processing(
     if canonical and canonical.status == "completed" and freshness.get("canonical_ready") and freshness.get("reading_ready"):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
-    elif canonical and canonical.status == "completed" and freshness.get("canonical_ready") and not freshness.get("reading_ready"):
-        if await refresh_reading_projection_if_stale(file_hash):
-            if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
-                await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
-        elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
-            await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
-            background_tasks.add_task(_background_parse, file_hash, file_name, backend_url, indexing_metadata or {})
     elif not FileSourceType.uses_pdf_conversion(source_type) and parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
@@ -273,13 +231,6 @@ async def queue_project_file_processing(
     if canonical and canonical.status == "completed" and freshness.get("canonical_ready") and freshness.get("reading_ready"):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
-    elif canonical and canonical.status == "completed" and freshness.get("canonical_ready") and not freshness.get("reading_ready"):
-        if await refresh_reading_projection_if_stale(file_hash):
-            if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
-                await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
-        elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
-            await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
-            background_tasks.add_task(_background_parse, file_hash, file_name, "", indexing_metadata or {})
     elif not FileSourceType.uses_pdf_conversion(source_type) and parsed_data and isinstance(parsed_data.get("sentences"), list):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
