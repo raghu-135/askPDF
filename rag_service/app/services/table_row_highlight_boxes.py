@@ -72,10 +72,20 @@ def _normalized_raw_cells(element: Mapping[str, Any]) -> list[dict[str, Any]]:
             "row_span": row_end - row_start,
             "col_start": col_start,
             "col_end": col_end,
+            "row_header": bool(raw_cell.get("row_header")),
             "text": str(raw_cell.get("text") or ""),
             "raw_cell": raw_cell,
         })
     return normalized
+
+
+def _cell_is_row_header(cell: Mapping[str, Any]) -> bool:
+    if bool(cell.get("row_header")):
+        return True
+    try:
+        return int(cell.get("col_start", -1)) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _grid_row_from_table_row_id(sentence: Mapping[str, Any], element: Mapping[str, Any]) -> int | None:
@@ -138,31 +148,42 @@ def _row_highlight_box(
     page_height: float,
     table_bounds: tuple[float, float, float, float],
 ) -> dict[str, Any] | None:
-    xs: list[float] = []
-    ys: list[float] = []
-    table_x0, table_y0, table_x1, table_y1 = table_bounds
+    single_row_body_ys: list[float] = []
+    single_row_all_ys: list[float] = []
+    spanning_ys: list[float] = []
+    row_touched = False
+    table_x0, _table_y0, table_x1, _table_y1 = table_bounds
     for cell in cells:
         raw_cell = cell["raw_cell"]
         bbox = _bbox_from_raw_cell(raw_cell, page_height)
         if bbox is None:
             continue
-        x0, y0, x1, y1 = bbox
+        _x0, y0, _x1, y1 = bbox
         row_start = int(cell["row_start"])
         row_end = int(cell["row_end"])
         row_span = int(cell["row_span"])
-        if row_start == grid_row and row_span == 1:
-            xs.extend([x0, x1])
-            ys.extend([y0, y1])
-        elif row_start <= grid_row < row_end and row_span > 1:
-            xs.extend([x0, x1])
-    if not ys and not xs:
+        if row_start > grid_row or grid_row >= row_end:
+            continue
+        row_touched = True
+        if row_span == 1 and row_start == grid_row:
+            single_row_all_ys.extend([y0, y1])
+            if not _cell_is_row_header(cell):
+                single_row_body_ys.extend([y0, y1])
+        elif row_span > 1:
+            spanning_ys.extend([y0, y1])
+    if not row_touched:
+        return None
+    if single_row_body_ys:
+        y_values = single_row_body_ys
+    elif single_row_all_ys:
+        y_values = single_row_all_ys
+    else:
+        y_values = spanning_ys
+    if not y_values:
         return None
     x0 = table_x0
     x1 = table_x1
-    if not ys:
-        y0, y1 = table_y0, table_y1
-    else:
-        y0, y1 = min(ys), max(ys)
+    y0, y1 = min(y_values), max(y_values)
     if x1 <= x0 or y1 <= y0:
         return None
     return {
