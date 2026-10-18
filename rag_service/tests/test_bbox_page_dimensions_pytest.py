@@ -1,9 +1,10 @@
 from app.services.document_conversion_service import (
-    _align_coordinates,
+    _align_sentences_to_cells,
     _apply_page_dimensions_to_sentences,
     _bbox_within_page,
     _bboxes_from_element_provenance,
 )
+from app.services.parsing_service import DoclingParseResult
 
 
 def test_provenance_bboxes_include_page_dimensions_and_stay_inside_page():
@@ -42,30 +43,36 @@ def test_apply_page_dimensions_stamps_aligned_sentence_boxes():
     assert sentences[0]["page_height"] == 600.0
 
 
-def test_align_coordinates_stamps_page_sizes_on_provenance_fallback():
+def test_align_sentences_to_cells_stamps_page_sizes_on_provenance_fallback():
     page_dimensions = {1: (612.0, 792.0)}
     element = {
         "element_id": "el-1",
+        "element_type": "text",
+        "text": "OCR-only sentence with no word cells.",
         "provenance": [
             {
                 "page_no": 1,
                 "bbox": {"l": 72.0, "t": 700.0, "r": 300.0, "b": 680.0},
             }
         ],
+        "raw": {},
     }
     canonical = [
         {
-            "text": "OCR-only sentence with no pdfplumber match.",
+            "element_type": "text",
+            "text": "OCR-only sentence with no word cells.",
             "pages": [1],
             "source_element_ids": ["el-1"],
+            "source_spans": [{"start": 0, "end": len("OCR-only sentence with no word cells.")}],
             "bboxes": [],
         }
     ]
-    aligned = _align_coordinates(
+    parse_result = DoclingParseResult(document=None, page_sizes=page_dimensions, word_cells_by_page={})
+    aligned = _align_sentences_to_cells(
         canonical,
-        [],
+        parse_result,
         elements_by_id={"el-1": element},
-        page_dimensions=page_dimensions,
+        docling_json={},
     )
     box = aligned[0]["bboxes"][0]
     assert box["page_width"] > 0

@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import re
 import asyncio
 import logging
-import unicodedata
-from difflib import SequenceMatcher
-from typing import Any, Mapping
+from collections import defaultdict
+from typing import Any, Mapping, Sequence
 
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
 from app.services.document_pipeline import (
@@ -23,8 +21,7 @@ from app.services.document_pipeline import (
     stable_identity,
     sentence_pipeline_identity,
 )
-from app.services.document_extraction_contract import extraction_configuration
-from app.services.parsing_service import parse_with_docling, parse_with_pdfplumber
+from app.services.parsing_service import DoclingParseResult, extraction_configuration, parse_with_docling
 
 
 logger = logging.getLogger(__name__)
@@ -38,30 +35,46 @@ def conversion_filename(file_name: str | None) -> str:
     return raw if raw.lower().endswith(".pdf") else f"{raw}.pdf"
 
 
-def _normalise(text: str) -> str:
-    return " ".join(str(text or "").split()).casefold()
+_ALIGNMENT_CHAR_MAP: dict[str, str] = {
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": "'",
+    "\u201b": "'",
+    "\u2032": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u201e": '"',
+    "\u2033": '"',
+    "\u2010": "-",
+    "\u2011": "-",
+    "\u2012": "-",
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2015": "-",
+    "\u2212": "-",
+    "\u00ad": "",
+    "\ufb00": "ff",
+    "\ufb01": "fi",
+    "\ufb02": "fl",
+    "\ufb03": "ffi",
+    "\ufb04": "ffl",
+    "\u00a0": " ",
+    "\u2022": "-",
+}
 
 
-_LIGATURE_REPLACEMENTS = (
-    ("ﬁ", "fi"),
-    ("ﬂ", "fl"),
-    ("ﬀ", "ff"),
-    ("ﬃ", "ffi"),
-    ("ﬄ", "ffl"),
-)
-
-
-def _normalize_match_text(text: str) -> str:
-    """Normalize text for near-exact sentence alignment (whitespace, unicode, hyphenation)."""
-    value = unicodedata.normalize("NFKC", str(text or ""))
-    for source, target in _LIGATURE_REPLACEMENTS:
-        value = value.replace(source, target)
-    value = value.replace("\u00ad", "")
-    value = re.sub(r"-\s*\n\s*", "", value)
-    value = re.sub(r"-\s+", "", value)
-    value = re.sub(r"\s+", " ", value)
-    value = re.sub(r"\s*([,.;:!?])\s*", r"\1", value)
-    return value.casefold().strip()
+def _normalize_alignment_text(text: str) -> tuple[str, list[int]]:
+    """Strip whitespace and map unicode for deterministic cell alignment."""
+    out: list[str] = []
+    index_map: list[int] = []
+    for index, char in enumerate(str(text or "")):
+        replacement = _ALIGNMENT_CHAR_MAP.get(char, char)
+        for mapped in replacement:
+            if mapped.isspace():
+                continue
+            out.append(mapped)
+            index_map.append(index)
+    return "".join(out), index_map
 
 
 def _bbox_has_area(bbox: Any) -> bool:
@@ -99,48 +112,6 @@ def _positive_dimension(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
-
-
-def _page_size_map_from_pdf(data: bytes) -> dict[int, tuple[float, float]]:
-    import pdfplumber
-
-    sizes: dict[int, tuple[float, float]] = {}
-    with pdfplumber.open(io.BytesIO(data)) as pdf:
-        for index, page in enumerate(pdf.pages):
-            width = _positive_dimension(page.width)
-            height = _positive_dimension(page.height)
-            if width and height:
-                sizes[index + 1] = (width, height)
-    return sizes
-
-
-def _page_dimensions_from_candidates(candidates: list[dict[str, Any]]) -> dict[int, tuple[float, float]]:
-    dimensions: dict[int, tuple[float, float]] = {}
-    for candidate in candidates:
-        width = _positive_dimension(candidate.get("page_width"))
-        height = _positive_dimension(candidate.get("page_height"))
-        if not width or not height:
-            continue
-        for page in _pages(candidate):
-            dimensions[page] = (width, height)
-        page = candidate.get("page")
-        if page not in (None, ""):
-            try:
-                dimensions[int(page)] = (width, height)
-            except (TypeError, ValueError):
-                pass
-        for bbox in candidate.get("bboxes") or []:
-            if not isinstance(bbox, Mapping):
-                continue
-            box_width = _positive_dimension(bbox.get("page_width")) or width
-            box_height = _positive_dimension(bbox.get("page_height")) or height
-            box_page = bbox.get("page")
-            if box_page not in (None, ""):
-                try:
-                    dimensions[int(box_page)] = (box_width, box_height)
-                except (TypeError, ValueError):
-                    pass
-    return dimensions
 
 
 def _merge_page_dimensions(*maps: Mapping[int, tuple[float, float]]) -> dict[int, tuple[float, float]]:
@@ -351,57 +322,313 @@ def _pages(value: Mapping[str, Any]) -> set[int]:
     return result
 
 
-def _verified_text_match(target: str, candidate: str) -> bool:
-    """Accept a near-exact full-sentence match after normalization."""
-    left = _normalize_match_text(target)
-    right = _normalize_match_text(candidate)
-    if not left or not right:
-        return False
-    if left == right:
-        return True
-    shorter, longer = sorted((left, right), key=len)
-    if shorter in longer and len(shorter) / max(len(longer), 1) >= 0.85:
-        return True
-    return SequenceMatcher(None, left, right).ratio() >= 0.94
+def _provenance_box_topleft(
+    prov: Mapping[str, Any],
+    page_height: float,
+) -> tuple[float, float, float, float, int] | None:
+    bbox_data = prov.get("bbox")
+    if not isinstance(bbox_data, Mapping):
+        return None
+    try:
+        page = int(prov.get("page_no"))
+        left = float(bbox_data["l"])
+        top = float(bbox_data["t"])
+        right = float(bbox_data["r"])
+        bottom = float(bbox_data["b"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    origin = str(bbox_data.get("coord_origin") or "BOTTOMLEFT").upper()
+    if origin == "BOTTOMLEFT":
+        x0, y0, x1, y1 = _convert_bottomleft_to_topleft((left, top, right, bottom), page_height)
+    else:
+        x0, y0, x1, y1 = left, top, right, bottom
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return x0, y0, x1, y1, page
 
 
-def _candidate_compatible(sentence: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
-    pages = _pages(sentence)
-    candidate_pages = _pages(candidate)
-    if pages and candidate_pages and not pages.intersection(candidate_pages):
-        return False
-    if sentence.get("label") and candidate.get("label") and sentence.get("label") != candidate.get("label"):
-        return False
-    sentence_refs = {str(value) for value in sentence.get("source_element_refs") or [] if value}
-    candidate_ref = str(candidate.get("source_ref") or "")
-    if sentence_refs and candidate_ref and candidate_ref not in sentence_refs:
-        return False
-    return True
+def _resolve_docling_ref(ref: str, docling_json: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    parts = ref.lstrip("#/").split("/")
+    if len(parts) != 2:
+        return None
+    collection = docling_json.get(parts[0])
+    if not isinstance(collection, list):
+        return None
+    try:
+        item = collection[int(parts[1])]
+    except (IndexError, TypeError, ValueError):
+        return None
+    return item if isinstance(item, Mapping) else None
 
 
-def _merge_candidate_span(candidates: list[Mapping[str, Any]]) -> dict[str, Any]:
-    texts = [str(item.get("text") or "") for item in candidates]
-    merged_text = " ".join(part for part in texts if part).strip()
-    bboxes: list[dict[str, Any]] = []
-    for item in candidates:
-        raw = item.get("bboxes") or []
-        if isinstance(raw, list):
-            bboxes.extend([box for box in raw if isinstance(box, Mapping)])
-        elif isinstance(item.get("bbox"), Mapping):
-            bboxes.append(dict(item["bbox"]))
-    merged: dict[str, Any] = {"text": merged_text, "bboxes": bboxes}
-    for key in ("bbox", "page_width", "page_height", "words", "font", "page", "label", "source_ref"):
-        for item in candidates:
-            if item.get(key) not in (None, [], ""):
-                merged[key] = item[key]
-                break
-    pages: set[int] = set()
-    for item in candidates:
-        pages.update(_pages(item))
-    if pages:
-        merged["pages"] = sorted(pages)
-        merged["page"] = sorted(pages)[0]
-    return merged
+def _provenance_from_raw_tree(raw: Mapping[str, Any], docling_json: Mapping[str, Any]) -> list[dict[str, Any]]:
+    entries = [
+        dict(prov)
+        for prov in raw.get("prov") or []
+        if isinstance(prov, Mapping) and prov.get("bbox")
+    ]
+    if entries:
+        return entries
+    for child in raw.get("children") or []:
+        if not isinstance(child, Mapping):
+            continue
+        ref = child.get("$ref")
+        if not ref:
+            continue
+        resolved = _resolve_docling_ref(str(ref), docling_json)
+        if resolved is not None:
+            entries.extend(_provenance_from_raw_tree(resolved, docling_json))
+    return entries
+
+
+def _ensure_elements_have_provenance(
+    elements: Sequence[Mapping[str, Any]],
+    docling_json: Mapping[str, Any],
+) -> None:
+    for element in elements:
+        if any(isinstance(prov, Mapping) and prov.get("bbox") for prov in element.get("provenance") or []):
+            continue
+        raw = element.get("raw")
+        if not isinstance(raw, Mapping):
+            continue
+        recovered = _provenance_from_raw_tree(raw, docling_json)
+        if recovered:
+            element["provenance"] = recovered
+
+
+def _element_alignment_markers(element: Mapping[str, Any], docling_json: Mapping[str, Any]) -> list[str]:
+    raw = element.get("raw")
+    if not isinstance(raw, Mapping):
+        return []
+    explicit = raw.get("_alignment_markers")
+    if isinstance(explicit, list):
+        return [str(value) for value in explicit if str(value).strip()]
+
+    def walk(node: Mapping[str, Any]) -> list[str]:
+        markers: list[str] = []
+        marker = node.get("marker")
+        if marker not in (None, ""):
+            markers.append(str(marker))
+        for child in node.get("children") or []:
+            if not isinstance(child, Mapping):
+                continue
+            ref = child.get("$ref")
+            if ref:
+                resolved = _resolve_docling_ref(str(ref), docling_json)
+                if resolved is not None:
+                    markers.extend(walk(resolved))
+        return markers
+
+    return [value for value in walk(raw) if value.strip()]
+
+
+def _assign_word_cells_to_elements(
+    elements: Sequence[Mapping[str, Any]],
+    word_cells_by_page: Mapping[int, Sequence[Mapping[str, Any]]],
+    page_sizes: Mapping[int, tuple[float, float]],
+) -> dict[str, list[dict[str, Any]]]:
+    boxes_by_page: dict[int, list[tuple[float, str, float, float, float, float]]] = defaultdict(list)
+    for element in elements:
+        if str(element.get("element_type") or "").casefold() == "table":
+            continue
+        element_id = str(element.get("element_id") or "")
+        if not element_id:
+            continue
+        for prov in element.get("provenance") or []:
+            if not isinstance(prov, Mapping):
+                continue
+            page_no = prov.get("page_no")
+            try:
+                page = int(page_no)
+            except (TypeError, ValueError):
+                continue
+            page_height = float(page_sizes.get(page, (612.0, 792.0))[1])
+            bounds = _provenance_box_topleft(prov, page_height)
+            if bounds is None:
+                continue
+            x0, y0, x1, y1, _page = bounds
+            area = (x1 - x0) * (y1 - y0)
+            boxes_by_page[page].append((area, element_id, x0, x1, y0, y1))
+
+    owned: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for page, cells in word_cells_by_page.items():
+        for cell in cells:
+            cx = (float(cell["x0"]) + float(cell["x1"])) / 2.0
+            cy = (float(cell["top"]) + float(cell["bottom"])) / 2.0
+            hits = sorted(
+                hit
+                for hit in boxes_by_page.get(int(page), [])
+                if hit[2] <= cx <= hit[3] and hit[4] <= cy <= hit[5]
+            )
+            if not hits:
+                continue
+            owner = hits[0][1]
+            owned[owner].append(dict(cell, page=int(page)))
+    return owned
+
+
+def _group_cells_into_lines(
+    cells: Sequence[Mapping[str, Any]],
+    page_sizes: Mapping[int, tuple[float, float]],
+) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    for cell in cells:
+        page = int(cell["page"])
+        width, height = page_sizes.get(page, (612.0, 792.0))
+        cell_height = float(cell["bottom"]) - float(cell["top"])
+        current = lines[-1] if lines else None
+        if (
+            current
+            and int(current["page"]) == page
+            and float(cell["x0"]) >= float(current["x1"]) - 1.0
+            and abs(float(cell["top"]) - float(current["y0"])) < 0.5 * cell_height
+        ):
+            current["x1"] = max(float(current["x1"]), float(cell["x1"]))
+            current["y1"] = max(float(current["y1"]), float(cell["bottom"]))
+            current["y0"] = min(float(current["y0"]), float(cell["top"]))
+            continue
+        lines.append(
+            {
+                "page": page,
+                "x0": float(cell["x0"]),
+                "y0": float(cell["top"]),
+                "x1": float(cell["x1"]),
+                "y1": float(cell["bottom"]),
+                "page_width": width,
+                "page_height": height,
+            }
+        )
+    return lines
+
+
+def _align_sentence_to_owned_cells(
+    sentence: Mapping[str, Any],
+    element: Mapping[str, Any],
+    owned_cells: Sequence[Mapping[str, Any]],
+    *,
+    docling_json: Mapping[str, Any],
+    page_sizes: Mapping[int, tuple[float, float]],
+) -> list[dict[str, Any]] | None:
+    if not owned_cells:
+        return None
+    element_text = str(element.get("text") or "").strip()
+    element_norm, element_index_map = _normalize_alignment_text(element_text)
+    if not element_norm:
+        return None
+
+    cell_norm_parts: list[str] = []
+    cell_char_to_cell: list[int] = []
+    cell_final_hyphen: list[bool] = []
+    for cell_index, cell in enumerate(owned_cells):
+        cell_norm, _ = _normalize_alignment_text(str(cell.get("text") or ""))
+        cell_norm_parts.append(cell_norm)
+        cell_final_hyphen.extend([False] * (len(cell_norm) - 1) + ([cell_norm.endswith("-")] if cell_norm else []))
+        cell_char_to_cell.extend([cell_index] * len(cell_norm))
+    cells_norm = "".join(cell_norm_parts)
+    if not cells_norm:
+        return None
+
+    pending_markers = [
+        _normalize_alignment_text(marker)[0]
+        for marker in _element_alignment_markers(element, docling_json)
+        if _normalize_alignment_text(marker)[0]
+    ]
+
+    char_to_cell_index: list[int | None] = [None] * len(element_norm)
+    element_pos = 0
+    cell_pos = 0
+    while element_pos < len(element_norm) and cell_pos < len(cells_norm):
+        if element_norm[element_pos] == cells_norm[cell_pos]:
+            char_to_cell_index[element_pos] = cell_char_to_cell[cell_pos]
+            element_pos += 1
+            cell_pos += 1
+        elif cell_final_hyphen[cell_pos]:
+            cell_pos += 1
+        elif pending_markers and cells_norm.startswith(pending_markers[0], cell_pos):
+            cell_pos += len(pending_markers.pop(0))
+        else:
+            return None
+    if element_pos < len(element_norm):
+        return None
+
+    spans = sentence.get("source_spans") or []
+    if not spans:
+        return None
+    span = spans[0] if isinstance(spans[0], Mapping) else None
+    if span is None:
+        return None
+    try:
+        span_start = int(span["start"])
+        span_end = int(span["end"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    norm_start = next((index for index, original in enumerate(element_index_map) if original >= span_start), None)
+    norm_end = max(
+        (index for index, original in enumerate(element_index_map) if original < span_end),
+        default=None,
+    )
+    if norm_start is None or norm_end is None:
+        return None
+    start_cell = char_to_cell_index[norm_start]
+    end_cell = char_to_cell_index[norm_end]
+    if start_cell is None or end_cell is None:
+        return None
+    used_cells = list(owned_cells[start_cell : end_cell + 1])
+    return _group_cells_into_lines(used_cells, page_sizes)
+
+
+def _align_sentences_to_cells(
+    canonical_sentences: list[dict[str, Any]],
+    parse_result: DoclingParseResult,
+    *,
+    elements_by_id: Mapping[str, Mapping[str, Any]],
+    docling_json: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Attach Docling word-cell coordinates without changing canonical sentence text."""
+    page_sizes = dict(parse_result.page_sizes or {})
+    elements = list(elements_by_id.values())
+    docling = docling_json if isinstance(docling_json, Mapping) else {}
+    _ensure_elements_have_provenance(elements, docling)
+    owned_cells = _assign_word_cells_to_elements(elements, parse_result.word_cells_by_page, page_sizes)
+
+    for sentence in canonical_sentences:
+        if str(sentence.get("element_type") or "").casefold() == "table":
+            continue
+        element_ids = sentence.get("source_element_ids") or []
+        element_id = str(element_ids[0]) if element_ids else ""
+        element = elements_by_id.get(element_id)
+        if element is None:
+            sentence.setdefault("alignment_precision", "coarse")
+            continue
+        lines = _align_sentence_to_owned_cells(
+            sentence,
+            element,
+            owned_cells.get(element_id, []),
+            docling_json=docling,
+            page_sizes=page_sizes,
+        )
+        if not lines:
+            sentence.setdefault("alignment_precision", "coarse")
+            continue
+        sentence["bboxes"] = lines
+        sentence["bbox"] = lines[0]
+        sentence["page"] = lines[0].get("page")
+        sentence["page_width"] = lines[0].get("page_width")
+        sentence["page_height"] = lines[0].get("page_height")
+        pages = sorted({int(line["page"]) for line in lines})
+        if pages:
+            sentence["pages"] = pages
+        sentence["alignment_precision"] = "exact"
+
+    _apply_provenance_bbox_fallback(
+        canonical_sentences,
+        elements_by_id=elements_by_id,
+        page_dimensions=page_sizes,
+    )
+    if page_sizes:
+        _apply_page_dimensions_to_sentences(canonical_sentences, page_sizes)
+    return canonical_sentences
 
 
 def current_extraction_fingerprint(data: bytes, *, merge_multi_bbox: bool = True) -> str:
@@ -456,71 +683,6 @@ async def enqueue_pdf_conversion(
         force_rebuild=force_rebuild or same_target_invalid,
         retry_failed=retry_failed,
     )
-
-
-def _align_coordinates(
-    canonical_sentences: list[dict[str, Any]],
-    coordinate_candidates: list[dict[str, Any]],
-    *,
-    elements_by_id: Mapping[str, Mapping[str, Any]] | None = None,
-    page_dimensions: Mapping[int, tuple[float, float]] | None = None,
-    max_span: int = 6,
-) -> list[dict[str, Any]]:
-    """Attach pdfplumber coordinates without replacing canonical Docling text."""
-    candidates = list(coordinate_candidates or [])
-    dimensions = _merge_page_dimensions(
-        page_dimensions or {},
-        _page_dimensions_from_candidates(candidates),
-    )
-    search_from = 0
-    for sentence in canonical_sentences:
-        target_text = str(sentence.get("text") or "")
-        target = _normalize_match_text(target_text)
-        if not target:
-            sentence.setdefault("alignment_precision", "coarse")
-            continue
-        best: dict[str, Any] | None = None
-        best_score = 0.0
-        best_end = search_from
-        for start in range(search_from, len(candidates)):
-            span: list[Mapping[str, Any]] = []
-            for end in range(start, min(start + max_span, len(candidates))):
-                candidate = candidates[end]
-                if not _candidate_compatible(sentence, candidate):
-                    break
-                span.append(candidate)
-                merged = _merge_candidate_span(span)
-                candidate_text = _normalize_match_text(str(merged.get("text") or ""))
-                if not candidate_text:
-                    continue
-                if not _verified_text_match(target_text, str(merged.get("text") or "")):
-                    continue
-                score = SequenceMatcher(None, target, candidate_text).ratio()
-                if score >= best_score:
-                    best = merged
-                    best_score = score
-                    best_end = end
-                if target == candidate_text:
-                    break
-            if best is not None and target == _normalize_match_text(str(best.get("text") or "")):
-                break
-        if best is None:
-            sentence.setdefault("alignment_precision", "coarse")
-            continue
-        for key in ("bbox", "bboxes", "page_width", "page_height", "words", "font", "page", "pages"):
-            if best.get(key) not in (None, [], ""):
-                sentence[key] = best[key]
-        sentence["alignment_precision"] = "exact"
-        search_from = best_end + 1
-    if elements_by_id:
-        _apply_provenance_bbox_fallback(
-            canonical_sentences,
-            elements_by_id=elements_by_id,
-            page_dimensions=dimensions,
-        )
-    if dimensions:
-        _apply_page_dimensions_to_sentences(canonical_sentences, dimensions)
-    return canonical_sentences
 
 
 async def convert_pdf_and_project(
@@ -605,11 +767,11 @@ async def convert_pdf_and_project(
     heartbeat_task = asyncio.create_task(renew_claim())
     try:
         safe_name = conversion_filename(file_name)
-        docling_doc = await asyncio.to_thread(parse_with_docling, data, safe_name)
-        if docling_doc is None:
+        parse_result = await asyncio.to_thread(parse_with_docling, data, safe_name)
+        if parse_result is None:
             raise RuntimeError("Docling conversion returned no document")
         payload = build_canonical_payload(
-            docling_doc,
+            parse_result.document,
             filename=safe_name,
             source_metadata=source,
             document_identity=file_hash,
@@ -618,33 +780,17 @@ async def convert_pdf_and_project(
         payload["sections"] = sections
         payload["elements"] = elements
 
-        # Persist the reading projection together with the canonical payload so
-        # cache hits retain the exact pdfplumber alignment used for highlighting.
-        coordinate_candidates = await asyncio.to_thread(
-            parse_with_pdfplumber,
-            data,
-            docling_doc,
-            safe_name,
-            merge_multi_bbox=merge_multi_bbox,
-        )
-        # Docling remains authoritative for text, sentence identity, OCR, and
-        # structure. pdfplumber contributes coordinates only when a candidate
-        # can be aligned to an individual canonical sentence.
         sentences = project_sentences(payload)
-        page_dimensions = _merge_page_dimensions(
-            _page_size_map_from_pdf(data),
-            _page_dimensions_from_candidates(coordinate_candidates or []),
-        )
         elements_by_id = {
             str(item.get("element_id")): item
             for item in elements
             if isinstance(item, Mapping) and item.get("element_id")
         }
-        sentences = _align_coordinates(
+        sentences = _align_sentences_to_cells(
             sentences,
-            coordinate_candidates or [],
+            parse_result,
             elements_by_id=elements_by_id,
-            page_dimensions=page_dimensions,
+            docling_json=payload.get("docling") if isinstance(payload.get("docling"), Mapping) else {},
         )
         payload["reading_projection"] = sentences
         published = await repo.complete_conversion(
@@ -672,8 +818,6 @@ async def convert_pdf_and_project(
                 }
             raise RuntimeError("canonical conversion claim was lost before publication")
 
-        # pdfplumber is used only to align words/coordinates to canonical text.
-        # It never replaces the canonical text or structure.
         return {"version": "2.0", "sentences": sentences, "generation": generation, "extraction_fingerprint": fingerprint}
     except Exception as exc:
         await repo.fail_conversion(
@@ -692,9 +836,13 @@ async def convert_pdf_and_project(
 
 
 __all__ = [
+    "_align_sentences_to_cells",
     "_apply_page_dimensions_to_sentences",
+    "_assign_word_cells_to_elements",
     "_bbox_within_page",
     "_bboxes_from_element_provenance",
+    "_group_cells_into_lines",
+    "_normalize_alignment_text",
     "conversion_filename",
     "convert_pdf_and_project",
     "current_extraction_contract_fingerprint",

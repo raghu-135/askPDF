@@ -77,7 +77,7 @@ defaults and comments.
 ## Document processing
 
 Docling, OCR, table extraction, formula enrichment, Poppler, Tesseract,
-pdfplumber, PyMuPDF, and spaCy are configured through the DOCLING_* and related
+PyMuPDF and spaCy are configured through the DOCLING_* and related
 processing variables.
 
 Uploads are content-addressed. The default content root is `/static` inside
