@@ -63,6 +63,7 @@ UNIT_TEST_FILES = [
     "test_research_gaps_protocol_pytest.py",
     "test_runtime_protocol_package_pytest.py",
     "test_highlight_retrieval_invariant_pytest.py",
+    "test_table_row_projection_pytest.py",
     "test_hermes_builder_provider_pytest.py",
     "test_hermes_compose_profile_pytest.py",
     "test_hermes_profile_pytest.py",
