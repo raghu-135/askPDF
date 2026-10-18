@@ -2,7 +2,7 @@
 
 ## PDF highlight geometry vs retrieval
 
-Highlight and coordinate alignment (bbox, page dimensions, pdfplumber overlays) are **display-only** relative to retrieval. They must **not** change canonical sentence text, chunk boundaries, `body_text`, or `contextualized_text` used for embedding.
+Highlight and coordinate alignment (bbox, page dimensions, Docling word-cell overlays) are **display-only** relative to retrieval. They must **not** change canonical sentence text, chunk boundaries, `body_text`, or `contextualized_text` used for embedding.
 
 Highlight-only fixes belong in the frontend or in non-chunking metadata on sentences. Do **not** bump `EXTRACTION_PIPELINE_VERSION` or `RETRIEVAL_CHUNKING_VERSION` for highlight-only work unless sentence text or chunk packing logic actually changes.
 
