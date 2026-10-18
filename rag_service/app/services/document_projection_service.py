@@ -238,10 +238,12 @@ async def evaluate_document_freshness(
         return result
 
     if require_reading:
+        from app.services.file_processing_service import READING_PROJECTION_VERSION
+
         parsed = await get_file_parsed_sentences(file_hash)
         result["reading_ready"] = bool(
             isinstance(parsed, dict)
-            and parsed.get("version") == "2.0"
+            and parsed.get("version") == READING_PROJECTION_VERSION
             and parsed.get("generation") == canonical.generation
             and parsed.get("extraction_fingerprint") == canonical.extraction_fingerprint
             and isinstance(parsed.get("sentences"), list)
