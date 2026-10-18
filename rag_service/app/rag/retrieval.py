@@ -49,7 +49,11 @@ def clip_retrieval_hit(value: str, *, hit_limit: int = SEARCH_EVIDENCE_HIT_CHAR_
     text = str(value or "")
     if len(text) <= hit_limit:
         return text, False
-    return text[:hit_limit].rstrip() + "…", True
+    if hit_limit < 120:
+        return text[:hit_limit].rstrip() + "…", True
+    head = max(40, hit_limit // 2 - 2)
+    tail = max(40, hit_limit - head - 1)
+    return text[:head].rstrip() + "…" + text[-tail:].lstrip(), True
 
 
 def bounded_retrieval_hits(
