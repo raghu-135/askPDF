@@ -641,7 +641,7 @@ async def test_call_model_falls_back_when_provider_rejects_json_schema(monkeypat
 
     monkeypatch.setattr(deep_research_nodes, "invoke_llm_for_node", invoke_direct)
     text, _metadata = await deep_research_nodes._call_model(
-        {"llm_model": "google/gemini-3.1-flash-lite", "agent_task_id": "task-1"},
+        {"llm_model": "openai/gpt-4.1-mini", "agent_task_id": "task-1"},
         {},
         "deep_task_planner",
         [],
