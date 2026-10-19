@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT,
   REVIEW_DECISION_PANEL_GRID_ROWS,
   REVIEW_LIMITATIONS_MAX_HEIGHT,
   reviewPanelFlexWeights,
@@ -22,4 +23,8 @@ test('review panel flex weights keep transcript reachable at 1024x768', () => {
 
 test('limitations region uses a bounded max height', () => {
   assert.match(REVIEW_LIMITATIONS_MAX_HEIGHT, /vh/);
+});
+
+test('fixed review header height is bounded for footer visibility', () => {
+  assert.match(REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT, /vh/);
 });

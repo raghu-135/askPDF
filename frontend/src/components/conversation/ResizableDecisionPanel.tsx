@@ -3,7 +3,7 @@ import { Box, IconButton, Typography, useMediaQuery, useTheme } from '@mui/mater
 import CloseIcon from '@mui/icons-material/Close';
 import { useResizablePanelRatio } from '../../hooks/useResizablePanelRatio';
 import { ResizablePanelHandle } from './ResizablePanelHandle';
-import { REVIEW_DECISION_PANEL_GRID_ROWS } from '../../lib/deep-research-review-panel-layout';
+import { REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT } from '../../lib/deep-research-review-panel-layout';
 
 export function ResizableDecisionPanel({
   title,
@@ -46,20 +46,28 @@ export function ResizableDecisionPanel({
   const resizing = externalResizing ?? internal.resizing;
   const onResizeStart = externalOnResizeStart ?? internal.onResizeStart;
 
+  const shellSx = fillColumn ? {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: '1 1 0',
+    minWidth: 0,
+    minHeight: 0,
+    height: '100%',
+    maxHeight: '100%',
+  } : {
+    display: 'flex',
+    flexDirection: 'column',
+    maxHeight: `calc(100dvh * ${ratio})`,
+    minHeight,
+  };
+
   return (
     <Box sx={{
-      display: fillColumn ? 'grid' : 'flex',
-      flexDirection: fillColumn ? undefined : 'column',
-      gridTemplateRows: fillColumn ? REVIEW_DECISION_PANEL_GRID_ROWS : undefined,
-      flex: fillColumn ? '1 1 0' : undefined,
-      minWidth: 0,
+      ...shellSx,
       mb: 1,
       mx: horizontalInset,
       bgcolor: 'background.default',
       borderRadius: 1,
-      maxHeight: fillColumn ? '100%' : `calc(100dvh * ${ratio})`,
-      height: fillColumn ? '100%' : undefined,
-      minHeight: fillColumn ? 0 : minHeight,
       overflow: 'hidden',
       borderTop: '1px solid',
       borderColor: variant === 'conflict' ? 'warning.main' : variant === 'approval' ? 'info.main' : 'divider',
@@ -77,7 +85,18 @@ export function ResizableDecisionPanel({
         )}
       </Box>
       {fixedHeader ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 1, pb: 1, flexShrink: 0, minHeight: 0, overflow: 'hidden' }}>
+        <Box sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+          px: 1,
+          pb: 1,
+          flexShrink: 0,
+          minHeight: 0,
+          maxHeight: REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+        }}>
           {fixedHeader}
         </Box>
       ) : null}
@@ -90,6 +109,7 @@ export function ResizableDecisionPanel({
         pb: footer ? 0 : 1,
         overflowY: 'auto',
         overflowX: 'hidden',
+        flex: '1 1 0',
         minHeight: 0,
       }}>
         {children}
@@ -100,13 +120,9 @@ export function ResizableDecisionPanel({
           px: 1,
           pb: 1,
           pt: 0.5,
-          minHeight: 0,
           borderTop: '1px solid',
           borderColor: 'divider',
           bgcolor: 'background.paper',
-          position: 'sticky',
-          bottom: 0,
-          zIndex: 2,
         }}>
           {footer}
         </Box>

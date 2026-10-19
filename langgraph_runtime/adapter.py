@@ -26,6 +26,7 @@ from runtime_protocol.contracts import (
     TaskOrchestrationDelta,
 )
 from runtime_protocol.events import create_runtime_event
+from runtime_protocol.research_gaps import augment_task_delivery_gaps
 from langgraph_runtime.runtime_support.observability import normalize_runtime_event
 from langgraph_runtime.runtime_support.task_results import normalize_runtime_task_result
 from langgraph_runtime.bindings import issue_binding, resolve_binding
@@ -129,6 +130,15 @@ def _canonical_task_quality(result: Mapping[str, Any]) -> tuple[list[dict[str, A
         ]
         if str(value).strip()
     ))
+    gaps = augment_task_delivery_gaps(result, gaps)
+    if gaps and not any(str(item.get("code") or "") == "research_canvas_unpublished" for item in warnings if isinstance(item, Mapping)):
+        for line in gaps:
+            if line.startswith("research_canvas_unpublished"):
+                warnings.append({
+                    "code": "research_canvas_unpublished",
+                    "message": line.split(":", 1)[-1].strip() or "Required research canvas was not published.",
+                })
+                break
     return warnings[:100], gaps[:100]
 
 

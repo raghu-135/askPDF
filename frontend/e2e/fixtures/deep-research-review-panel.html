@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Deep Research review panel layout fixture</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: system-ui, sans-serif; background: #f5f5f5; }
+      .shell {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        padding: 8px;
+      }
+      .transcript {
+        flex: 0.42 1 0;
+        min-height: 72px;
+        overflow: auto;
+        background: #fff;
+        border: 1px solid #ddd;
+        margin-bottom: 8px;
+      }
+      .decision {
+        flex: 0.58 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: #fff;
+        border: 1px solid #ddd;
+      }
+      .decision-header {
+        flex-shrink: 0;
+        max-height: min(36vh, 260px);
+        overflow: auto;
+        padding: 8px;
+        border-bottom: 1px solid #eee;
+      }
+      .decision-body {
+        flex: 1 1 0;
+        min-height: 0;
+        overflow: auto;
+        padding: 8px;
+      }
+      .decision-footer {
+        flex-shrink: 0;
+        padding: 8px;
+        border-top: 1px solid #ddd;
+        background: #fafafa;
+      }
+      button { margin-right: 8px; }
+      .filler { height: 1200px; background: linear-gradient(#fff, #eee); }
+    </style>
+  </head>
+  <body>
+    <div class="shell" id="panel-root">
+      <div class="transcript"><div class="filler">Transcript</div></div>
+      <div class="decision" id="decision-panel">
+        <div class="decision-header">
+          <div>Budget chips · limitations list</div>
+          <div class="filler" style="height: 400px">Many limitations</div>
+        </div>
+        <div class="decision-body">
+          <div class="filler">Provisional answer</div>
+        </div>
+        <div class="decision-footer">
+          <button type="button">Finish with this result</button>
+          <button type="button">Continue with guidance</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

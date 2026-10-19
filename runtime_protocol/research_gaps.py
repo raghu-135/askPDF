@@ -243,6 +243,66 @@ def strip_false_canvas_limitations_block(text: str) -> str:
 _CANVAS_PUBLISH_CHAT_FALLBACK = "Published a research canvas with cited claims from your documents."
 
 
+def objective_requests_canvas_artifact(objective: str) -> bool:
+    text = str(objective or "").lower()
+    markers = (
+        "canvas",
+        "comparison",
+        "compare papers",
+        "timeline",
+        "evidence map",
+        "evidence matrix",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _subagent_document_read_failures(result: Mapping[str, Any]) -> bool:
+    for packet in result.get("task_result_packets") or []:
+        if not isinstance(packet, Mapping):
+            continue
+        error = packet.get("error") if isinstance(packet.get("error"), Mapping) else {}
+        code = str(error.get("code") or "")
+        if code in {"subagent_timeout", "subagent_failed"}:
+            summary = str(packet.get("summary") or "").casefold()
+            title_hint = str(packet.get("todo_id") or "").casefold()
+            if "retrieve" in summary or "page" in summary or "pdf" in summary or "retrieve" in title_hint:
+                return True
+        status = str(packet.get("status") or "")
+        if status == "timed_out":
+            return True
+    return False
+
+
+def augment_task_delivery_gaps(
+    result: Mapping[str, Any],
+    gaps: list[str],
+) -> list[str]:
+    """Add explicit delivery gaps when canvas or document evidence did not land."""
+    merged = list(dict.fromkeys(str(value).strip() for value in gaps if str(value).strip()))
+    objective = str(result.get("objective") or result.get("question") or "")
+    canvas_required = bool(result.get("task_canvas_publish_required")) or objective_requests_canvas_artifact(objective)
+    if canvas_required and not result.get("task_canvas_published"):
+        if canvas_publish_outcome(result) != "published":
+            merged.append("research_canvas_unpublished: Required research canvas was not published for this run.")
+    manifest = result.get("task_evidence_manifest")
+    has_doc_manifest = manifest_has_document_evidence(manifest)
+    final_text = str(result.get("final_answer") or result.get("answer") or "")
+    if canvas_required and not has_doc_manifest and not text_cites_document_evidence(final_text):
+        merged.append("document_read_failed: Page text from the attached PDF was not retrieved before synthesis.")
+    if not has_doc_manifest and _subagent_document_read_failures(result):
+        merged.append("document_read_failed: A document retrieval worker timed out or failed before evidence was available.")
+    warnings = result.get("task_result_warnings") or result.get("warnings") or []
+    for warning in warnings:
+        if not isinstance(warning, Mapping):
+            continue
+        code = str(warning.get("code") or "")
+        if code in {"research_canvas_publish_failed", "publish_canvas_ungrounded"}:
+            merged.append("research_canvas_unpublished: Canvas publish was blocked or failed.")
+        if code == "grounding_requirement_unsatisfied":
+            merged.append("document_read_failed: Required document evidence was not established for this result.")
+    return list(dict.fromkeys(merged))
+
+
 def canvas_publish_outcome(state: Mapping[str, Any] | None) -> str:
     if not isinstance(state, Mapping):
         return "not_attempted"

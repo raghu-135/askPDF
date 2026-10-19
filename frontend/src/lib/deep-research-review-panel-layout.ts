@@ -1,9 +1,12 @@
 import { clampDecisionPanelRatio } from './conversation-ui-state.ts';
 
-/** CSS grid rows: resize handle, title, fixed header, scroll body, sticky footer. */
+/** Legacy grid contract (column-fill panels now use flex + bounded header). */
 export const REVIEW_DECISION_PANEL_GRID_ROWS = 'auto auto auto minmax(0, 1fr) auto';
 
 export const REVIEW_LIMITATIONS_MAX_HEIGHT = 'min(24vh, 180px)';
+
+/** Keeps review action buttons in view while limitations and budget copy scroll above. */
+export const REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT = 'min(36vh, 260px)';
 
 export const REVIEW_PANEL_MIN_TRANSCRIPT_RATIO = 0.12;
 

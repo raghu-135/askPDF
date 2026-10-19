@@ -1,4 +1,5 @@
 from runtime_protocol.research_gaps import (
+    augment_task_delivery_gaps,
     canvas_draft_grounded_in_manifest,
     dedupe_critic_issues,
     filter_false_canvas_absence_limitations,
@@ -56,6 +57,22 @@ def test_gap_display_line_prefers_message_on_structured_gap():
     assert gap_display_line({"code": "MISSING_SALES_FIGURES", "message": "Sales figures were not found."}) == (
         "Sales figures were not found."
     )
+
+
+def test_augment_task_delivery_gaps_flags_canvas_and_document_read_failures():
+    result = {
+        "objective": "summarize page 1 using the canvas",
+        "task_canvas_publish_required": True,
+        "task_evidence_manifest": [],
+        "task_result_packets": [
+            {"status": "timed_out", "error": {"code": "subagent_timeout"}},
+        ],
+        "final_answer": "A summary with no citations.",
+    }
+    gaps = augment_task_delivery_gaps(result, [])
+    joined = " ".join(gaps).lower()
+    assert "research_canvas_unpublished" in joined
+    assert "document_read_failed" in joined
 
 
 def test_normalize_runtime_task_result_structured_gaps():
