@@ -79,6 +79,8 @@ services:
       ASKPDF_CORS_ORIGINS: http://localhost:3000
       MCP_OTEL_ENABLED: "false"
       WEAVIATE_URL: http://weaviate:8080
+      WEAVIATE_HYBRID_ALPHA: "0.7"
+      QUERY_DEFAULTS_LIMIT: "20"
       MCP_TRANSPORT: in_process
       MCP_LOOPBACK_URL: http://127.0.0.1:8000/internal/mcp/
       MCP_REQUEST_TIMEOUT_SECONDS: "120"

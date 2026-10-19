@@ -7,12 +7,15 @@ from langgraph_runtime.workflows.answer_nodes import finalizer_node
 
 @pytest.mark.asyncio
 async def test_finalizer_surfaces_required_canvas_publish_failure():
-    draft = {"layout": "matrix", "title": "Summary", "claims": [{"text": "x", "source_ids": ["doc:" + "a" * 32 + ":c-1"]}]}
+    file_hash = "a" * 32
+    source_id = f"doc:{file_hash}:c-1"
+    draft = {"layout": "matrix", "title": "Summary", "claims": [{"text": "x", "source_ids": [source_id]}]}
     state = {
         "agent_task_id": "task-1",
         "final_answer": "Research summary in chat.",
         "task_canvas_draft": draft,
         "task_canvas_publish_required": True,
+        "task_evidence_manifest": [{"source_id": source_id}],
         "task_incomplete_reasons": [],
         "task_result_warnings": [],
     }

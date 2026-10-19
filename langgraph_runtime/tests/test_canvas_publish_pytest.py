@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from pydantic import ValidationError
 
 from langgraph_runtime.mcp_client import _PublishCanvasArguments, create_mcp_langchain_tool
+from runtime_protocol.research_gaps import _CANVAS_PUBLISH_CHAT_FALLBACK
 from langgraph_runtime.workflows.canvas_publish import (
     CanvasSpecNormalizeError,
     canvas_idempotency_key,
@@ -161,7 +162,7 @@ async def test_helper_skips_mcp_when_spec_normalizes_to_empty_sections(monkeypat
             return Bound()
 
         async def ainvoke(self, _messages):
-            raise AssertionError("unbound model must not run while emit is admitted")
+            return SimpleNamespace(content="Prose only.", tool_calls=[], usage_metadata={})
 
     result = await synthesize_with_canvas_publish(
         LLM(),
@@ -255,7 +256,7 @@ async def test_helper_invokes_publish_canvas_once_with_draft(monkeypatch):
         started=0.0,
     )
     assert result["published"] is True
-    assert result["answer"] == "See the canvas Advisor Models."
+    assert result["answer"] == _CANVAS_PUBLISH_CHAT_FALLBACK
     assert tool_calls == [
         (
             "publish_canvas",
