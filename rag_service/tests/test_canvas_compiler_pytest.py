@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.models.canvas import CanvasCitation
 from app.models.canvas_draft import CanvasCompileError, CanvasPublishDraft
 from app.services.canvas_compiler import compile_canvas_draft
 
@@ -84,8 +85,8 @@ async def test_compile_resolves_chunk_locator_to_sentence_quote():
     })
     with (
         patch(
-            "app.services.canvas_compiler._first_sentence_for_chunk",
-            new=AsyncMock(return_value=2),
+            "app.services.canvas_compiler._readable_sentence_ids_for_chunk",
+            new=AsyncMock(return_value=(2, [2], True)),
         ),
         patch(
             "app.services.canvas_compiler._sentence_exists",
@@ -109,17 +110,22 @@ async def test_compile_accepts_src_prefixed_source_id():
         "title": "Src id",
         "claims": [{"text": "Claim", "source_ids": [source_id]}],
     })
-    with (
-        patch(
-            "app.services.canvas_compiler._canonicalize_draft_source_id",
-            new=AsyncMock(return_value=f"doc:{file_hash}:{source_id}"),
-        ),
-        patch(
-            "app.services.canvas_compiler._first_sentence_for_chunk",
-            new=AsyncMock(return_value=None),
-        ),
+    citation = CanvasCitation(
+        kind="document",
+        label="Claim",
+        file_hash=file_hash,
+        sentence_id=1,
+        sentence_ids=[1],
+    )
+    with patch(
+        "app.services.canvas_compiler._resolve_src_alias",
+        new=AsyncMock(return_value=(citation, None)),
     ):
-        spec = await compile_canvas_draft(draft, thread_file_hashes={file_hash})
+        spec = await compile_canvas_draft(
+            draft,
+            thread_file_hashes={file_hash},
+            embedding_model="embed-1",
+        )
     assert spec.title == "Src id"
 
 
@@ -142,8 +148,8 @@ async def test_compile_resolves_src_alias_to_document_citation():
             new=AsyncMock(return_value=True),
         ),
         patch(
-            "app.services.canvas_compiler._first_sentence_for_chunk",
-            new=AsyncMock(return_value=1),
+            "app.services.canvas_compiler._readable_sentence_ids_for_chunk",
+            new=AsyncMock(return_value=(1, [1], True)),
         ),
     ):
         repo = AsyncMock()

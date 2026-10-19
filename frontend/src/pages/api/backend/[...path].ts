@@ -72,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const target = backendUrl(req);
     const headers = new Headers();
     for (const [name, value] of Object.entries(req.headers)) {
-      if (name === "host" || name === "content-length" || HOP_BY_HOP_HEADERS.has(name)) continue;
+      if (name === "host" || name === "content-length" || name === "expect" || HOP_BY_HOP_HEADERS.has(name)) continue;
       for (const item of Array.isArray(value) ? value : [value]) {
         if (item !== undefined) headers.append(name, item);
       }

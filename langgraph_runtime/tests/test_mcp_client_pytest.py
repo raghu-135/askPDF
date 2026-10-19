@@ -15,14 +15,16 @@ async def test_runtime_mcp_wrapper_preserves_search_arguments(monkeypatch):
         return json.dumps({"ok": True, "content": "ok", "sources": [], "artifacts": {}, "warnings": [], "error": None, "metrics": {}, "trace": {}})
 
     monkeypatch.setattr(mcp_client, "_call", fake_call)
-    tool = mcp_client.create_mcp_langchain_tool("search_documents")
+    tool = mcp_client.create_mcp_langchain_tool("search_knowledge")
     await tool.ainvoke(
         {"query": "external runtime boundary", "max_results": 7},
         config={"configurable": {"mcp_execution_context_token": "grant"}},
     )
 
-    assert calls[0][0] == "search_documents"
-    assert calls[0][1] == {"query": "external runtime boundary", "max_results": 7}
+    assert calls[0][0] == "search_knowledge"
+    assert calls[0][1]["query"] == "external runtime boundary"
+    assert calls[0][1]["max_results"] == 7
+    assert calls[0][1]["level"] == "chunk"
 
 
 def _result(**overrides):

@@ -138,7 +138,19 @@ class _InspectDocumentArguments(BaseModel):
         if value is None:
             return None
         if isinstance(value, str):
-            return value or None
+            stripped = value.strip()
+            if not stripped:
+                return None
+            if stripped.isdigit():
+                value = int(stripped)
+            else:
+                try:
+                    decoded = json.loads(base64.urlsafe_b64decode(stripped.encode("ascii")).decode("utf-8"))
+                except Exception:
+                    return None
+                if isinstance(decoded, dict) and decoded.get("kind") == "read_context":
+                    return None
+                return stripped
         if isinstance(value, int):
             import base64
             payload = json.dumps({"offset": max(0, int(value))}, separators=(",", ":"))
@@ -162,6 +174,7 @@ class _ReadContextArguments(BaseModel):
             "expand": "section",
             "expanded": "section",
             "full": "section",
+            "long": "section",
             "tables": "table",
         }
         return aliases.get(key, value)
@@ -214,6 +227,8 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
 
 
 def _arguments(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True)
     if isinstance(value, dict):
         return dict(value)
     if isinstance(value, str):

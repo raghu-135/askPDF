@@ -53,7 +53,10 @@ class TestRealEmbeddingModelIntegration:
     async def test_dimension_mismatch_prevention_real_scenario(self, registry):
         """Test dimension mismatch prevention with realistic scenario."""
         # Mock a model with specific dimensions
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
+        with (
+            patch("app.db.vector.model_registry.get_embedding_model") as mock_get_model,
+            patch("app.db.vector.model_registry.should_use_local_embeddings", return_value=True),
+        ):
             mock_model = MagicMock()
             mock_model.aembed_query = AsyncMock(return_value=[0.1] * 384)  # 384 dimensions
             mock_get_model.return_value = mock_model
@@ -122,7 +125,10 @@ class TestProductionEnvironmentScenarios:
         registry = EmbeddingModelRegistry()
         
         # Mock model to simulate real behavior
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
+        with (
+            patch("app.db.vector.model_registry.get_embedding_model") as mock_get_model,
+            patch("app.db.vector.model_registry.should_use_local_embeddings", return_value=True),
+        ):
             mock_model = MagicMock()
             mock_model.aembed_query = AsyncMock(return_value=[0.1] * 1536)  # Large model dimensions
             mock_get_model.return_value = mock_model

@@ -53,7 +53,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     config.set_main_option("script_location", str(service_root / "alembic"))
     scripts = ScriptDirectory.from_config(config)
 
-    assert set(scripts.get_heads()) == {"f9a3c7e1b5d2"}
+    assert set(scripts.get_heads()) == {"c7f2a9d4e1b8"}
     assert scripts.get_revision("b2d8e4f6a1c3").down_revision == "a9c7e1f3b5d2"
     assert scripts.get_revision("a9c7e1f3b5d2").down_revision == "a8d3f1c6e4b2"
     assert scripts.get_revision("a8d3f1c6e4b2").down_revision == "e7c4a1b9d2f6"
@@ -72,6 +72,8 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     assert scripts.get_revision("7f3c1a9d5e2b").down_revision == "d1e8f4a9b2c7"
     assert scripts.get_revision("c4e8a1b6d2f0").down_revision == "7f3c1a9d5e2b"
     assert scripts.get_revision("a9c7e1f3b5d2") is not None
+    assert scripts.get_revision("b4e1c8a7d2f0").down_revision == "f9a3c7e1b5d2"
+    assert scripts.get_revision("c7f2a9d4e1b8").down_revision == "b4e1c8a7d2f0"
 
 
 def test_project_files_has_composite_key_and_cascading_foreign_keys():

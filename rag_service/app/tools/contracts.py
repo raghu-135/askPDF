@@ -47,11 +47,31 @@ class InspectDocumentRequest(BaseModel):
         if value is None:
             return None
         if isinstance(value, str):
-            return value or None
+            stripped = value.strip()
+            if not stripped:
+                return None
+            if stripped.isdigit():
+                from app.tools.retrieval_knowledge import _cursor
+                return _cursor(max(0, int(stripped)))
+            return stripped
         if isinstance(value, int):
             from app.tools.retrieval_knowledge import _cursor
             return _cursor(max(0, int(value)))
         return value
+
+
+def _normalize_read_context_expansion(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    key = value.strip().lower()
+    aliases = {
+        "expand": "section",
+        "expanded": "section",
+        "full": "section",
+        "long": "section",
+        "tables": "table",
+    }
+    return aliases.get(key, value)
 
 
 class ReadContextRequest(BaseModel):
@@ -59,6 +79,11 @@ class ReadContextRequest(BaseModel):
     expansion: Literal["chunk", "section", "table"] = "chunk"
     token_budget: int = Field(default=2000, ge=1, le=8000)
     cursor: str | None = Field(default=None, max_length=512)
+
+    @field_validator("expansion", mode="before")
+    @classmethod
+    def _coerce_expansion(cls, value: Any) -> Any:
+        return _normalize_read_context_expansion(value)
 
 
 class TimelineRequest(QueryRequest):

@@ -103,6 +103,7 @@ UNIT_TEST_FILES = [
     "test_evidence_source_locators_pytest.py",
     "test_production_edge_cases.py",
     "test_rerank_reading_order_pytest.py",
+    "test_retrieval_clip_pytest.py",
     "test_temporal_metadata_retrieval.py",
     "test_time_utils.py",
     "test_http_client_lifecycle.py",

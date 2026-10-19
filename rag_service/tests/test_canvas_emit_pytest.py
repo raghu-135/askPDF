@@ -18,6 +18,42 @@ def _mock_thread_embedding_lookup(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _mock_publish_canvas_db_session(monkeypatch):
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class BeginCtx:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def begin(self):
+            return BeginCtx()
+
+        async def execute(self, *_args, **_kwargs):
+            return FakeResult()
+
+    monkeypatch.setattr(
+        "app.tools.publish_canvas.async_session_maker",
+        lambda: FakeSession(),
+    )
+    monkeypatch.setattr(
+        "app.tools.publish_canvas.ensure_deep_task_canvas_chat_turn",
+        AsyncMock(),
+    )
+
+
 def test_admit_canvas_spec_rejects_missing_citations():
     payload = {
         "schema_version": 1,
@@ -57,8 +93,11 @@ def test_hitl_canvas_publish_asks_before_durable_write():
 @pytest.mark.asyncio
 async def test_publish_canvas_rejects_invalid_components(monkeypatch):
     monkeypatch.setattr("app.tools.publish_canvas.get_thread_files", AsyncMock(return_value=[]))
-    invalid = PublishCanvasRequest.model_validate(
-        {"spec": {**valid_spec(), "sections": [{"title": "Bad", "blocks": [{"type": "iframe", "src": "https://evil.example"}]}]}}
+    invalid = PublishCanvasRequest.model_construct(
+        spec={
+            **valid_spec(),
+            "sections": [{"title": "Bad", "blocks": [{"type": "iframe", "src": "https://evil.example"}]}],
+        },
     )
     invalid_result = await invoke_publish_canvas(
         invalid,

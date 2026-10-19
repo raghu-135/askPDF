@@ -47,16 +47,37 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("HERMES_API_TOKEN", "test-hermes-api-token-32-characters")
 os.environ.setdefault("HERMES_RUNTIME_TOKEN", "test-hermes-runtime-token-32-characters")
 os.environ.setdefault("MCP_EXECUTION_CONTEXT_SECRET", "test-mcp-execution-context-secret-32-characters")
+os.environ.setdefault("HERMES_MODEL_CONTEXT_LENGTH", "64000")
 os.environ.setdefault("ASKPDF_ADMIN_TOKEN", "test-control-plane-token-32-characters")
 os.environ.setdefault("ASKPDF_CORS_ORIGINS", "http://localhost:3000")
 os.environ.setdefault("ASKPDF_MCP_URL", "http://127.0.0.1:8000/internal/mcp/")
 os.environ.setdefault("ASKPDF_MCP_HEALTH_URL", "http://127.0.0.1:8000/health")
+os.environ.setdefault("POSTGRES_POOL_SIZE", "5")
+os.environ.setdefault("POSTGRES_MAX_OVERFLOW", "10")
 os.environ.setdefault("LLM_API_URL", "http://127.0.0.1:1234/v1")
 # Control-plane pytest invokes first-party tools in-process. CI copies
 # `.env.ci` into the test runner, and that file uses loopback HTTP against
 # `rag-service`, which is not part of docker-compose.test.yml.
 os.environ["MCP_TRANSPORT"] = "in_process"
 os.environ.setdefault("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
+for _budget_name, _budget_value in {
+    "DEEP_AGENT_MAX_MODEL_CALLS": "10000",
+    "DEEP_AGENT_MAX_MODEL_TOKENS": "500000",
+    "DEEP_AGENT_MAX_TOOL_CALLS": "100",
+    "DEEP_AGENT_MAX_ACTIVE_RUNTIME_MS": "7200000",
+    "DEEP_AGENT_MAX_DURATION_MS": "7200000",
+    "DEEP_AGENT_MAX_OUTPUT_CHARS": "500000",
+    "DEEP_AGENT_MAX_EVENT_COUNT": "100000",
+    "DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS": "10000",
+    "DEEP_AGENT_LANGGRAPH_MAX_MODEL_TOKENS": "500000",
+    "DEEP_AGENT_LANGGRAPH_MAX_TOOL_CALLS": "100",
+    "DEEP_AGENT_LANGGRAPH_MAX_ACTIVE_RUNTIME_MS": "7200000",
+    "DEEP_AGENT_HERMES_MAX_MODEL_CALLS": "10000",
+    "DEEP_AGENT_HERMES_MAX_MODEL_TOKENS": "500000",
+    "DEEP_AGENT_HERMES_MAX_TOOL_CALLS": "100",
+    "DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS": "7200000",
+}.items():
+    os.environ.setdefault(_budget_name, _budget_value)
 
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,
@@ -254,10 +275,12 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         stats_repo_sqlmodel,
         thread_file_repo_sqlmodel,
         thread_repo_sqlmodel,
+        canvas_repo_sqlmodel,
     )
     from app.services import (
         agent_task_chat_publish,
         agent_task_repository,
+        agent_task_research_canvases,
         agent_task_runtime_projection,
         embedding_materialization_service,
         effective_memory_service,
@@ -286,6 +309,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         stats_repo_sqlmodel,
         thread_file_repo_sqlmodel,
         thread_repo_sqlmodel,
+        canvas_repo_sqlmodel,
         thread_management_service,
         effective_memory_service,
         memory_manager_engine,
@@ -299,6 +323,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         agent_workflow_repository,
         chat_cancellation,
         agent_task_repository,
+        agent_task_research_canvases,
         agent_task_runtime_projection,
         agent_task_chat_publish,
         tool_approval,
@@ -310,6 +335,19 @@ def _patch_app_session_makers(monkeypatch, session_maker):
 
     for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo", "_agent_workflow_repo", "_project_repo", "_project_file_repo", "_memory_repo"):
         monkeypatch.setattr(db_api, attr, None)
+
+
+def _patch_main_background_workers(monkeypatch, main_module) -> None:
+    """Keep API tests from starting DB-backed background loops on the app loop."""
+
+    async def idle_background_worker(stop_event, **_kwargs):
+        await stop_event.wait()
+
+    monkeypatch.setattr(main_module, "run_task_worker", idle_background_worker)
+    monkeypatch.setattr(main_module, "conversion_job_worker", idle_background_worker)
+    monkeypatch.setattr(main_module, "embedding_job_worker", idle_background_worker)
+    monkeypatch.setattr(main_module, "_memory_maintenance_loop", idle_background_worker)
+    monkeypatch.setattr(main_module, "_runtime_readiness_loop", idle_background_worker)
 
 
 @pytest.fixture(scope="function")
@@ -343,10 +381,7 @@ def api_client(test_database_url, monkeypatch) -> Generator:
 
     import main as main_module
 
-    async def idle_task_worker(*, stop_event, **_kwargs):
-        await stop_event.wait()
-
-    monkeypatch.setattr(main_module, "run_task_worker", idle_task_worker)
+    _patch_main_background_workers(monkeypatch, main_module)
     # The isolated fixture owns test schema creation. Production startup must
     # not call SQLModel.metadata.create_all; migrations are the schema authority.
     asyncio.run(_create_test_schema(engine))
@@ -394,10 +429,7 @@ async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[Asy
 
     import main as main_module
 
-    async def idle_task_worker(*, stop_event, **_kwargs):
-        await stop_event.wait()
-
-    monkeypatch.setattr(main_module, "run_task_worker", idle_task_worker)
+    _patch_main_background_workers(monkeypatch, main_module)
     app = main_module.app
 
     try:
@@ -410,6 +442,8 @@ async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[Asy
     finally:
         app.dependency_overrides.clear()
         await _drop_test_schema(engine)
+        await engine.dispose()
+        await _drain_test_loop_tasks()
 
 
 @pytest_asyncio.fixture(scope="function")

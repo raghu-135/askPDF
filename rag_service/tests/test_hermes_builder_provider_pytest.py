@@ -45,10 +45,10 @@ def test_hermes_builtin_is_concrete_and_not_a_graph():
 
 def test_hermes_prompt_uses_pinned_progressive_tool_disclosure_protocol():
     prompt = _spec()["config"]["system_prompt"]
-    assert "exact namespaced names" in prompt
+    assert "Hermes wire names `mcp__<server>__<tool>`" in prompt
     assert "search_knowledge with level=chunk" in prompt
     assert "inspect_document" in prompt and "read_context" in prompt
-    assert "Do not use read_file for AskPDF-managed documents" in prompt
+    assert "Do not use terminal, read_file, or skill tools for AskPDF-managed documents" in prompt
 
 
 def test_hermes_provider_is_registered_without_changing_langgraph_provider():

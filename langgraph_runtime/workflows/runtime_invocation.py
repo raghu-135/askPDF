@@ -84,10 +84,16 @@ def _usage_summary(response: Any) -> Dict[str, int]:
         "total_tokens": "total_tokens",
     }
     for candidate in candidates:
-        if not isinstance(candidate, dict):
+        if isinstance(candidate, dict):
+            for source, target in key_map.items():
+                value = candidate.get(source)
+                if isinstance(value, (int, float)) and target not in usage:
+                    usage[target] = int(value)
+            continue
+        if candidate is None:
             continue
         for source, target in key_map.items():
-            value = candidate.get(source)
+            value = getattr(candidate, source, None)
             if isinstance(value, (int, float)) and target not in usage:
                 usage[target] = int(value)
     return usage

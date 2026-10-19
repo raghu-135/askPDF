@@ -191,7 +191,10 @@ class TestNetworkFailureScenarios:
         """Test handling of slow network during model dimension probing."""
         registry = EmbeddingModelRegistry()
         
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
+        with (
+            patch("app.db.vector.model_registry.get_embedding_model") as mock_get_model,
+            patch("app.db.vector.model_registry.should_use_local_embeddings", return_value=True),
+        ):
             mock_model = MagicMock()
             
             # Simulate slow response
@@ -311,7 +314,10 @@ class TestPerformanceDegradationScenarios:
         """Test performance impact of slow dimension detection."""
         registry = EmbeddingModelRegistry()
         
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
+        with (
+            patch("app.db.vector.model_registry.get_embedding_model") as mock_get_model,
+            patch("app.db.vector.model_registry.should_use_local_embeddings", return_value=True),
+        ):
             mock_model = MagicMock()
             
             # Simulate progressively slower responses
@@ -362,7 +368,10 @@ class TestPerformanceDegradationScenarios:
         """Test performance under concurrent model loading."""
         registry = EmbeddingModelRegistry()
         
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
+        with (
+            patch("app.db.vector.model_registry.get_embedding_model") as mock_get_model,
+            patch("app.db.vector.model_registry.should_use_local_embeddings", return_value=True),
+        ):
             mock_model = MagicMock()
             mock_model.aembed_query = AsyncMock(return_value=[0.1] * 384)
             mock_get_model.return_value = mock_model

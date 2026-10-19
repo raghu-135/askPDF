@@ -24,6 +24,7 @@ from app.services import agent_task_repository as repository
 from app.services.agent_task_budgets import initial_budget_state
 from app.services.agent_task_runtime_projection import (
     RuntimeTaskProjectionConflict,
+    _enrich_result_gaps,
     _merge_budget,
     _result_review_body,
     _result_review_title,
@@ -868,7 +869,7 @@ def test_result_review_body_mentions_budget_and_issues():
     budget["tranche_usage"]["model_calls"] = 3
     body = _result_review_body(budget, [{"code": "evidence_critic_issues"}], ["gap"])
     assert "Research budget for model calls" in body
-    assert "more budget" in body
+    assert "continue with guidance" in body
     assert _result_review_title(budget) == "Research budget reached"
     assert _result_review_trigger(budget) == "budget"
     assert _result_review_title({}) == "Review incomplete result"

@@ -59,7 +59,8 @@ def _assert_contract(payload, *, tool_name: str, caller_node: str = "test_node",
     for key in artifact_keys:
         assert key in payload["artifacts"]
     if warning:
-        assert warning in payload["warnings"]
+        expected = warning.value if hasattr(warning, "value") else warning
+        assert expected in payload["warnings"]
 
 
 def _context(**overrides):
@@ -206,6 +207,7 @@ def _knowledge_chunk(
     *,
     table_id: str | None = None,
     chunk_index: int = 0,
+    section_id: str = "sec-1",
 ) -> dict:
     return {
         "file_hash": "file-1",
@@ -221,7 +223,7 @@ def _knowledge_chunk(
             "extraction_fingerprint": "extract-1",
             "chunking_fingerprint": "chunk-1",
             "table_id": table_id,
-            "section_id": "sec-1",
+            "section_id": section_id,
             "chunk_index": chunk_index,
         },
     }
@@ -269,8 +271,14 @@ async def test_search_knowledge_chunk_level_preserves_reading_order_after_rerank
 async def test_search_knowledge_lists_omitted_source_ids_when_hits_exceed_budget(monkeypatch):
     _patch_ready_manifest(monkeypatch)
     hits = [
-        _knowledge_chunk(f"src-{index}", "x" * 2000, table_id="table-1" if index == 0 else None)
-        for index in range(20)
+        _knowledge_chunk(
+            f"src-{index}",
+            "x" * 6000,
+            table_id="table-1" if index == 0 else None,
+            chunk_index=index,
+            section_id=f"sec-{index}",
+        )
+            for index in range(20)
     ]
     fake_db = SimpleNamespace(search_knowledge_sources=AsyncMock(return_value=hits))
 
@@ -295,7 +303,7 @@ async def test_search_knowledge_lists_omitted_source_ids_when_hits_exceed_budget
     assert "table_id=table-1" in payload["content"]
     assert "Call read_context" in payload["content"]
     assert "Do not repeat search_knowledge" in payload["content"]
-    assert payload["content"].count("x" * 2000) == 0
+    assert payload["content"].count("x" * 6000) == 0
 
 
 @pytest.mark.asyncio
@@ -429,6 +437,7 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
         get_manifest_by_id=AsyncMock(return_value=SimpleNamespace(
             manifest_id="manifest-file-1",
             source_version="ready-file-1",
+            chunking_fingerprint="chunk-1",
         )),
     )
     monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
@@ -439,7 +448,11 @@ async def test_read_context_expands_descendant_sections_and_uses_large_budget(mo
             "manifest_ready": True,
             "ready": True,
             "source_version": "ready-file-1",
-            "manifest": SimpleNamespace(manifest_id="manifest-file-1", source_version="ready-file-1"),
+            "manifest": SimpleNamespace(
+                manifest_id="manifest-file-1",
+                source_version="ready-file-1",
+                chunking_fingerprint="chunk-1",
+            ),
         }
 
     monkeypatch.setattr(
@@ -515,6 +528,7 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
         get_manifest_by_id=AsyncMock(return_value=SimpleNamespace(
             manifest_id="manifest-file-1",
             source_version="ready-file-1",
+            chunking_fingerprint="chunk-1",
         )),
     )
     monkeypatch.setattr("app.tools.retrieval_knowledge.get_canonical_document_repo", lambda: repo)
@@ -525,7 +539,11 @@ async def test_read_context_reserves_hit_before_section_expansion(monkeypatch):
             "manifest_ready": True,
             "ready": True,
             "source_version": "ready-file-1",
-            "manifest": SimpleNamespace(manifest_id="manifest-file-1", source_version="ready-file-1"),
+            "manifest": SimpleNamespace(
+                manifest_id="manifest-file-1",
+                source_version="ready-file-1",
+                chunking_fingerprint="chunk-1",
+            ),
         }),
     )
     monkeypatch.setattr(
@@ -802,7 +820,11 @@ async def test_read_context_uses_selected_chunk_manifest_version(monkeypatch):
             "manifest-file-1": "version-selected",
             "manifest-file-2": "version-other",
         }
-        return SimpleNamespace(manifest_id=manifest_id, source_version=versions[manifest_id])
+        return SimpleNamespace(
+            manifest_id=manifest_id,
+            source_version=versions[manifest_id],
+            chunking_fingerprint="chunk-1",
+        )
 
     repo = SimpleNamespace(
         get=AsyncMock(return_value=SimpleNamespace(
@@ -822,13 +844,21 @@ async def test_read_context_uses_selected_chunk_manifest_version(monkeypatch):
                 "ready": True,
                 "canonical_ready": True,
                 "source_version": "version-selected",
-                "manifest": SimpleNamespace(manifest_id="manifest-file-1", source_version="version-selected"),
+                "manifest": SimpleNamespace(
+                    manifest_id="manifest-file-1",
+                    source_version="version-selected",
+                    chunking_fingerprint="chunk-1",
+                ),
             }
         return {
             "ready": True,
             "canonical_ready": True,
             "source_version": "version-other",
-            "manifest": SimpleNamespace(manifest_id="manifest-file-2", source_version="version-other"),
+            "manifest": SimpleNamespace(
+                manifest_id="manifest-file-2",
+                source_version="version-other",
+                chunking_fingerprint="chunk-1",
+            ),
         }
 
     monkeypatch.setattr("app.services.document_projection_service.evaluate_retrieval_readiness", readiness)
@@ -973,12 +1003,13 @@ async def test_search_web_returns_web_source_contract(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_warning_paths_still_return_valid_tool_contracts(monkeypatch):
+    from app.tools.contracts import QueryRequest
+    from app.tools.web_search import search_web as search_web_handler
+
     monkeypatch.setattr("app.mcp.server.persist_tool_audit", AsyncMock())
-    raw = await external_research_tools.search_web.ainvoke(
-        {"query": "latest diffusion"},
-        config=_config(caller_node="web_worker", route="web", use_web_search=False),
-    )
-    payload = normalize_tool_result(raw, tool_name="search_web")
+    context = _context(caller_node="web_worker", route="web", use_web_search=False)
+    raw = await search_web_handler(QueryRequest(query="latest diffusion"), context)
+    payload = normalize_tool_result(raw.to_json(), tool_name="search_web")
 
     assert payload["ok"] is True
     _assert_contract(
