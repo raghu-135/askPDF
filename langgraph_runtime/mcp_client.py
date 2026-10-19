@@ -227,6 +227,8 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
 
 
 def _arguments(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True)
     if isinstance(value, dict):
         return dict(value)
     if isinstance(value, str):
