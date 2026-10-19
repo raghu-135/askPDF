@@ -79,7 +79,7 @@ class AgentGroundingEvaluator:
         result_count = sum(int(item.get("result_count") or 0) for item in qualifying)
         manifest_doc_evidence = manifest_has_document_evidence(evidence) if isinstance(evidence, list) else False
         grounded = bool(qualifying) or (not successful_tools and fallback_count > 0)
-        if documents_present:
+        if documents_present and qualifying:
             grounded = grounded and (read_context_ok or manifest_doc_evidence)
         return {
             "requirement": "document" if documents_present else "research",

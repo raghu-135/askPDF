@@ -2261,10 +2261,7 @@ async def respond_to_budget_review(
                 "idempotency_key": idempotency_key,
                 "guidance_delivery": "course_correction_command" if decision == "steer" else None,
             }
-            if decision == "accept_partial":
-                replace_jsonb_field(run, "pending_interrupt_json", {})
-            else:
-                replace_jsonb_field(run, "pending_interrupt_json", pending)
+            replace_jsonb_field(run, "pending_interrupt_json", pending)
             if decision == "accept_partial":
                 if not str(pending.get("provisional_answer") or "").strip():
                     raise AgentTaskConflict("budget_partial_answer_unavailable", "No provisional answer is available to accept")
