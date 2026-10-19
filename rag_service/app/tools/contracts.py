@@ -74,11 +74,55 @@ def _normalize_read_context_expansion(value: Any) -> Any:
     return aliases.get(key, value)
 
 
+_READ_CONTEXT_CURSOR_PARAM_NAMES = frozenset({
+    "cursor",
+    "page_size",
+    "start",
+    "offset",
+    "limit",
+    "token_budget",
+    "source_id",
+    "expansion",
+    "section",
+    "chunk",
+    "table",
+})
+
+
+def _coerce_read_context_cursor(value: Any) -> Any:
+    """Drop inspect-document offsets and mistaken parameter names; only v2 read_context cursors continue."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if stripped.casefold() in _READ_CONTEXT_CURSOR_PARAM_NAMES:
+            return None
+        if stripped.isdigit():
+            return None
+        try:
+            from app.tools.retrieval_knowledge import _context_cursor_payload
+
+            _context_cursor_payload(stripped)
+        except ValueError:
+            return None
+        return stripped
+    return None
+
+
 class ReadContextRequest(BaseModel):
     source_id: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
     expansion: Literal["chunk", "section", "table"] = "chunk"
     token_budget: int = Field(default=2000, ge=1, le=8000)
     cursor: str | None = Field(default=None, max_length=512)
+
+    @field_validator("cursor", mode="before")
+    @classmethod
+    def _coerce_cursor(cls, value: Any) -> Any:
+        return _coerce_read_context_cursor(value)
 
     @field_validator("expansion", mode="before")
     @classmethod

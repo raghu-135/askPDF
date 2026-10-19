@@ -435,7 +435,7 @@ TOOL_FRIENDLY_CONFIG = {
         "id": "document_context",
         "display_name": "Read Context",
         "description": "Read the original body text for a returned document source with bounded chunk, section, or table expansion and continuation.",
-        "default_prompt": "Use with a source_id from search_knowledge, including omitted catalog ids. Prefer expansion=table when the source has a table_id and expansion=section otherwise. Keep within the requested token budget, and cite source IDs/pages from the returned evidence.",
+        "default_prompt": "Use with a source_id from search_knowledge, including omitted catalog ids. Prefer expansion=table when the source has a table_id and expansion=section otherwise. Keep within the requested token budget, and cite source IDs/pages from the returned evidence. Omit cursor on the first read; when artifacts.continuation is present, pass that opaque token verbatim as cursor (never page_size, start, offset, or bare numbers).",
         "mcp_server": "first_party_context", "mcp_tool": "read_context", "mcp_enabled": True, "contract_version": "1",
     },
     TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY: {

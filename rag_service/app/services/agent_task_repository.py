@@ -2065,7 +2065,7 @@ async def respond_to_result_review(
                 "followup_input": followup_input,
                 "idempotency_key": idempotency_key,
             }
-            replace_jsonb_field(run, "pending_interrupt_json", pending)
+            replace_jsonb_field(run, "pending_interrupt_json", {})
             run.status = AgentRunStatus.COMPLETED.value
             run.completed_at = now
             if isinstance(run.debug_trace_json, dict):

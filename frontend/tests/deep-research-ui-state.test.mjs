@@ -69,6 +69,7 @@ test('terminal task events refresh the persisted timeline even when the run id i
   assert.equal(shouldRefreshAgentTaskTimeline({ type: 'run.completed' }), true);
   assert.equal(shouldRefreshAgentTaskTimeline({ type: 'output.delta', terminal: false }), true);
   assert.equal(shouldRefreshAgentTaskTimeline({ type: 'task.running', terminal: false }), false);
+  assert.equal(shouldRefreshAgentTaskTimeline({ type: 'task.budget_updated' }), false);
 });
 
 test('task-owned runs cannot use Debug Trace as an approval surface', () => {

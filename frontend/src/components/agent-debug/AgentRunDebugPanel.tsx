@@ -62,13 +62,14 @@ function AgentRunDebugPanel({
   const retainedErrorMessage = runDetails ? getRetainedRunErrorMessage(runDetails) : null;
   const pendingInterrupt = runDetails?.pending_interrupt;
   const isTaskOwnedRun = isTaskOwnedAgentRun(runDetails);
-  const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? InterruptStatus.Pending : undefined);
+  const interruptStatus = pendingInterrupt?.status;
   const runTerminal = ['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(
     String(runDetails?.status || ''),
   );
-  const showPendingInterruptBanner = Boolean(
-    pendingInterrupt && !runTerminal && interruptStatus === InterruptStatus.Pending,
-  );
+  const interruptAwaitingResponse = interruptStatus === InterruptStatus.Pending
+    && !pendingInterrupt?.decision
+    && !runTerminal;
+  const showPendingInterruptBanner = Boolean(pendingInterrupt && interruptAwaitingResponse);
   const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
     ? pendingInterrupt.allowed_actions.map(String)
     : [];

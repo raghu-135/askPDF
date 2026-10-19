@@ -574,6 +574,22 @@ export default function DeepResearchTaskPanel({
           void refresh().catch((value) => setError(String(value)));
           return;
         }
+        if (type === 'task.budget_updated') {
+          setTask((prev) => {
+            if (!prev || prev.id !== taskId) return prev;
+            const budgets = {
+              ...(prev.budgets || {}),
+              ...(payload.tranche_index != null ? { tranche_index: payload.tranche_index } : {}),
+              ...(payload.tranche_usage && typeof payload.tranche_usage === 'object'
+                ? { tranche_usage: payload.tranche_usage as Record<string, number> }
+                : {}),
+              ...(payload.lifetime_usage && typeof payload.lifetime_usage === 'object'
+                ? { lifetime_usage: payload.lifetime_usage as Record<string, number> }
+                : {}),
+            };
+            return { ...prev, budgets };
+          });
+        }
         if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.|task\.budget_updated)/.test(type)) void refresh();
         if (shouldRefreshAgentTaskTimeline(payload)) {
           void refreshTimeline(taskId, runId).catch((value) => setError(String(value)));

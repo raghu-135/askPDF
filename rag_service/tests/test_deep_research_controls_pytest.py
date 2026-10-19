@@ -29,3 +29,29 @@ def test_read_context_request_coerces_long_expansion():
 
     req = ReadContextRequest(source_id="src_abc", expansion="long")
     assert req.expansion == "section"
+
+
+def test_read_context_request_rejects_parameter_name_cursors():
+    from app.tools.contracts import ReadContextRequest
+
+    for cursor in ("page_size", "start", "0", "section", ""):
+        req = ReadContextRequest(source_id="src_abc", cursor=cursor)
+        assert req.cursor is None
+
+
+def test_read_context_request_accepts_v2_continuation_token():
+    from app.tools.contracts import ReadContextRequest
+    from app.tools.retrieval_knowledge import _context_cursor
+
+    token = _context_cursor(
+        manifest_id="manifest-1",
+        generation="generation-1",
+        source_version="source-1",
+        anchor_chunk_id="chunk-1",
+        expansion="section",
+        token_budget=512,
+        tokenizer_fingerprint="tokenizer-1",
+        segment_index=1,
+    )
+    req = ReadContextRequest(source_id="src_abc", cursor=token)
+    assert req.cursor == token

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from runtime_protocol.research_gaps import manifest_has_document_evidence
+
 
 DOCUMENT_EVIDENCE_TOOLS = frozenset({"search_knowledge", "read_context"})
 RESEARCH_EVIDENCE_TOOLS = frozenset({
@@ -60,6 +62,10 @@ class AgentGroundingEvaluator:
 
         eligible = DOCUMENT_EVIDENCE_TOOLS if documents_present else DOCUMENT_EVIDENCE_TOOLS | RESEARCH_EVIDENCE_TOOLS
         qualifying = [item for item in successful_tools if item.get("tool_name") in eligible]
+        read_context_ok = any(
+            item.get("tool_name") == "read_context" and int(item.get("result_count") or 0) > 0
+            for item in successful_tools
+        )
         evidence = result.get("task_evidence_manifest") if isinstance(result, Mapping) else None
         report = result.get("grounding_report") if isinstance(result, Mapping) else None
         verified_claims = report.get("verified_claims") if isinstance(report, Mapping) else None
@@ -71,9 +77,13 @@ class AgentGroundingEvaluator:
             else 0
         )
         result_count = sum(int(item.get("result_count") or 0) for item in qualifying)
+        manifest_doc_evidence = manifest_has_document_evidence(evidence) if isinstance(evidence, list) else False
+        grounded = bool(qualifying) or (not successful_tools and fallback_count > 0)
+        if documents_present and qualifying:
+            grounded = grounded and (read_context_ok or manifest_doc_evidence)
         return {
             "requirement": "document" if documents_present else "research",
-            "grounded": bool(qualifying) or (not successful_tools and fallback_count > 0),
+            "grounded": grounded,
             "evidence_result_count": result_count or fallback_count,
             "successful_evidence_tools": sorted({str(item.get("tool_name")) for item in qualifying}),
             "failed_tool_count": len(failures),
