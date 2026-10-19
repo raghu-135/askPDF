@@ -24,7 +24,7 @@ async def test_runtime_mcp_wrapper_preserves_search_arguments(monkeypatch):
     assert calls[0][0] == "search_knowledge"
     assert calls[0][1]["query"] == "external runtime boundary"
     assert calls[0][1]["max_results"] == 7
-    assert "_askpdf_invocation_id" in calls[0][1]
+    assert calls[0][1]["level"] == "chunk"
 
 
 def _result(**overrides):
