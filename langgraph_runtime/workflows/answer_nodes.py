@@ -19,6 +19,7 @@ from langgraph_runtime.workflows.evidence import (
 from langgraph_runtime.workflows.enums import NodeEventStatus, WorkflowNodeType
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
+from langgraph_runtime.workflows.corrective_nodes import corrective_document_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
 from langgraph_runtime.workflows.canvas_publish import (
     publish_deep_research_canvas_draft,
@@ -208,7 +209,10 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             ]
             answer = "Verified findings:\n" + "\n".join(lines)
         else:
-            answer = "I could not verify a substantive answer from the available evidence."
+            answer = (
+                corrective_document_scope_decline(state)
+                or "I could not verify a substantive answer from the available evidence."
+            )
         if contradictions:
             answer += "\n\nUnresolved source disagreements:\n" + "\n".join(
                 f"- {item.get('claim') or item.get('reason') or 'Conflicting evidence'}"
