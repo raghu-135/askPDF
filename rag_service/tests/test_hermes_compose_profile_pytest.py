@@ -146,7 +146,9 @@ def test_control_plane_and_gateway_use_one_pinned_contract():
 def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     compose = _compose("docker-compose.runtime-integration.yml")
     assert "hermes-fake" not in compose["services"]
-    assert compose["services"]["hermes"]["build"]["context"].endswith("#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894")
+    assert compose["services"]["hermes"]["build"]["context"].endswith(
+        "#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
+    )
     assert compose["services"]["hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["hermes"]["volumes"]
     assert compose["services"]["hermes"]["depends_on"]["rag-service"]["condition"] == "service_healthy"

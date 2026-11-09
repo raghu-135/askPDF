@@ -4,7 +4,7 @@ services:
   hermes-real:
     profiles: ["real-hermes"]
     build:
-      context: https://github.com/NousResearch/hermes-agent.git#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      context: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: 0.0.0.0
@@ -49,13 +49,13 @@ services:
       ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
       ASKPDF_MCP_HEALTH_URL: http://rag-service:8000/health
       ASKPDF_MCP_REQUIRED: "false"
-      HERMES_RUNTIME_VERSION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      HERMES_RUNTIME_VERSION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_WORKERS: "1"
       HERMES_MODEL: hermes-runtime-deterministic
       HERMES_MODEL_CONTEXT_LENGTH: "64000"
-      HERMES_UPSTREAM_REVISION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
       HERMES_PROFILE_ROOT: /opt/data/profiles
       HERMES_PROFILE_UID: "10000"
       HERMES_PROFILE_GID: "10000"
@@ -125,7 +125,7 @@ services:
       HERMES_RUNTIME_TOKEN: hermes-runtime-smoke-token-012345678901234567890123
       MCP_EXECUTION_CONTEXT_SECRET: hermes-smoke-mcp-context-secret-012345678901234567
       HERMES_MODEL_CONTEXT_LENGTH: "64000"
-      HERMES_UPSTREAM_REVISION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
       LLM_API_URL: http://fake-llm:9000/v1
       DEFAULT_TOKEN_BUDGET: "8192"
       REPLANS_LIMIT: "10"

@@ -1,7 +1,7 @@
-# Hermes configuration pinned to config schema 37 at
-# NousResearch/hermes-agent@bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894.
+# Hermes configuration pinned to config schema 52 at
+# NousResearch/hermes-agent@v0.23.0 (2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19).
 # Model/provider credentials are supplied through the project .env file.
-_config_version: 37
+_config_version: 52
 
 gateway:
   # The pinned gateway selects one of the immutable Deep Research profiles

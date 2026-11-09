@@ -33,7 +33,7 @@ def hermes_runtime_configuration(monkeypatch):
         "HERMES_RUNTIME_VERSION": "test",
         "HERMES_RUN_PROFILE_MAX_AGE_SECONDS": "86400",
         "HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS": "60",
-        "HERMES_UPSTREAM_REVISION": "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894",
+        "HERMES_UPSTREAM_REVISION": "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
         "HERMES_RUNTIME_STATE_PATH": "/tmp/hermes-runtime-state.json",
         "HERMES_RUNTIME_STORAGE_BACKEND": "file",
         "HERMES_PROFILE_ROOT": "/tmp/hermes-profiles",

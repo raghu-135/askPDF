@@ -16,7 +16,7 @@ import sys
 from typing import Any
 
 
-PINNED_REVISION = "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894"
+PINNED_REVISION = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
 logger = logging.getLogger("askpdf.hermes_pinned_patch")
 
 
@@ -97,6 +97,7 @@ def _install() -> None:
     from hermes_cli.config import load_config
     from tools.mcp_tool import _load_mcp_config, register_mcp_servers
     from tools import mcp_tool
+    from tools import mcp_tool_handlers
     from tools.approval import request_tool_approval
     from approval_bridge import wrap_mcp_handler
     from agent import chat_completion_helpers
@@ -105,10 +106,12 @@ def _install() -> None:
     original_sweep = APIServerAdapter._sweep_orphaned_runs_once
     original_create_agent = APIServerAdapter._create_agent
     original_build_api_kwargs = chat_completion_helpers.build_api_kwargs
-    original_make_tool_handler = mcp_tool._make_tool_handler
+    original_make_tool_handler = mcp_tool_handlers._make_tool_handler
 
-    def make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
-        handler = original_make_tool_handler(server_name, tool_name, tool_timeout)
+    def make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False):
+        handler = original_make_tool_handler(
+            server_name, tool_name, tool_timeout, native_images=native_images,
+        )
         if not server_name.startswith("askpdf_"):
             return handler
         return wrap_mcp_handler(
@@ -117,7 +120,7 @@ def _install() -> None:
             tool_name=tool_name,
         )
 
-    mcp_tool._make_tool_handler = make_tool_handler
+    mcp_tool_handlers._make_tool_handler = make_tool_handler
 
     def create_agent(self: Any, *args: Any, **kwargs: Any) -> Any:
         model_options = kwargs.get("model_options")

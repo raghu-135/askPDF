@@ -230,7 +230,7 @@ services:
     build:
       # Keep this pinned revision visible for consistency checks; the actual
       # build context is always supplied by HERMES_UPSTREAM_REVISION in .env.
-      # Pinned revision: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      # Pinned revision: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19 (v0.23.0)
       context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
     environment:
       - API_SERVER_ENABLED=true

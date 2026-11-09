@@ -305,7 +305,7 @@ class RunProfileManager:
             if config_file.exists():
                 config_file.write_text(
                     "# Retired askPDF runtime profile; contains no secrets.\n"
-                    "_config_version: 37\n"
+                    f"_config_version: {HERMES_CONFIG_SCHEMA_VERSION}\n"
                     "platforms: {}\n"
                     "auxiliary:\n"
                     "  title_generation:\n"
