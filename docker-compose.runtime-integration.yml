@@ -368,6 +368,8 @@ services:
       HERMES_RUNTIME_WORKERS: "1"
       PYTHONPATH: /workspace:/app
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
+      HERMES_DATA_ROOT: /opt/data
+      HERMES_GATEWAY_HOME: /opt/data
       HERMES_PROFILE_ROOT: /opt/data/profiles
       HERMES_PROFILE_UID: "10000"
       HERMES_PROFILE_GID: "10000"

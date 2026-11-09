@@ -30,6 +30,7 @@ from hermes_runtime.execution_store import (
 from hermes_runtime.operational_limits import required_positive_float, required_positive_int
 from runtime_protocol.protocol import decode_event_frame
 from runtime_protocol.hermes_contract import HERMES_APPROVAL_CHOICES, HERMES_REVISION, HERMES_TERMINAL_EVENTS, validate_hermes_context_length
+from hermes_runtime.gateway_control import ensure_profile_served, release_profile_served
 from hermes_runtime.profile_manager import (
     RunProfile,
     RunProfileManager,
@@ -37,6 +38,7 @@ from hermes_runtime.profile_manager import (
     configured_mcp_url,
     configured_context_length,
 )
+from runtime_protocol.hermes_mcp_tool_name import mcp_prefixed_tool_name
 from runtime_protocol import (
     json_envelope,
     sse_encode,
@@ -1214,6 +1216,16 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     context_token=context_token,
                 )
                 execution_profile = run_profile.name
+                if not ensure_profile_served(execution_profile):
+                    raise HTTPException(status_code=502, detail=_error(
+                        "hermes_profile_preflight_failed",
+                        "Hermes gateway could not serve the run profile",
+                        retryable=True,
+                        details={
+                            "stage": "gateway_hot_serve",
+                            "runtime_profile": execution_profile,
+                        },
+                    ))
                 if not profile_manager.verify(run_profile):
                     raise HTTPException(status_code=502, detail=_error(
                         "hermes_profile_preflight_failed",
@@ -1239,7 +1251,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                             str(value) for value in activation.get("registered_tools") or []
                         }
                         expected_registered = {
-                            f"mcp__{run_profile.mcp_server_name}__{tool_name}"
+                            mcp_prefixed_tool_name(run_profile.mcp_server_name, tool_name)
                             for tool_name in run_profile.expected_tools
                         }
                         activation_mismatches = []

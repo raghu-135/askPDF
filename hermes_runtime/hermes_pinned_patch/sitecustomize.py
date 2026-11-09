@@ -30,16 +30,16 @@ def _apply_initial_tool_requirement(agent: Any, api_kwargs: dict[str, Any]) -> d
     return api_kwargs
 
 
-def _registered_tools(server_names: list[str]) -> list[str]:
-    from tools import mcp_tool
+def _registered_tools(server_names: list[str], *, registered: list[str] | None = None) -> list[str]:
+    if registered:
+        return sorted({str(value) for value in registered})
+    from tools.mcp_tool_registration import _existing_tool_names
 
-    result: list[str] = []
-    with mcp_tool._lock:
-        for name in server_names:
-            server = mcp_tool._servers.get(name)
-            result.extend(list(getattr(server, "_registered_tool_names", ()) or ()))
-            result.extend(list(mcp_tool._lazy_server_tool_names.get(name, ()) or ()))
-    return sorted(set(result))
+    names = {str(value) for value in _existing_tool_names()}
+    if server_names:
+        prefixes = tuple(f"mcp__{name}__" for name in server_names)
+        names = {value for value in names if value.startswith(prefixes)}
+    return sorted(names)
 
 
 def _context_header_digests(servers: dict[str, dict[str, Any]]) -> dict[str, str]:
@@ -60,42 +60,22 @@ def _context_header_digests(servers: dict[str, dict[str, Any]]) -> dict[str, str
 
 def _retire_servers(server_names: list[str]) -> None:
     """Shut down only this profile's MCP servers and discard their headers."""
-    from agent.async_utils import safe_schedule_threadsafe
     from tools import mcp_tool
-    from tools.registry import registry
+    from tools.mcp_tool_lifecycle import shutdown_mcp_servers
 
-    with mcp_tool._lock:
-        servers = [mcp_tool._servers.pop(name) for name in server_names if name in mcp_tool._servers]
-        cached_tools = [
-            tool_name
-            for name in server_names
-            for tool_name in (mcp_tool._lazy_server_tool_names.pop(name, ()) or ())
-        ]
-        loop = mcp_tool._mcp_loop
-    for tool_name in cached_tools:
-        registry.deregister(tool_name)
-    if not servers or loop is None or not loop.is_running():
+    scope = mcp_tool._mcp_registry_scope()
+    expected = {str(name) for name in server_names if name}
+    if not expected:
         return
-
-    async def shutdown() -> None:
-        await asyncio.gather(*(server.shutdown() for server in servers), return_exceptions=True)
-
-    future = safe_schedule_threadsafe(
-        shutdown(), loop, logger=logger,
-        log_message="askPDF profile MCP retirement failed to schedule",
-    )
-    if future is not None:
-        try:
-            future.result(timeout=15)
-        except BaseException as exc:
-            logger.warning("askPDF profile MCP retirement failed: %s", type(exc).__name__)
+    shutdown_mcp_servers(scope=scope, names=expected, timeout=15.0)
 
 
 def _install() -> None:
     from aiohttp import web
     from gateway.platforms.api_server import APIServerAdapter
     from hermes_cli.config import load_config
-    from tools.mcp_tool import _load_mcp_config, register_mcp_servers
+    from tools.mcp_tool_config import _load_mcp_config
+    from tools.mcp_tool_discovery import register_mcp_servers
     from tools import mcp_tool
     from tools import mcp_tool_handlers
     from tools.approval import request_tool_approval
@@ -142,15 +122,16 @@ def _install() -> None:
         # loader is the pinned revision's profile-aware interpolation path.
         servers = dict(_load_mcp_config() or {})
         server_names = sorted(str(name) for name in servers)
+        registered: list[str] = []
         if servers:
-            await asyncio.to_thread(register_mcp_servers, servers)
+            registered = list(await asyncio.to_thread(register_mcp_servers, servers) or ())
         response = await original_toolsets(self, request)
         if response.status != 200:
             return response
         # The pinned gateway discovers/registers MCP tools while serving the
         # toolsets request. Read registration state after the original handler
         # has completed so activation metadata reflects the actual toolset.
-        registered_tools = _registered_tools(server_names)
+        registered_tools = _registered_tools(server_names, registered=registered)
         try:
             payload = json.loads(response.body)
         except (TypeError, ValueError, json.JSONDecodeError):

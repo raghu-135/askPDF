@@ -47,6 +47,7 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     adapter = services["hermes-runtime"]
     assert hermes["profiles"] == ["hermes"]
     assert adapter["profiles"] == ["hermes"]
+    assert any(str(entry).startswith("HERMES_GATEWAY_HOME=") for entry in adapter["environment"])
     assert services["hermes-config-init"]["profiles"] == ["hermes"]
     assert "${HERMES_UPSTREAM_REVISION:?" in hermes["build"]["context"]
     assert hermes["healthcheck"]["test"][-1].endswith("/health")
@@ -56,6 +57,7 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in hermes["volumes"]
     assert adapter["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_API_URL=http://hermes:8642" in set(adapter["environment"])
+    assert any(entry.startswith("HERMES_GATEWAY_HOME=") for entry in adapter["environment"])
     assert any(
         entry.startswith("HERMES_RUNTIME_WORKERS=")
         for entry in adapter["environment"]
