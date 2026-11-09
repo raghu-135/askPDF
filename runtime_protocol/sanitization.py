@@ -7,6 +7,7 @@ from typing import Any
 
 
 RUNTIME_PREVIEW_LIMIT = 900
+RUNTIME_UNBOUNDED_STRING_KEYS = frozenset({"answer", "final_answer"})
 RUNTIME_REDACTED_VALUE = "[redacted]"
 _SENSITIVE_PARTS = {
     "api_key", "apikey", "authorization", "bearer", "cookie", "id_token",
@@ -39,6 +40,8 @@ def bounded_value(value: Any, *, key: Any = None) -> Any:
     if value in (None, "", [], {}):
         return value
     if isinstance(value, str):
+        if _normalized_key(key) in RUNTIME_UNBOUNDED_STRING_KEYS:
+            return value
         return value[:RUNTIME_PREVIEW_LIMIT]
     if isinstance(value, (bool, int, float)):
         return value
