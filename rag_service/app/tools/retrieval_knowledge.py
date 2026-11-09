@@ -9,6 +9,7 @@ import re
 from collections import defaultdict
 from typing import Any, Mapping
 
+from app.agent.evidence_contract import evidence_segment
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
 from app.db.repositories.canonical_document_repo import get_canonical_document_repo
 from app.rag.retrieval import (
@@ -416,10 +417,18 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
         sources: list[dict[str, Any]] = []
         content_parts: list[str] = []
         content_source_indexes: list[list[int]] = []
+        evidence_segments: list[dict[str, Any]] = []
         if request.level == "chunk":
             for group in selected_groups:
                 group_sources: list[dict[str, Any]] = []
                 for item in group:
+                    metadata = item.get("metadata") or {}
+                    body = str(
+                        metadata.get("body_text")
+                        or item.get("body_text")
+                        or item.get("text")
+                        or ""
+                    )
                     source = _source_from_chunk(
                         item,
                         score=item.get("rerank_score", item.get("score")),
@@ -427,6 +436,13 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                     )
                     group_sources.append(source)
                     sources.append(source)
+                    if segment := evidence_segment(
+                        kind="document",
+                        content=body,
+                        source=source,
+                        raw_score=source.get("score"),
+                    ):
+                        evidence_segments.append(segment)
                 combined_text = _combine_group_bodies(group)
                 source_ids = ", ".join(str(source["source_id"]) for source in group_sources)
                 page_values = [source.get("page_start") for source in group_sources if source.get("page_start") is not None]
@@ -486,6 +502,14 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
                 }
                 sources.append(source)
                 content_parts.append(f"[Discovery: {title}]\n{title}")
+                preview = str(item.get("text") or title or "").strip()
+                if segment := evidence_segment(
+                    kind="document",
+                    content=preview,
+                    source=source,
+                    raw_score=item.get("score"),
+                ):
+                    evidence_segments.append(segment)
         content, truncated = format_search_knowledge_content(
             sources,
             content_parts,
@@ -494,6 +518,7 @@ async def search_knowledge(request: SearchKnowledgeRequest, context: ToolInvocat
         artifacts = {
             "matches": sources,
             "document_sources": sources,
+            "evidence_segments": evidence_segments,
             "level": request.level,
             "readiness": "repair_in_progress" if repair_scheduled else "ready",
             "repair_scheduled": repair_scheduled,

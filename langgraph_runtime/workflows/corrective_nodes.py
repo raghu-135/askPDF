@@ -7,8 +7,10 @@ from langgraph_runtime.workflows.corrective_contracts import (
     CORRECTIVE_USEFULNESS_VALUES,
     normalized_corrective_policy,
 )
+from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
 from langgraph_runtime.workflows.evidence import (
     corrective_evidence_packets,
+    evidence_packets,
     instruction_injection_reason_codes,
 )
 from langgraph_runtime.workflows.enums import CorrectiveRetrievalRoute, GroundedAnswerRoute
@@ -181,6 +183,38 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
         "unknown_packet_ids": sorted(set(unknown_ids)),
         "reason": str(parsed.get("reason") or "")[:800],
     }
+
+
+DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this question."
+
+
+def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
+    """Return a decline answer when retrieval found documents but none support the question."""
+
+    if state.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
+        return None
+    if corrective_evidence_packets(dict(state)):
+        return None
+    packets = evidence_packets(dict(state))
+    doc_packets = [
+        packet
+        for packet in packets
+        if any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
+    ]
+    if not doc_packets:
+        return None
+    assessments = {
+        str(item.get("packet_id")): item
+        for item in state.get("evidence_assessments") or []
+        if isinstance(item, dict) and item.get("packet_id")
+    }
+    if not assessments:
+        return None
+    for packet in doc_packets:
+        assessment = assessments.get(str(packet.get("id") or ""))
+        if not assessment or assessment.get("relevant") is True:
+            return None
+    return DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
 def corrective_route_for_report(report: Mapping[str, Any], state: Mapping[str, Any]) -> tuple[str, str]:
