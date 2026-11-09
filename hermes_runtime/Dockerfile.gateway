@@ -7,8 +7,4 @@ FROM hermes-upstream
 ARG ASKPDF_HERMES_PATCH_ROOT=/opt/askpdf-hermes-pinned-patch
 COPY hermes_runtime/hermes_pinned_patch ${ASKPDF_HERMES_PATCH_ROOT}
 
-RUN set -eux; \
-    SITE="$("/opt/hermes/.venv/bin/python" -c 'import site; print(next(p for p in site.getsitepackages() if p.endswith("site-packages")))')"; \
-    printf '%s\n' "${ASKPDF_HERMES_PATCH_ROOT}" > "${SITE}/askpdf-hermes-pinned.pth"; \
-    test -f "${SITE}/askpdf-hermes-pinned.pth"; \
-    "/opt/hermes/.venv/bin/python" -c "import pathlib, site; root=pathlib.Path('${ASKPDF_HERMES_PATCH_ROOT}'); assert (root / 'sitecustomize.py').is_file(); assert any(pathlib.Path(p).joinpath('askpdf-hermes-pinned.pth').is_file() for p in site.getsitepackages())"
+RUN ["/opt/hermes/.venv/bin/python", "-c", "import pathlib, site; root = pathlib.Path('/opt/askpdf-hermes-pinned-patch'); assert (root / 'sitecustomize.py').is_file(), root; site_dir = next(p for p in site.getsitepackages() if p.endswith('site-packages')); pth = pathlib.Path(site_dir) / 'askpdf-hermes-pinned.pth'; pth.write_text(str(root) + '\\n', encoding='utf-8'); assert pth.is_file(), pth"]

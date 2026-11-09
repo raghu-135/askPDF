@@ -1,7 +1,8 @@
+import os
 from pathlib import Path
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(os.getenv("ASKPDF_REPO_DIR", str(Path(__file__).resolve().parents[2])))
 SITECUSTOMIZE = REPOSITORY_ROOT / "hermes_runtime/hermes_pinned_patch/sitecustomize.py"
 
 
