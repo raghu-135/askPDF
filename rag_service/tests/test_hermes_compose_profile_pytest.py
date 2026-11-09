@@ -56,7 +56,8 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert any(str(entry).startswith("HERMES_GATEWAY_HOME=") for entry in adapter["environment"])
     assert services["hermes-config-init"]["profiles"] == ["hermes"]
     assert hermes["build"]["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
-    assert "${HERMES_UPSTREAM_REVISION:?" in hermes["build"]["additional_contexts"]["hermes-upstream"]
+    assert hermes["build"]["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream"
+    assert "${HERMES_UPSTREAM_REVISION:?" in services["hermes-upstream"]["build"]["context"]
     assert hermes["healthcheck"]["test"][-1].endswith("/health")
     assert "ASKPDF_HERMES_COMPAT_ENABLED=1" in set(hermes["environment"])
     assert "LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
@@ -157,7 +158,8 @@ def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     assert "hermes-fake" not in compose["services"]
     hermes_build = compose["services"]["hermes"]["build"]
     assert hermes_build["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
-    assert hermes_build["additional_contexts"]["hermes-upstream"].endswith(
+    assert hermes_build["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream"
+    assert compose["services"]["hermes-upstream"]["build"]["context"].endswith(
         "#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
     )
     assert compose["services"]["hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"

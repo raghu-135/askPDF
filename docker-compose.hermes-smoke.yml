@@ -1,13 +1,20 @@
 name: askpdf-hermes-smoke
 
 services:
+  hermes-upstream-real:
+    profiles: ["real-hermes"]
+    image: askpdf-hermes-upstream:2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+    build:
+      context: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+    entrypoint: ["/bin/true"]
+
   hermes-real:
     profiles: ["real-hermes"]
     build:
       context: .
       dockerfile: hermes_runtime/Dockerfile.gateway
       additional_contexts:
-        hermes-upstream: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+        hermes-upstream: service:hermes-upstream-real
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: 0.0.0.0
@@ -26,6 +33,8 @@ services:
       timeout: 5s
       retries: 30
     depends_on:
+      hermes-upstream-real:
+        condition: service_completed_successfully
       fake-llm:
         condition: service_healthy
 

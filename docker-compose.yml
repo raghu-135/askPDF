@@ -226,6 +226,13 @@ services:
       - env_secrets:/secrets:ro
       - hermes_data:/opt/data
 
+  hermes-upstream:
+    profiles: ["hermes"]
+    image: askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+    build:
+      context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+    entrypoint: ["/bin/true"]
+
   hermes:
     profiles: ["hermes"]
     build:
@@ -233,7 +240,7 @@ services:
       context: .
       dockerfile: hermes_runtime/Dockerfile.gateway
       additional_contexts:
-        hermes-upstream: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+        hermes-upstream: service:hermes-upstream
     environment:
       - API_SERVER_ENABLED=true
       - API_SERVER_HOST=0.0.0.0
@@ -253,6 +260,8 @@ services:
     command: ["gateway"]
     depends_on:
       env-secrets:
+        condition: service_completed_successfully
+      hermes-upstream:
         condition: service_completed_successfully
       hermes-config-init:
         condition: service_completed_successfully
