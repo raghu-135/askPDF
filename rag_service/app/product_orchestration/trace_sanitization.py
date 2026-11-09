@@ -7,6 +7,7 @@ from app.product_orchestration.trace import compact_preview
 
 
 TRACE_PREVIEW_LIMIT = 900
+TRACE_UNBOUNDED_STRING_KEYS = frozenset({"answer", "final_answer"})
 TRACE_REDACTED_VALUE = "[redacted]"
 TRACE_SENSITIVE_KEY_PARTS = {
     "api_key",
@@ -66,10 +67,15 @@ def _bounded_value(value: Any, *, key: Any = None) -> Any:
     if value in (None, "", [], {}):
         return value
     if isinstance(value, str):
+        normalized_key = _normalized_key(key)
         # Streaming deltas are content fragments; trimming either edge changes
         # the reconstructed output when adjacent chunks are coalesced.
-        if _normalized_key(key) == "delta":
+        if normalized_key == "delta":
             return value[:TRACE_PREVIEW_LIMIT]
+        # Terminal chat responses must reach clients in full; trace previews stay
+        # bounded via keys such as output_preview and proposed_final_answer.
+        if normalized_key in TRACE_UNBOUNDED_STRING_KEYS:
+            return value
         return compact_preview(value, limit=TRACE_PREVIEW_LIMIT)
     if isinstance(value, list):
         return [_bounded_value(item) for item in value[:50]]
