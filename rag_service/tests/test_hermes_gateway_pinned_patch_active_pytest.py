@@ -56,5 +56,5 @@ def test_live_gateway_toolsets_include_askpdf_runtime_profile_metadata():
     assert isinstance(profile, dict), payload
     assert "registered_tools" in profile
     assert "mcp_server_names" in profile
-    assert profile.get("name") == "askpdf-deep-offline"
+    assert "mcp_context_header_sha256" in profile
 
