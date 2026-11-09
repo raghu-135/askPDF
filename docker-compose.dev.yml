@@ -85,7 +85,7 @@ services:
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:-64000}
       GATEWAY_MULTIPLEX_PROFILES: "true"
       ASKPDF_HERMES_COMPAT_ENABLED: "1"
-      PYTHONPATH: /opt/askpdf-hermes-pinned-patch
+      PYTHONPATH: /opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib
 
   hermes-runtime:
     environment:
