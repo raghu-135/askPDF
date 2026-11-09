@@ -146,7 +146,7 @@ def _install() -> None:
         }
         return web.json_response(payload, status=response.status)
 
-    async def handle_run_events(self: Any, request: Any) -> Any:
+    async def handle_run_events(self: Any, request: Any, *, _api_server: Any) -> Any:
         from event_stream import serve_run_events
         from gateway.platforms.api_server import _sse_frame
         config = load_config()
@@ -157,7 +157,12 @@ def _install() -> None:
                 await asyncio.to_thread(_retire_servers, server_names)
 
         return await serve_run_events(
-            self, request, web=web, encode_frame=_sse_frame, on_terminal=retire_after_terminal,
+            self,
+            request,
+            web=web,
+            encode_frame=_sse_frame,
+            on_terminal=retire_after_terminal,
+            _api_server=_api_server,
         )
 
     def sweep_orphaned_runs(self: Any, now: float | None = None) -> None:
