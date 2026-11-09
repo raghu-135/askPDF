@@ -70,7 +70,10 @@ async def _mcp_run_cancel_requested(run_id: str) -> bool:
 
 
 def _schema(model: type[Any]) -> dict[str, Any]:
-    return model.model_json_schema() if hasattr(model, "model_json_schema") else model.schema()
+    from runtime_protocol.provider_tool_schema import provider_compatible_json_schema
+
+    raw = model.model_json_schema() if hasattr(model, "model_json_schema") else model.schema()
+    return provider_compatible_json_schema(raw)
 
 
 class MCPServer:

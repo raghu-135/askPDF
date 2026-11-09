@@ -130,8 +130,13 @@ def _install() -> None:
         return agent
 
     def build_api_kwargs(agent: Any, api_messages: list[Any], tools_for_api: list[Any] | None = None) -> dict[str, Any]:
+        from runtime_protocol.provider_tool_schema import provider_compatible_function_tools
+
         kwargs = original_build_api_kwargs(agent, api_messages, tools_for_api=tools_for_api)
-        return _apply_initial_tool_requirement(agent, kwargs)
+        kwargs = _apply_initial_tool_requirement(agent, kwargs)
+        if kwargs.get("tools"):
+            kwargs["tools"] = provider_compatible_function_tools(kwargs["tools"])
+        return kwargs
 
     async def handle_toolsets(self: Any, request: Any) -> Any:
         config = load_config()

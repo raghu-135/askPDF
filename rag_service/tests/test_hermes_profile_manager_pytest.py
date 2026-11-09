@@ -1,10 +1,12 @@
 from pathlib import Path
+import json
 import os
 import time
 
 import pytest
 
 from hermes_runtime.hermes_pinned_patch.sitecustomize import _apply_initial_tool_requirement, _context_header_digests
+from runtime_protocol.provider_tool_schema import provider_compatible_function_tools
 import hermes_runtime.profile_manager as profile_manager
 
 
@@ -17,6 +19,24 @@ def test_initial_tool_requirement_is_profile_local_and_consumed_once() -> None:
     assert first["tool_choice"] == "required"
     assert "tool_choice" not in second
     assert "tool_choice" not in unrelated
+
+
+def test_provider_compatible_function_tools_matches_hermes_emission_contract() -> None:
+    tools = provider_compatible_function_tools([
+        {
+            "type": "function",
+            "function": {
+                "name": "publish_canvas",
+                "parameters": {
+                    "$defs": {"Claim": {"type": "object", "properties": {"text": {"type": "string"}}}},
+                    "properties": {"claims": {"type": "array", "items": {"$ref": "#/$defs/Claim"}}},
+                },
+            },
+        }
+    ])
+    payload = json.dumps(tools)
+    assert "$defs" not in payload
+    assert "$ref" not in payload
 from hermes_runtime.profile_manager import RunProfileManager, configured_context_length, render_bootstrap_config
 
 

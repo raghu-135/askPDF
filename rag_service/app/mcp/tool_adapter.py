@@ -198,12 +198,14 @@ class MCPToolAdapter:
 
         if not hasattr(self.args_schema, "model_json_schema"):
             raise TypeError(f"MCP tool {self.name!r} has no JSON-schema model")
+        from runtime_protocol.provider_tool_schema import provider_compatible_json_schema
+
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": self.args_schema.model_json_schema(),
+                "parameters": provider_compatible_json_schema(self.args_schema.model_json_schema()),
             },
         }
 

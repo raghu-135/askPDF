@@ -16,7 +16,11 @@ def test_neutral_adapter_returns_authoritative_model_tool_schema():
     schema = tool.model_tool_schema()
     assert schema["type"] == "function"
     assert schema["function"]["name"] == "memory_search"
-    assert schema["function"]["parameters"] == MemorySearchInput.model_json_schema()
+    from runtime_protocol.provider_tool_schema import provider_compatible_json_schema
+
+    assert schema["function"]["parameters"] == provider_compatible_json_schema(
+        MemorySearchInput.model_json_schema()
+    )
 
 
 @pytest.mark.asyncio
