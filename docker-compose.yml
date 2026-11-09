@@ -238,7 +238,7 @@ services:
       - API_SERVER_PORT=8642
       - GATEWAY_MULTIPLEX_PROFILES=true
       - ASKPDF_HERMES_COMPAT_ENABLED=1
-      - PYTHONPATH=/opt/askpdf-hermes-pinned-patch
+      - PYTHONPATH=/opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib
       - API_SERVER_KEY=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
       - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
       - OPENAI_BASE_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
@@ -261,6 +261,7 @@ services:
       - env_secrets:/secrets:ro
       - hermes_data:/opt/data
       - ./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro
+      - ./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8642/health"]
       interval: 10s

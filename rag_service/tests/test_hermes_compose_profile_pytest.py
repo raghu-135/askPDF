@@ -54,6 +54,8 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert "LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
     assert "OPENAI_BASE_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in hermes["volumes"]
+    assert "./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro" in hermes["volumes"]
+    assert "PYTHONPATH=/opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib" in set(hermes["environment"])
     assert adapter["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_API_URL=http://hermes:8642" in set(adapter["environment"])
     assert any(
@@ -149,6 +151,8 @@ def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     assert compose["services"]["hermes"]["build"]["context"].endswith("#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894")
     assert compose["services"]["hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["hermes"]["volumes"]
+    assert "./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro" in compose["services"]["hermes"]["volumes"]
+    assert compose["services"]["hermes"]["environment"]["PYTHONPATH"] == "/opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib"
     assert compose["services"]["hermes"]["depends_on"]["rag-service"]["condition"] == "service_healthy"
     control_plane = compose["services"]["rag-service"]
     assert control_plane["environment"]["HERMES_RUNTIME_URL"] == "http://hermes-runtime:8200"
