@@ -268,8 +268,9 @@ def _table_row_render(
             ),
             None,
         )
-        if merged is not None:
-            span = max(1, int(merged.get("col_span", 1)))
+        span = max(1, int(merged.get("col_span", 1))) if merged is not None else 1
+        # Preserve explicit multi-column spans from Docling first.
+        if merged is not None and span > 1:
             label = " / ".join(labels[index:index + span])
             value = _normalize_scientific_in_cell(str(merged.get("text") or values[index]).strip())
             rendered.append(f"{label}: {value}")
@@ -294,6 +295,13 @@ def _table_row_render(
             label = " / ".join(labels[index:index + 2])
             rendered.append(f"{label}: {values[index]}")
             covered.update(range(index, index + 2))
+            continue
+        # Fall back to a single-cell value (normalized) when no coalescing applies.
+        if merged is not None:
+            label = labels[index]
+            value = _normalize_scientific_in_cell(str(merged.get("text") or values[index]).strip())
+            rendered.append(f"{label}: {value}")
+            covered.add(index)
             continue
         rendered.append(f"{labels[index]}: {values[index]}")
     return " | ".join(rendered)
