@@ -146,9 +146,12 @@ def _install() -> None:
         }
         return web.json_response(payload, status=response.status)
 
-    async def handle_run_events(self: Any, request: Any, *, _api_server: Any) -> Any:
+    async def handle_run_events(self: Any, request: Any, *, _api_server: Any = None) -> Any:
         from event_stream import serve_run_events
+        from gateway.platforms import api_server as gateway_api_server
         from gateway.platforms.api_server import _sse_frame
+        if _api_server is None:
+            _api_server = gateway_api_server
         config = load_config()
         server_names = sorted(str(name) for name in (config.get("mcp_servers") or {}))
 
