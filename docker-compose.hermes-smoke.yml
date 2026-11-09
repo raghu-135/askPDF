@@ -4,11 +4,16 @@ services:
   hermes-real:
     profiles: ["real-hermes"]
     build:
-      context: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+      context: .
+      dockerfile: hermes_runtime/Dockerfile.gateway
+      additional_contexts:
+        hermes-upstream: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: 0.0.0.0
       API_SERVER_PORT: "8642"
+      HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+      ASKPDF_HERMES_COMPAT_ENABLED: "1"
     env_file:
       - ./hermes_runtime/smoke.env
     command: ["gateway"]

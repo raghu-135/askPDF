@@ -87,6 +87,24 @@ def ensure_profile_served(profile_name: str, *, timeout: float = _DEFAULT_TIMEOU
     return False
 
 
-def release_profile_served(profile_name: str, *, timeout: float = _DEFAULT_TIMEOUT) -> None:
-    """Best-effort unserve after a run profile is retired."""
-    _query(gateway_home(), "unserve-profile", params={"name": profile_name}, timeout=timeout)
+def _profile_is_served(profile_name: str, served_profiles: object) -> bool:
+    if not isinstance(served_profiles, list):
+        return False
+    return profile_name in {str(value) for value in served_profiles}
+
+
+def release_profile_served(profile_name: str, *, timeout: float = _DEFAULT_TIMEOUT) -> bool:
+    """Unserve a retired run profile and confirm it no longer appears as served."""
+    home = gateway_home()
+    if _socket_path(home) is None:
+        return True
+    result = _query(home, "unserve-profile", params={"name": profile_name}, timeout=timeout)
+    if result is not None and not _profile_is_served(profile_name, result.get("served_profiles")):
+        logger.info("Hermes gateway unserved profile %s", profile_name)
+        return True
+    result = _query(home, "rescan-profiles", timeout=timeout)
+    if result is not None and not _profile_is_served(profile_name, result.get("served_profiles")):
+        logger.info("Hermes gateway rescanned; profile %s is not served", profile_name)
+        return True
+    logger.warning("Hermes gateway still lists profile %s as served after unserve", profile_name)
+    return False

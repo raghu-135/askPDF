@@ -16,5 +16,5 @@ def test_pinned_sitecustomize_targets_v023_mcp_modules():
 
 def test_pinned_sitecustomize_uses_scoped_mcp_teardown():
     text = SITECUSTOMIZE.read_text()
-    assert "shutdown_mcp_servers" in text
-    assert "_resolve_server_key" in text
+    assert "shutdown_mcp_servers(scope=scope" in text
+    assert "_resolve_server_key" not in text

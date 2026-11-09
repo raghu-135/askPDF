@@ -41,6 +41,12 @@ def test_bootstrap_profiles_defer_mcp_to_isolated_run_profiles():
         assert config["auxiliary"]["title_generation"]["enabled"] is False
 
 
+def test_gateway_overlay_dockerfile_installs_patch_via_site_packages_pth():
+    dockerfile = (REPOSITORY_ROOT / "hermes_runtime/Dockerfile.gateway").read_text()
+    assert "askpdf-hermes-pinned.pth" in dockerfile
+    assert "hermes_runtime/hermes_pinned_patch" in dockerfile
+
+
 def test_main_compose_keeps_pinned_real_hermes_opt_in():
     services = _compose("docker-compose.yml")["services"]
     hermes = services["hermes"]
@@ -49,7 +55,8 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert adapter["profiles"] == ["hermes"]
     assert any(str(entry).startswith("HERMES_GATEWAY_HOME=") for entry in adapter["environment"])
     assert services["hermes-config-init"]["profiles"] == ["hermes"]
-    assert "${HERMES_UPSTREAM_REVISION:?" in hermes["build"]["context"]
+    assert hermes["build"]["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
+    assert "${HERMES_UPSTREAM_REVISION:?" in hermes["build"]["additional_contexts"]["hermes-upstream"]
     assert hermes["healthcheck"]["test"][-1].endswith("/health")
     assert "ASKPDF_HERMES_COMPAT_ENABLED=1" in set(hermes["environment"])
     assert "LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
@@ -148,7 +155,9 @@ def test_control_plane_and_gateway_use_one_pinned_contract():
 def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     compose = _compose("docker-compose.runtime-integration.yml")
     assert "hermes-fake" not in compose["services"]
-    assert compose["services"]["hermes"]["build"]["context"].endswith(
+    hermes_build = compose["services"]["hermes"]["build"]
+    assert hermes_build["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
+    assert hermes_build["additional_contexts"]["hermes-upstream"].endswith(
         "#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
     )
     assert compose["services"]["hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"

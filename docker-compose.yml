@@ -229,17 +229,18 @@ services:
   hermes:
     profiles: ["hermes"]
     build:
-      # Keep this pinned revision visible for consistency checks; the actual
-      # build context is always supplied by HERMES_UPSTREAM_REVISION in .env.
       # Pinned revision: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19 (v0.23.0)
-      context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+      context: .
+      dockerfile: hermes_runtime/Dockerfile.gateway
+      additional_contexts:
+        hermes-upstream: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
     environment:
       - API_SERVER_ENABLED=true
       - API_SERVER_HOST=0.0.0.0
       - API_SERVER_PORT=8642
       - GATEWAY_MULTIPLEX_PROFILES=true
       - ASKPDF_HERMES_COMPAT_ENABLED=1
-      - PYTHONPATH=/opt/askpdf-hermes-pinned-patch
+      - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
       - API_SERVER_KEY=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
       - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
       - OPENAI_BASE_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}

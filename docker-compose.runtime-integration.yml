@@ -308,7 +308,10 @@ services:
   hermes:
     profiles: !reset []
     build:
-      context: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+      context: .
+      dockerfile: hermes_runtime/Dockerfile.gateway
+      additional_contexts:
+        hermes-upstream: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: 0.0.0.0
@@ -321,7 +324,6 @@ services:
       GATEWAY_MULTIPLEX_PROFILES: "true"
       HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
       ASKPDF_HERMES_COMPAT_ENABLED: "1"
-      PYTHONPATH: /opt/askpdf-hermes-pinned-patch
     command: ["gateway"]
     depends_on:
       hermes-config-init:
@@ -504,6 +506,7 @@ services:
       MCP_EXECUTION_CONTEXT_SECRET: integration-mcp-execution-context-secret-32-bytes-minimum
       HERMES_RUNTIME_URL: http://hermes-runtime:8200
       HERMES_API_URL: http://hermes:8642
+      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file

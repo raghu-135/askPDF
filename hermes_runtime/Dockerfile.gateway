@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1
+# Overlay on the pinned upstream Hermes image: bake askPDF's gateway patch into
+# the sealed venv via site-packages .pth so v0.23 launchers that unset
+# PYTHONPATH still import sitecustomize at gateway startup.
+FROM hermes-upstream
+
+ARG ASKPDF_HERMES_PATCH_ROOT=/opt/askpdf-hermes-pinned-patch
+COPY hermes_runtime/hermes_pinned_patch ${ASKPDF_HERMES_PATCH_ROOT}
+
+RUN set -eux; \
+    SITE="$("/opt/hermes/.venv/bin/python" -c 'import site; print(next(p for p in site.getsitepackages() if p.endswith("site-packages")))')"; \
+    printf '%s\n' "${ASKPDF_HERMES_PATCH_ROOT}" > "${SITE}/askpdf-hermes-pinned.pth"; \
+    test -f "${SITE}/askpdf-hermes-pinned.pth"; \
+    "/opt/hermes/.venv/bin/python" -c "import pathlib, site; root=pathlib.Path('${ASKPDF_HERMES_PATCH_ROOT}'); assert (root / 'sitecustomize.py').is_file(); assert any(pathlib.Path(p).joinpath('askpdf-hermes-pinned.pth').is_file() for p in site.getsitepackages())"

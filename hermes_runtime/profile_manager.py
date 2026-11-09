@@ -320,11 +320,12 @@ class RunProfileManager:
             }
             (destination / TOMBSTONE_FILE).write_text(json.dumps(tombstone, sort_keys=True))
         self._active.discard(profile_name)
-        try:
-            from hermes_runtime.gateway_control import release_profile_served
-            release_profile_served(profile_name)
-        except Exception:
-            pass
+        from hermes_runtime.gateway_control import release_profile_served
+
+        if not release_profile_served(profile_name):
+            raise RuntimeError(
+                f"Hermes gateway did not unserve retired profile {profile_name}"
+            )
 
     def remove(self, profile_name: str | None) -> None:
         """Permanently remove an inactive generated profile."""
