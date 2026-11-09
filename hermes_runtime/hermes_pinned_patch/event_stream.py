@@ -46,6 +46,8 @@ async def serve_run_events(adapter, request, *, web, encode_frame, on_terminal):
         return web.json_response({"error": {"code": "run_not_found", "message": f"Run not found: {run_id}"}}, status=404)
     if not hasattr(adapter, "_askpdf_event_replays"):
         adapter._askpdf_event_replays = {}
+    if not hasattr(adapter, "_run_stream_subscribers"):
+        adapter._run_stream_subscribers = set()
     replay = adapter._askpdf_event_replays.setdefault(run_id, _Replay())
     # A reconnect can arrive before the previous socket notices disconnect.
     # Serial readers preserve native queue order during that handover.
