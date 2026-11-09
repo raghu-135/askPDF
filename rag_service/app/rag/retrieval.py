@@ -295,6 +295,13 @@ def _document_stitch_group_key(chunk: Dict[str, Any]) -> tuple[str, str, str]:
     manifest_id = str(chunk.get("manifest_id") or metadata.get("manifest_id") or "")
     table_id = metadata.get("table_id") or chunk.get("table_id")
     if table_id:
+        # Prefer row-level grouping when available to avoid mixing adjacent rows.
+        row_id = metadata.get("table_row_id") or chunk.get("table_row_id")
+        if row_id:
+            return (file_hash, manifest_id, "table-row:" + str(row_id))
+        row_ids = metadata.get("table_row_ids") or []
+        if isinstance(row_ids, list) and len(row_ids) == 1:
+            return (file_hash, manifest_id, "table-row:" + str(row_ids[0]))
         return (file_hash, manifest_id, "table:" + str(table_id))
     section_id = str(metadata.get("section_id") or chunk.get("section_id") or file_hash)
     chunk_identity = str(metadata.get("chunk_identity") or chunk.get("chunk_identity") or "").strip()

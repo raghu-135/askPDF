@@ -27,6 +27,7 @@ REPO_DIR = Path(os.environ.get("ASKPDF_REPO_DIR", "/workspace"))
 
 UNIT_TEST_FILES = [
     "test_document_pipeline.py",
+    "test_table_scientific_notation_pytest.py",
     "test_embedding_tokenizer_registry_pytest.py",
     "test_fill_env_secrets_pytest.py",
     "test_document_repair.py",

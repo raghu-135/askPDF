@@ -16,9 +16,9 @@ from functools import lru_cache
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-EXTRACTION_PIPELINE_VERSION = "docling-pdf-v13"
+EXTRACTION_PIPELINE_VERSION = "docling-pdf-v15"
 CANONICAL_SCHEMA_VERSION = "docling-canonical-v2"
-RETRIEVAL_CHUNKING_VERSION = "table-pack-v9"
+RETRIEVAL_CHUNKING_VERSION = "table-pack-v10"
 RETRIEVAL_SOURCE_VERSION = "document-retrieval-v3"
 READING_EXCLUDED_LABELS = frozenset({
     "page_header",
@@ -187,6 +187,60 @@ def _table_row_render(
     cells: Sequence[Mapping[str, Any]],
 ) -> str:
     """Render explicit header/value pairs while respecting merged cells."""
+    def _normalize_scientific_in_cell(text: str) -> str:
+        """Convert patterns like '2.3 · 1019' or '2.3 x 1019' to '2.3 × 10^19'."""
+        value = str(text or "").strip()
+        # Already normalized: '10^NN' present
+        if re.search(r"\b10\s*\^\s*\d{1,3}\b", value):
+            return re.sub(r"\b10\s*\^\s*(\d{1,3})\b", r"10^\1", value)
+        # Convert '·'/'x'/'×' followed by 10xx variants inside the same cell
+        m = re.search(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*[×xX·]\s*10\s*(?:\^\s*)?(\d{1,3})\s*$", value)
+        if m:
+            return f"{m.group(1)} × 10^{m.group(2)}"
+        # Convert '·'/'x'/'×' followed by a flattened superscript like 1019
+        m = re.search(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*[×xX·]\s*(10)(\d{1,3})\s*$", value)
+        if m:
+            return f"{m.group(1)} × 10^{m.group(3)}"
+        return value
+
+    def _label_group_base(label: str) -> str:
+        """Common prefix for split column headers like 'Metric/EN-DE' and 'Metric/EN-FR'."""
+        parts = [part.strip() for part in str(label or "").split("/") if part.strip()]
+        return parts[0] if parts else str(label or "").strip()
+
+    def _combine_split_scientific_pair(
+        index: int, labels: Sequence[str], values: Sequence[str]
+    ) -> tuple[bool, str, str, int]:
+        """
+        Detect 'mantissa ·' in values[index] and '1019' in values[index+1] and return a combined
+        (label, value) that spans both columns. Returns (combined, label, value, span).
+        """
+        if index + 1 >= len(values):
+            return False, "", "", 1
+        left = str(values[index] or "").strip()
+        right = str(values[index + 1] or "").strip()
+        if not left or not right:
+            return False, "", "", 1
+        # Incomplete mantissa in the left cell: '2.3 ·' or '2.3 ×'
+        if not re.match(r"^\s*[0-9]+(?:\.[0-9]+)?\s*[×xX·]\s*$", left):
+            return False, "", "", 1
+        # Right cell contains a flattened power like 1019, or explicit 10^19
+        exp = None
+        m = re.match(r"^\s*10\s*\^\s*(\d{1,3})\s*$", right)
+        if m:
+            exp = m.group(1)
+        else:
+            m = re.match(r"^\s*10(\d{1,3})\s*$", right)
+            if m:
+                exp = m.group(1)
+        if exp is None:
+            return False, "", "", 1
+        mantissa = re.sub(r"[×xX·]\s*$", "", left).strip()
+        # Build a combined label from the adjacent headers to reflect the colspan
+        label = " / ".join(labels[index:index + 2])
+        value = f"{mantissa} × 10^{exp}"
+        return True, label, value, 2
+
     width = max(
         len(headers),
         len(row),
@@ -199,7 +253,7 @@ def _table_row_render(
             default=0,
         ),
     )
-    values = [str(row[index]).strip() if index < len(row) else "" for index in range(width)]
+    values = [_normalize_scientific_in_cell(str(row[index]).strip() if index < len(row) else "") for index in range(width)]
     labels = [str(headers[index]).strip() or f"Column {index + 1}" for index in range(width)]
     rendered: list[str] = []
     covered: set[int] = set()
@@ -214,12 +268,40 @@ def _table_row_render(
             ),
             None,
         )
-        if merged is not None:
-            span = max(1, int(merged.get("col_span", 1)))
+        span = max(1, int(merged.get("col_span", 1))) if merged is not None else 1
+        # Preserve explicit multi-column spans from Docling first.
+        if merged is not None and span > 1:
             label = " / ".join(labels[index:index + span])
-            value = str(merged.get("text") or values[index]).strip()
+            value = _normalize_scientific_in_cell(str(merged.get("text") or values[index]).strip())
             rendered.append(f"{label}: {value}")
             covered.update(range(index, min(width, index + span)))
+            continue
+        # Treat an implied colspan=2 when scientific notation was split across sibling cells
+        combined, label, value, span = _combine_split_scientific_pair(index, labels, values)
+        if combined:
+            rendered.append(f"{label}: {value}")
+            covered.update(range(index, min(width, index + span)))
+            continue
+        # Treat a complete scientific value sitting under the left column with an empty sibling
+        # that shares the same header base as an implied colspan=2.
+        if (
+            index + 1 < width
+            and index + 1 not in covered
+            and _label_group_base(labels[index]) == _label_group_base(labels[index + 1])
+            and values[index]
+            and not values[index + 1]
+            and re.match(r"^\s*[0-9]+(?:\.[0-9]+)?\s*[×xX·]\s*10(?:\^\s*)?\d{1,3}\s*$", values[index])
+        ):
+            label = " / ".join(labels[index:index + 2])
+            rendered.append(f"{label}: {values[index]}")
+            covered.update(range(index, index + 2))
+            continue
+        # Fall back to a single-cell value (normalized) when no coalescing applies.
+        if merged is not None:
+            label = labels[index]
+            value = _normalize_scientific_in_cell(str(merged.get("text") or values[index]).strip())
+            rendered.append(f"{label}: {value}")
+            covered.add(index)
             continue
         rendered.append(f"{labels[index]}: {values[index]}")
     return " | ".join(rendered)
@@ -1111,6 +1193,7 @@ def pack_retrieval_chunks(
 
     previous_section: Any = object()
     previous_table: Any = object()
+    previous_row: Any = object()
 
     def pack_limit_for(items: Sequence[Mapping[str, Any]]) -> int:
         if items and items[0].get("table_id"):
@@ -1120,7 +1203,11 @@ def pack_retrieval_chunks(
     for sentence in sentences:
         section = sentence.get("section_id")
         table = sentence.get("table_id")
-        structural_change = section != previous_section or table != previous_table
+        row_id = sentence.get("table_row_id")
+        # Keep each table row as an independent retrieval unit.
+        structural_change = section != previous_section or table != previous_table or (
+            table and row_id != previous_row
+        )
         sentence_ceiling = max_sentences is not None and len(group) >= max_sentences
         if group and (structural_change or sentence_ceiling):
             flush()
@@ -1136,16 +1223,17 @@ def pack_retrieval_chunks(
         if not group and embedding_cost > embedding_token_limit:
             group.append(sentence)
             flush()
-            previous_section, previous_table = section, table
+            previous_section, previous_table, previous_row = section, table, row_id
             continue
         if not group and embedding_cost > pack_limit_for([sentence]):
             group.append(sentence)
             flush()
-            previous_section, previous_table = section, table
+            previous_section, previous_table, previous_row = section, table, row_id
             continue
         group.append(sentence)
         previous_section = section
         previous_table = table
+        previous_row = row_id
     flush()
     return chunks
 
