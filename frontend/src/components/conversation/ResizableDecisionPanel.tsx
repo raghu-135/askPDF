@@ -12,7 +12,7 @@ import {
 
 export function ResizableDecisionPanel({
   title,
-  children,
+  children = null,
   footer,
   fixedHeader,
   variant = 'clarification',
@@ -150,6 +150,10 @@ export function ResizableDecisionPanel({
         ...shellBorderSx,
         flexShrink: 1,
       }}>
+        {showResizeHandle ? (
+          <ResizablePanelHandle resizing={resizing} onResizeStart={onResizeStart} label="Resize decision panel" />
+        ) : null}
+        {titleRow}
         <Box
           data-testid="review-decision-scroll"
           sx={{
@@ -159,27 +163,13 @@ export function ResizableDecisionPanel({
             overflowX: 'hidden',
             display: 'flex',
             flexDirection: 'column',
+            gap: 1,
+            px: 1,
+            pb: 1,
           }}
         >
-          {showResizeHandle ? (
-            <ResizablePanelHandle resizing={resizing} onResizeStart={onResizeStart} label="Resize decision panel" />
-          ) : null}
-          {titleRow}
-          {fixedHeader ? (
-            <Box sx={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 1,
-              px: 1,
-              pb: 1,
-              flex: '1 1 0',
-              minHeight: 0,
-              overflow: 'hidden',
-            }}>
-              {fixedHeader}
-            </Box>
-          ) : null}
-          {bodyRow}
+          {fixedHeader}
+          {children}
         </Box>
         {footer ? (
           <Box

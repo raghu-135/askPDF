@@ -14,6 +14,10 @@
         .primary-doc { flex: 1 1 0.68; }
         .secondary-pane { flex: 0 0 32%; }
       }
+      @media (min-width: 1400px) {
+        .primary-doc { flex: 1 1 0.60; }
+        .secondary-pane { flex: 0 0 40%; }
+      }
       @media (max-width: 1099px) {
         .app-shell { flex-direction: column; }
         .primary-doc { flex: 0 0 auto; height: 42vh; min-height: 0; }
@@ -51,22 +55,19 @@
         border-top: 2px solid #0288d1;
         background: #fff;
       }
+      .decision-title { text-align: center; padding: 8px; font-weight: 700; color: #666; flex-shrink: 0; }
       .decision-scroll {
         flex: 1 1 0;
         min-height: 0;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
+        gap: 8px;
+        padding: 0 8px 8px;
       }
-      .decision-title { text-align: center; padding: 8px; font-weight: 700; color: #666; flex-shrink: 0; }
-      .decision-header { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; padding: 0 8px 8px; overflow: hidden; }
-      .decision-lead { flex-shrink: 0; margin-bottom: 8px; color: #444; }
-      #review-limitations-scroller {
-        flex: 1 1 0;
-        min-height: 0;
-        overflow-y: auto;
-      }
-      .decision-body { flex-shrink: 0; padding: 8px; }
+      .decision-lead { white-space: pre-wrap; color: #444; flex-shrink: 0; }
+      #review-limitations-scroller { flex-shrink: 0; }
+      .provisional-snippet { flex-shrink: 0; color: #555; white-space: pre-wrap; }
       #review-decision-footer {
         flex-shrink: 0;
         padding: 8px;
@@ -93,7 +94,8 @@
       button { width: 100%; padding: 6px 12px; font: inherit; border-radius: 4px; cursor: pointer; }
       #finish-btn { background: #1976d2; color: #fff; border: none; }
       #continue-btn { background: #fff; border: 1px solid #1976d2; color: #1976d2; }
-      .limitations li { margin-bottom: 6px; }
+      .limitations li { margin-bottom: 6px; line-height: 1.25; }
+      .limitations-header { font-weight: 600; margin: 0 0 6px; }
       .transcript-toggle {
         flex-shrink: 0;
         border-top: 1px solid #ddd;
@@ -116,8 +118,7 @@
         .workbench.stacked .status { height: 56px; margin-bottom: 4px; }
         .workbench.stacked .alert { padding: 4px; margin-bottom: 4px; }
         .workbench.stacked .objective { display: none; }
-        .workbench.stacked .decision-body { display: none; }
-        .workbench.stacked .decision-lead { font-size: 12px; margin-bottom: 4px; line-height: 1.25; }
+        .workbench.stacked .decision-lead { font-size: 12px; line-height: 1.25; }
         .workbench.stacked .decision-title { padding: 4px 8px; }
       }
     </style>
@@ -134,24 +135,27 @@
           </div>
           <div class="decision-wrap">
             <div class="decision-shell" id="decision-panel">
+              <div class="decision-title">Research budget reached</div>
               <div class="decision-scroll" id="review-decision-scroll" data-testid="review-decision-scroll">
-                <div class="decision-title">Research budget reached</div>
-                <div class="decision-header">
-                  <div class="decision-lead">Research budget reached — 8 limitations (4 gaps · 4 findings).</div>
-                  <div id="review-limitations-scroller" data-testid="review-limitations-scroller">
-                    <ul class="limitations" id="limitations">
-                      <li>Gap Analyze Model Architecture and Structural Weaknesses (todo-2)</li>
-                      <li>Gap Analyze Experimental Setup, Hyperparameters, and Evaluation Gaps (todo-3)</li>
-                      <li>Gap Synthesize and Refine Twelve Distinct Limitations (todo-4)</li>
-                      <li>Required document evidence was not established.</li>
-                      <li>The report makes detailed claims without manifest support.</li>
-                      <li>The report fails to address known result gaps todo-2, todo-3, todo-4.</li>
-                      <li>Grounding requirement for attached document was not satisfied.</li>
-                      <li>Evidence critic flagged missing source in manifest.</li>
-                    </ul>
-                  </div>
+                <div class="decision-lead">Research budget for Model tokens is at the tranche limit. 12 limitations (5 gaps · 7 review findings). You can finish with this result or continue with guidance (starts a new budget tranche).</div>
+                <div id="review-limitations-scroller" data-testid="review-limitations-scroller">
+                  <div class="limitations-header">12 limitations identified</div>
+                  <ul class="limitations" id="limitations">
+                    <li>Gap Analyze Model Architecture and Structural Weaknesses (todo-2)</li>
+                    <li>Gap Analyze Experimental Setup, Hyperparameters, and Evaluation Gaps (todo-3)</li>
+                    <li>Gap Synthesize and Refine Twelve Distinct Limitations (todo-4)</li>
+                    <li>Required document evidence was not established in the research manifest for key empirical claims.</li>
+                    <li>The report makes detailed claims without manifest support or verifiable document anchors.</li>
+                    <li>The report fails to address known result gaps todo-2, todo-3, todo-4 in synthesis.</li>
+                    <li>Grounding requirement for attached document was not satisfied across executive summary sections.</li>
+                    <li>Evidence critic flagged missing source in manifest and unresolved citation coverage.</li>
+                    <li>Review finding: comparative evaluation against published baselines is asserted but not demonstrated.</li>
+                    <li>Review finding: hyperparameter documentation is incomplete relative to reproducibility requirements.</li>
+                    <li>Gap todo-5: ablation coverage does not address encoder-decoder latency tradeoffs claimed in prose.</li>
+                    <li>Review finding: limitations section repeats gap summaries without independent verification.</li>
+                  </ul>
                 </div>
-                <div class="decision-body"><strong>Provisional answer</strong></div>
+                <div class="provisional-snippet">Thin provisional summary for fixture purposes only.</div>
               </div>
               <div id="review-decision-footer" data-testid="review-decision-footer">
                 <div class="guidance-block">
@@ -159,7 +163,7 @@
                   <input id="guidance" class="compact" type="text" aria-label="Guidance for the next research tranche" />
                 </div>
                 <div class="actions">
-                  <button type="button" id="finish-btn">Finish with this result (8 limitations)</button>
+                  <button type="button" id="finish-btn">Finish with this result (12 limitations)</button>
                   <button type="button" id="continue-btn">Continue with guidance (another tranche)</button>
                 </div>
               </div>

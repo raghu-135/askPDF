@@ -810,30 +810,31 @@ export default function DeepResearchTaskPanel({
   const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
-  const reviewPanelHeader = pendingInterrupt ? (
+  const timelineCitationSources = useMemo(
+    () => citationSourcesFromTimelineItems(items),
+    [items],
+  );
+  const reviewPanelScrollContent = pendingInterrupt ? (
     reviewPanelOpen ? (
-      <Box sx={{ display: 'flex', flexDirection: 'column', flex: '1 1 0', minHeight: 0, height: '100%' }}>
-        <Box sx={{ flexShrink: 0 }}>
-          <DeepResearchDecisionLead
-            pending={pendingInterrupt}
-            task={task}
-            isBudgetReview={isBudgetReview}
-            todoTitles={reviewTodoTitles}
-          />
-        </Box>
-        <Box
-          data-testid="review-limitations-scroller"
-          sx={{
-            flex: '1 1 0',
-            minHeight: 0,
-            minWidth: 0,
-            overflowY: 'auto',
-            pr: 0.25,
-          }}
-        >
+      <>
+        <DeepResearchDecisionLead
+          pending={pendingInterrupt}
+          task={task}
+          isBudgetReview={isBudgetReview}
+          todoTitles={reviewTodoTitles}
+        />
+        <Box data-testid="review-limitations-scroller" sx={{ flexShrink: 0, minWidth: 0, pr: 0.25 }}>
           <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
         </Box>
-      </Box>
+        <DeepResearchProvisionalAnswer
+          content={pendingInterrupt.provisional_answer}
+          citationSources={timelineCitationSources}
+          defaultCollapsed={isBudgetReview}
+          emptyMessage={isBudgetReview
+            ? 'No usable provisional answer was produced. Continue or steer the research.'
+            : undefined}
+        />
+      </>
     ) : (
       <>
         <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
@@ -846,10 +847,6 @@ export default function DeepResearchTaskPanel({
       </>
     )
   ) : null;
-  const timelineCitationSources = useMemo(
-    () => citationSourcesFromTimelineItems(items),
-    [items],
-  );
   const respondToResultReview = async (decision: 'accept' | 'retry_with_input') => {
     if (!task || !selectedRun || !pendingInterrupt) return;
     const followup = decision === 'retry_with_input' ? reviewGuidance : undefined;
@@ -1025,7 +1022,7 @@ export default function DeepResearchTaskPanel({
       horizontalInset={1}
       fillColumn
       showResizeHandle={false}
-      fixedHeader={reviewPanelHeader}
+      fixedHeader={reviewPanelScrollContent}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField
           label="Optional guidance for the next tranche"
@@ -1046,20 +1043,14 @@ export default function DeepResearchTaskPanel({
         </Box>
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
-    >
-      <DeepResearchProvisionalAnswer
-        content={pendingInterrupt.provisional_answer}
-        emptyMessage="No usable provisional answer was produced. Continue or steer the research."
-        citationSources={timelineCitationSources}
-      />
-    </ResizableDecisionPanel> : pendingInterrupt && isResultReview ? <ResizableDecisionPanel
+    /> : pendingInterrupt && isResultReview ? <ResizableDecisionPanel
       title={pendingInterrupt.title || 'Review incomplete result'}
       variant="approval"
       rootRef={panelRef}
       horizontalInset={1}
       fillColumn
       showResizeHandle={false}
-      fixedHeader={reviewPanelHeader}
+      fixedHeader={reviewPanelScrollContent}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField
           label="Guidance for the next research tranche"
@@ -1098,15 +1089,7 @@ export default function DeepResearchTaskPanel({
         </Box>
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
-    >
-      {pendingInterrupt.provisional_answer ? (
-        <DeepResearchProvisionalAnswer
-          content={pendingInterrupt.provisional_answer}
-          citationSources={timelineCitationSources}
-          defaultCollapsed={false}
-        />
-      ) : null}
-    </ResizableDecisionPanel> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
+    /> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
       interrupt={pendingInterrupt}
       submitting={decisionSubmitting}
       error={decisionError || null}

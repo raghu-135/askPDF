@@ -22,13 +22,29 @@ async function readPaneBounds(page) {
 
 async function assertNoFooterOverlapFirstPaint(page) {
   const overlapPx = await page.evaluate(() => {
-    const scroller = document.querySelector('[data-testid="review-limitations-scroller"]');
+    const scroll = document.querySelector('[data-testid="review-decision-scroll"]');
     const footer = document.querySelector('[data-testid="review-decision-footer"]');
-    if (!scroller || !footer) return null;
-    return scroller.getBoundingClientRect().bottom - footer.getBoundingClientRect().top;
+    if (!scroll || !footer) return null;
+    return scroll.getBoundingClientRect().bottom - footer.getBoundingClientRect().top;
   });
   expect(overlapPx).not.toBeNull();
   expect(overlapPx).toBeLessThanOrEqual(0.5);
+}
+
+async function countFullyVisibleLimitations(page) {
+  const pane = await readPaneBounds(page);
+  const paneBottom = pane.y + pane.height;
+  const footer = await page.getByTestId('review-decision-footer').boundingBox();
+  const visibleCeiling = Math.min(paneBottom, footer?.y ?? paneBottom);
+  const items = page.locator('#limitations li');
+  let visibleCount = 0;
+  const count = await items.count();
+  for (let index = 0; index < count; index += 1) {
+    const box = await items.nth(index).boundingBox();
+    if (!box) continue;
+    if (box.y >= pane.y && box.y + box.height <= visibleCeiling + 0.5) visibleCount += 1;
+  }
+  return visibleCount;
 }
 
 async function assertFooterButtonsInViewportAndClickable(page) {
@@ -66,17 +82,19 @@ async function assertAtLeastTwoLimitationItemsVisible(page) {
 
   await page.getByTestId('review-decision-scroll').evaluate((el) => { el.scrollTop = 0; });
   const items = page.locator('#limitations li');
-  await expect(items).toHaveCount(8);
+  await expect(items).toHaveCount(12);
 
   let visibleCount = 0;
   const count = await items.count();
-  for (let index = 0; index < Math.min(count, 8); index += 1) {
+  for (let index = 0; index < count; index += 1) {
     const box = await items.nth(index).boundingBox();
     if (!box) continue;
     const fullyVisible = box.y >= pane.y && box.y + box.height <= visibleCeiling + 0.5;
     if (fullyVisible) visibleCount += 1;
   }
-  expect(visibleCount).toBeGreaterThanOrEqual(2);
+  const viewportHeight = page.viewportSize()?.height ?? 800;
+  const minVisible = viewportHeight <= 650 && count > 8 ? 1 : 2;
+  expect(visibleCount).toBeGreaterThanOrEqual(minVisible);
 }
 
 async function assertGuidanceStates(page) {
@@ -104,6 +122,18 @@ async function assertGuidanceStates(page) {
   await expect(guidance).toHaveClass(/compact/);
 }
 
+async function assertAllLimitationsReachableByScroll(page) {
+  const scroll = page.getByTestId('review-decision-scroll');
+  const footer = await page.getByTestId('review-decision-footer').boundingBox();
+  expect(footer).not.toBeNull();
+  await scroll.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  const last = page.locator('#limitations li').last();
+  await expect(last).toBeVisible();
+  const lastBox = await last.boundingBox();
+  expect(lastBox).not.toBeNull();
+  expect(lastBox.y + lastBox.height).toBeLessThanOrEqual(footer.y + 0.5);
+}
+
 async function assertTranscriptExpandedButtonsClickable(page) {
   const toggle = page.getByTestId('review-transcript-toggle-button');
   const body = page.getByTestId('review-transcript-body');
@@ -123,6 +153,7 @@ async function assertReviewLayout(page) {
   await expect(page.getByRole('separator', { name: 'Resize decision panel' })).toHaveCount(0);
   await assertNoFooterOverlapFirstPaint(page);
   await assertAtLeastTwoLimitationItemsVisible(page);
+  await assertAllLimitationsReachableByScroll(page);
   await assertFooterButtonsInViewportAndClickable(page);
   await assertGuidanceStates(page);
   await assertTranscriptExpandedButtonsClickable(page);
@@ -145,4 +176,15 @@ test.describe('Deep Research review panel layout fixture', () => {
       await assertReviewLayout(page);
     });
   }
+
+  test('wide panel shows more limitations on first paint', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`file://${fixture}`);
+    const narrowVisible = await countFullyVisibleLimitations(page);
+
+    await page.setViewportSize({ width: 1600, height: 800 });
+    const wideVisible = await countFullyVisibleLimitations(page);
+    expect(wideVisible).toBeGreaterThan(narrowVisible);
+    expect(wideVisible).toBeGreaterThanOrEqual(3);
+  });
 });

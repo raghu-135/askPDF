@@ -16,6 +16,7 @@ const outPath = path.join(__dirname, '..', 'fixtures', 'deep-research-review-pan
 
 const LIVE_LAYOUT = {
   sideRatio: 0.32,
+  wideSideRatio: 0.4,
   headerPx: 96,
   statusPx: 168,
 };
@@ -24,12 +25,19 @@ const LIMITATION_LINES = [
   'Gap Analyze Model Architecture and Structural Weaknesses (todo-2)',
   'Gap Analyze Experimental Setup, Hyperparameters, and Evaluation Gaps (todo-3)',
   'Gap Synthesize and Refine Twelve Distinct Limitations (todo-4)',
-  'Required document evidence was not established.',
-  'The report makes detailed claims without manifest support.',
-  'The report fails to address known result gaps todo-2, todo-3, todo-4.',
-  'Grounding requirement for attached document was not satisfied.',
-  'Evidence critic flagged missing source in manifest.',
+  'Required document evidence was not established in the research manifest for key empirical claims.',
+  'The report makes detailed claims without manifest support or verifiable document anchors.',
+  'The report fails to address known result gaps todo-2, todo-3, todo-4 in synthesis.',
+  'Grounding requirement for attached document was not satisfied across executive summary sections.',
+  'Evidence critic flagged missing source in manifest and unresolved citation coverage.',
+  'Review finding: comparative evaluation against published baselines is asserted but not demonstrated.',
+  'Review finding: hyperparameter documentation is incomplete relative to reproducibility requirements.',
+  'Gap todo-5: ablation coverage does not address encoder-decoder latency tradeoffs claimed in prose.',
+  'Review finding: limitations section repeats gap summaries without independent verification.',
 ];
+
+const PROVISIONAL_SNIPPET =
+  'Thin provisional summary for fixture purposes only.';
 
 const html = `<!DOCTYPE html>
 <html lang="en">
@@ -46,6 +54,10 @@ const html = `<!DOCTYPE html>
         .app-shell { flex-direction: row; }
         .primary-doc { flex: 1 1 ${(1 - LIVE_LAYOUT.sideRatio).toFixed(2)}; }
         .secondary-pane { flex: 0 0 ${(LIVE_LAYOUT.sideRatio * 100).toFixed(0)}%; }
+      }
+      @media (min-width: 1400px) {
+        .primary-doc { flex: 1 1 ${(1 - LIVE_LAYOUT.wideSideRatio).toFixed(2)}; }
+        .secondary-pane { flex: 0 0 ${(LIVE_LAYOUT.wideSideRatio * 100).toFixed(0)}%; }
       }
       @media (max-width: ${WORKBENCH_AUTO_SIDE_MIN_WIDTH - 1}px) {
         .app-shell { flex-direction: column; }
@@ -84,22 +96,19 @@ const html = `<!DOCTYPE html>
         border-top: 2px solid #0288d1;
         background: #fff;
       }
+      .decision-title { text-align: center; padding: 8px; font-weight: 700; color: #666; flex-shrink: 0; }
       .decision-scroll {
         flex: 1 1 0;
         min-height: 0;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
+        gap: 8px;
+        padding: 0 8px 8px;
       }
-      .decision-title { text-align: center; padding: 8px; font-weight: 700; color: #666; flex-shrink: 0; }
-      .decision-header { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; padding: 0 8px 8px; overflow: hidden; }
-      .decision-lead { flex-shrink: 0; margin-bottom: 8px; color: #444; }
-      #review-limitations-scroller {
-        flex: 1 1 0;
-        min-height: 0;
-        overflow-y: auto;
-      }
-      .decision-body { flex-shrink: 0; padding: 8px; }
+      .decision-lead { white-space: pre-wrap; color: #444; flex-shrink: 0; }
+      #review-limitations-scroller { flex-shrink: 0; }
+      .provisional-snippet { flex-shrink: 0; color: #555; white-space: pre-wrap; }
       #review-decision-footer {
         flex-shrink: 0;
         padding: 8px;
@@ -126,7 +135,8 @@ const html = `<!DOCTYPE html>
       button { width: 100%; padding: 6px 12px; font: inherit; border-radius: 4px; cursor: pointer; }
       #finish-btn { background: #1976d2; color: #fff; border: none; }
       #continue-btn { background: #fff; border: 1px solid #1976d2; color: #1976d2; }
-      .limitations li { margin-bottom: 6px; }
+      .limitations li { margin-bottom: 6px; line-height: 1.25; }
+      .limitations-header { font-weight: 600; margin: 0 0 6px; }
       .transcript-toggle {
         flex-shrink: 0;
         border-top: 1px solid #ddd;
@@ -149,8 +159,7 @@ const html = `<!DOCTYPE html>
         .workbench.stacked .status { height: 56px; margin-bottom: 4px; }
         .workbench.stacked .alert { padding: 4px; margin-bottom: 4px; }
         .workbench.stacked .objective { display: none; }
-        .workbench.stacked .decision-body { display: none; }
-        .workbench.stacked .decision-lead { font-size: 12px; margin-bottom: 4px; line-height: 1.25; }
+        .workbench.stacked .decision-lead { font-size: 12px; line-height: 1.25; }
         .workbench.stacked .decision-title { padding: 4px 8px; }
       }
     </style>
@@ -167,17 +176,16 @@ const html = `<!DOCTYPE html>
           </div>
           <div class="decision-wrap">
             <div class="decision-shell" id="decision-panel">
+              <div class="decision-title">Research budget reached</div>
               <div class="decision-scroll" id="review-decision-scroll" data-testid="review-decision-scroll">
-                <div class="decision-title">Research budget reached</div>
-                <div class="decision-header">
-                  <div class="decision-lead">Research budget reached — 8 limitations (4 gaps · 4 findings).</div>
-                  <div id="review-limitations-scroller" data-testid="review-limitations-scroller">
-                    <ul class="limitations" id="limitations">
-                      ${LIMITATION_LINES.map((line) => `<li>${line}</li>`).join('\n                      ')}
-                    </ul>
-                  </div>
+                <div class="decision-lead">Research budget for Model tokens is at the tranche limit. 12 limitations (5 gaps · 7 review findings). You can finish with this result or continue with guidance (starts a new budget tranche).</div>
+                <div id="review-limitations-scroller" data-testid="review-limitations-scroller">
+                  <div class="limitations-header">12 limitations identified</div>
+                  <ul class="limitations" id="limitations">
+                    ${LIMITATION_LINES.map((line) => `<li>${line}</li>`).join('\n                    ')}
+                  </ul>
                 </div>
-                <div class="decision-body"><strong>Provisional answer</strong></div>
+                <div class="provisional-snippet">${PROVISIONAL_SNIPPET}</div>
               </div>
               <div id="review-decision-footer" data-testid="review-decision-footer">
                 <div class="guidance-block">
@@ -185,7 +193,7 @@ const html = `<!DOCTYPE html>
                   <input id="guidance" class="compact" type="text" aria-label="Guidance for the next research tranche" />
                 </div>
                 <div class="actions">
-                  <button type="button" id="finish-btn">Finish with this result (8 limitations)</button>
+                  <button type="button" id="finish-btn">Finish with this result (12 limitations)</button>
                   <button type="button" id="continue-btn">Continue with guidance (another tranche)</button>
                 </div>
               </div>

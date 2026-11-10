@@ -8,17 +8,17 @@ import {
   budgetUsageFromInterrupt,
   buildDecisionLeadLine,
   countReviewIssues,
+  normalizeInterruptNewlines,
   reviewLimitationItems,
+  stripUnresolvedWorkSection,
 } from '../../lib/deep-research-decision-ui';
 import { DeepResearchBudgetChips } from './DeepResearchBudgetChips';
 import { buildCitationDisplayMap, rewriteDocCitationTokens } from '../../lib/research-citation-display';
 import type { CitationDisplaySource } from '../../lib/research-citation-display';
 import { ConversationMarkdownWithCitations } from './ConversationMarkdownWithCitations';
 
-const RUNTIME_REPORT_SECTION_PATTERN = /\n##\s+Unresolved required work[\s\S]*$/i;
-
 function stripRuntimeReportSections(markdown: string): string {
-  return markdown.replace(RUNTIME_REPORT_SECTION_PATTERN, '').trimEnd();
+  return stripUnresolvedWorkSection(markdown);
 }
 
 export function DeepResearchBudgetSummary({
@@ -96,7 +96,11 @@ export function DeepResearchDecisionLead({
     limitationCount: counts.limitationCount,
     fallbackBody: pending.body,
   });
-  return <Typography variant="body2">{text}</Typography>;
+  return (
+    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+      {normalizeInterruptNewlines(text)}
+    </Typography>
+  );
 }
 
 export function DeepResearchDecisionStickyFooter({
@@ -184,7 +188,7 @@ export function DeepResearchProvisionalAnswer({
   defaultCollapsed?: boolean;
 }) {
   const displayContent = useMemo(() => {
-    const raw = stripRuntimeReportSections(String(content || ''));
+    const raw = stripRuntimeReportSections(normalizeInterruptNewlines(String(content || '')));
     if (!raw.trim()) return raw;
     const map = buildCitationDisplayMap(citationSources);
     return rewriteDocCitationTokens(raw, map);
