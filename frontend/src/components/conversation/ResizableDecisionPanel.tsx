@@ -29,7 +29,7 @@ export function ResizableDecisionPanel({
   showResizeHandle = true,
 }: {
   title: React.ReactNode;
-  children: React.ReactNode;
+  children?: React.ReactNode;
   footer?: React.ReactNode;
   fixedHeader?: React.ReactNode;
   variant?: 'clarification' | 'conflict' | 'approval';
