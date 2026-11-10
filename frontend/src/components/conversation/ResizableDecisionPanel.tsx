@@ -73,7 +73,8 @@ export function ResizableDecisionPanel({
       mx: horizontalInset,
       bgcolor: 'background.default',
       borderRadius: 1,
-      overflow: 'hidden',
+      overflowX: 'hidden',
+      overflowY: fillColumn ? 'auto' : 'hidden',
       borderTop: '1px solid',
       borderColor: variant === 'conflict' ? 'warning.main' : variant === 'approval' ? 'info.main' : 'divider',
       flexShrink: fillColumn ? 1 : 0,
@@ -128,6 +129,11 @@ export function ResizableDecisionPanel({
           borderTop: '1px solid',
           borderColor: 'divider',
           bgcolor: 'background.paper',
+          ...(fillColumn ? {
+            position: 'sticky',
+            bottom: 0,
+            zIndex: 2,
+          } : {}),
         }}>
           {footer}
         </Box>

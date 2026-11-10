@@ -23,7 +23,7 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   transcript: React.ReactNode;
   status?: React.ReactNode;
   decision?: React.ReactNode;
-  composer: React.ReactNode;
+  composer?: React.ReactNode;
   footer?: React.ReactNode;
   transcriptSx?: SxProps<Theme>;
   decisionSx?: SxProps<Theme>;

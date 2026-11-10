@@ -59,7 +59,10 @@ import {
 } from '../lib/chat-sentence-cache';
 import type { ChatTraceDescriptor } from './ChatInterface';
 import { AGENT_SSE_RECONNECT_INTERVAL_MS, AGENT_TASK_POLL_INTERVAL_MS } from '../lib/agent-ui-config';
-import { REVIEW_LIMITATIONS_MAX_HEIGHT, reviewPanelFlexWeights } from '../lib/deep-research-review-panel-layout';
+import {
+  REVIEW_LIMITATIONS_MAX_HEIGHT,
+  REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX,
+} from '../lib/deep-research-review-panel-layout';
 import { isAgentRunActivelyStreaming } from '../lib/trace-tab-live';
 import { useResizablePanelRatio } from '../hooks/useResizablePanelRatio';
 import {
@@ -805,10 +808,6 @@ export default function DeepResearchTaskPanel({
   const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
-  const reviewFlexWeights = useMemo(
-    () => reviewPanelFlexWeights(reviewPanelRatio),
-    [reviewPanelRatio],
-  );
   const reviewPanelHeader = pendingInterrupt ? (
     <>
       <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
@@ -872,8 +871,9 @@ export default function DeepResearchTaskPanel({
     ref={panelRef}
     sx={{ p: 1 }}
     transcriptSx={reviewPanelOpen ? {
-      flex: `${reviewFlexWeights.transcript} 1 0`,
-      minHeight: 72,
+      flex: '0 0 auto',
+      maxHeight: REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX,
+      minHeight: 48,
       minWidth: 0,
       overflow: 'hidden',
       display: 'flex',
@@ -883,7 +883,7 @@ export default function DeepResearchTaskPanel({
       minHeight: 0,
     }}
     decisionSx={reviewPanelOpen ? {
-      flex: `${reviewFlexWeights.decision} 1 0`,
+      flex: '1 1 0',
       minHeight: 0,
       overflow: 'hidden',
       display: 'flex',
@@ -938,7 +938,7 @@ export default function DeepResearchTaskPanel({
       {liveBudgetSnapshot && task && <Box sx={{ mb: 1 }}>
         <DeepResearchBudgetChips snapshot={liveBudgetSnapshot} />
       </Box>}
-      {task?.research_canvases?.length ? (
+      {task?.research_canvases?.length && !reviewPanelOpen ? (
         <DeepResearchTaskDeliverables
           canvases={task.research_canvases}
           selectedRunId={selectedRun?.id}
@@ -1058,7 +1058,7 @@ export default function DeepResearchTaskPanel({
       rootRef={panelRef}
       onAction={(action, options) => void decide(action, options)}
     /> : undefined}
-    composer={<Box sx={{ pb: 1 }}>
+    composer={reviewPanelOpen ? null : <Box sx={{ pb: 1 }}>
       {task && <Box sx={{ borderTop: 1, borderColor: 'divider', py: 0.75, px: 1, mb: 1 }}>
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
           <Chip size="small" label={formatAgentTaskStatus(task.status)} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : task.status === 'recovery_required' ? 'warning' : 'primary'} />

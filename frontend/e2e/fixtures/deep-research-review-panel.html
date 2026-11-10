@@ -11,12 +11,11 @@
         flex-direction: column;
         height: 100vh;
         padding: 8px;
-        gap: 0;
         overflow: hidden;
       }
       .header {
         flex-shrink: 0;
-        height: 96px;
+        height: 104px;
         background: #fff;
         border: 1px solid #ddd;
         padding: 8px;
@@ -42,32 +41,32 @@
         padding: 2px 8px;
         font-size: 12px;
       }
-      .deliverables {
-        background: #fff;
-        border: 1px solid #ddd;
-        padding: 8px;
-        border-radius: 4px;
+      .objective {
+        background: #1565c0;
+        color: #fff;
+        padding: 10px 12px;
+        border-radius: 6px;
+        font-weight: 600;
       }
       .transcript {
-        flex: 0.52 1 0;
-        min-height: 72px;
-        min-width: 0;
+        flex: 0 0 auto;
+        max-height: 72px;
+        min-height: 48px;
         overflow: auto;
         background: #fff;
         border: 1px solid #ddd;
-        margin-bottom: 0;
       }
       .decision-shell {
-        flex: 0.48 1 0;
+        flex: 1 1 0;
         min-height: 0;
         display: grid;
         grid-template-rows: auto minmax(0, auto) minmax(0, 1fr) auto;
-        overflow: hidden;
+        overflow-y: auto;
+        overflow-x: hidden;
         background: #fff;
         border: 1px solid #ddd;
         border-top: 2px solid #0288d1;
         border-radius: 4px;
-        margin-top: 0;
       }
       .decision-title {
         text-align: center;
@@ -91,6 +90,9 @@
         padding: 8px;
       }
       .decision-footer {
+        position: sticky;
+        bottom: 0;
+        z-index: 2;
         padding: 8px;
         border-top: 1px solid #ddd;
         background: #fafafa;
@@ -98,25 +100,63 @@
       .guidance {
         display: flex;
         flex-direction: column;
-        gap: 4px;
-        margin-bottom: 8px;
+        gap: 6px;
+        margin-bottom: 10px;
       }
-      .guidance input {
+      .guidance label { font-size: 13px; font-weight: 600; }
+      .guidance textarea {
         width: 100%;
-        padding: 6px 8px;
+        min-height: 56px;
+        padding: 8px;
         border: 1px solid #ccc;
         border-radius: 4px;
+        font: inherit;
+        resize: vertical;
+      }
+      .guidance .helper { color: #666; font-size: 12px; }
+      .decision-footer button {
+        display: block;
+        width: 100%;
+        margin: 0 0 8px;
+        padding: 6px 12px;
+        font: inherit;
+      }
+      .decision-footer button.primary {
+        background: #1976d2;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+      }
+      .decision-footer button.secondary {
+        background: #fff;
+        border: 1px solid #1976d2;
+        color: #1976d2;
+        border-radius: 4px;
+      }
+      .composer-lifecycle {
+        display: none;
+      }
+      .composer-placeholder {
+        display: none;
+        flex-shrink: 0;
+        padding: 12px 16px;
+        border-top: 1px solid #ddd;
+        background: #fff;
+        color: #666;
+        z-index: 5;
       }
       .limitations li { margin-bottom: 6px; }
-      button { margin-right: 8px; margin-bottom: 4px; }
-      .filler-line { height: 48px; background: linear-gradient(90deg, #fff, #f0f0f0); margin-bottom: 4px; }
     </style>
   </head>
   <body>
-    <div class="workbench" id="panel-root">
-      <div class="header">Model · Agent · Context controls (workbench header)</div>
+    <div class="workbench" id="panel-root" data-review-open="true">
+      <div class="header">
+        Back · Select LLM · Select agent · Context 8,192 · task picker
+      </div>
       <div class="status">
-        <div class="alert">Model, agent, and context window are locked for this task.</div>
+        <div class="alert">
+          Model, agent, and context window are locked for this task. Start a new Deep Research task to change them.
+        </div>
         <div class="chips">
           <span class="chip">Tranche 1</span>
           <span class="chip">Model calls 40/10000</span>
@@ -124,21 +164,18 @@
           <span class="chip">Tool calls 20/100</span>
           <span class="chip">Active runtime 2m 47s/2h</span>
         </div>
-        <div class="deliverables">Research canvases from this task (1 canvas)</div>
+        <div class="objective">objective · Awaiting your decision</div>
       </div>
       <div class="transcript" id="transcript">
-        <div class="filler-line"></div>
-        <div class="filler-line"></div>
-        <div>Runtime transcript (min-height 72px)</div>
+        <div style="height: 200px">Runtime transcript (capped at 72px)</div>
       </div>
       <div class="decision-shell" id="decision-panel">
         <div class="decision-title">Review incomplete result</div>
         <div class="decision-fixed-header" id="decision-fixed-header">
           <div class="chips">
-            <span class="chip">Budget reached</span>
+            <span class="chip">Research budget reached</span>
             <span class="chip">8 limitations</span>
           </div>
-          <div class="alert">Research budget reached — review the provisional result.</div>
           <ul class="limitations" id="limitations">
             <li>Source retrieval for table 3 on page 7 did not complete within the tranche budget; numeric claims there remain unverified.</li>
             <li>Cross-document comparison with the 2018 follow-up study was deferred after repeated indexer timeouts on the attachment store.</li>
@@ -148,30 +185,31 @@
             <li>Web search was disabled for this task, so industry baselines referenced only training-set papers.</li>
             <li>Two todo checkpoints remained open when the run paused; coverage statements for related work may be incomplete.</li>
             <li>Runtime memory pressure forced a truncated reread of appendix B; footnote cross-references were not double-checked.</li>
-            <li>Canvas export for the summary diagram failed once; the linked canvas may lag the transcript narrative.</li>
-            <li>Tokenizer mismatch on one highlighted span may have shifted quoted token counts in the limitation summary.</li>
           </ul>
         </div>
         <div class="decision-body" id="decision-body">
-          <p><strong>Provisional answer</strong> (scrollable)</p>
-          <motion-placeholder style="display:block;height:320px;background:linear-gradient(#fff,#eee)"></motion-placeholder>
+          <p><strong>Provisional answer</strong></p>
+          <motion-placeholder style="display:block;height:480px;background:linear-gradient(#fff,#eee)"></motion-placeholder>
         </div>
         <div class="decision-footer" id="decision-footer">
           <div class="guidance">
             <label for="guidance">Guidance for the next research tranche</label>
-            <input id="guidance" type="text" placeholder="Optional steering for continue" />
-            <span style="color:#666;font-size:12px">Continuing with guidance resets the budget tranche counters.</span>
+            <textarea id="guidance" rows="2" aria-label="Guidance for the next research tranche"></textarea>
+            <span class="helper">Continuing with guidance resets the budget tranche counters and may start a linked attempt.</span>
           </div>
-          <button type="button" id="finish-btn">Finish with this result</button>
-          <button type="button" id="continue-btn">Continue with guidance</button>
+          <button type="button" class="primary" id="finish-btn">Finish with this result (8 limitations)</button>
+          <button type="button" class="secondary" id="continue-btn">Continue with guidance</button>
         </div>
       </div>
-      <div class="status" style="margin-top:8px;margin-bottom:0">
+      <div class="composer-lifecycle" id="composer-lifecycle" aria-hidden="true">
         <div class="chips">
           <span class="chip">Awaiting your decision</span>
           <span class="chip">Attempt 1 of 1</span>
         </div>
-        <div style="padding:8px 0">START · PAUSE · RESUME · CANCEL · RETRY</div>
+        <div style="padding:8px 0">START · PAUSE · RESUME · CANCEL · RETRY · DEBUG TRACE</div>
+      </div>
+      <div class="composer-placeholder" id="composer-placeholder">
+        Review the request above to continue or finish.
       </div>
     </div>
   </body>
