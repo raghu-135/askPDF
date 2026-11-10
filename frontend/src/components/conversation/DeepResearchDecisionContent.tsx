@@ -107,13 +107,21 @@ export function DeepResearchDecisionStickyFooter({
   return (
     <Box sx={{
       bgcolor: 'background.default',
-      borderTop: 1,
-      borderColor: 'divider',
-      pt: 1,
-      mt: 0.5,
       display: 'flex',
       flexDirection: 'column',
-      gap: 1,
+      gap: 0.75,
+      minHeight: 0,
+      maxHeight: '100%',
+      overflow: 'hidden',
+      '& .MuiFormControl-root': {
+        flexShrink: 1,
+        minHeight: 0,
+        maxHeight: 72,
+        overflowY: 'auto',
+      },
+      '& > .MuiBox-root, & > .MuiAlert-root': {
+        flexShrink: 0,
+      },
     }}>
       {children}
     </Box>
@@ -146,7 +154,7 @@ export function DeepResearchGuidanceField({
       fullWidth
       multiline={!compact}
       minRows={compact ? 1 : 2}
-      maxRows={compact ? 1 : 6}
+      maxRows={compact ? 1 : 3}
       size={compact ? 'small' : 'medium'}
       id={fieldId}
       name="research-guidance"

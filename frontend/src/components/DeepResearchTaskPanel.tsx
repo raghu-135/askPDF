@@ -61,10 +61,9 @@ import type { ChatTraceDescriptor } from './ChatInterface';
 import { AGENT_SSE_RECONNECT_INTERVAL_MS, AGENT_TASK_POLL_INTERVAL_MS } from '../lib/agent-ui-config';
 import {
   DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
-  REVIEW_LIMITATIONS_MAX_HEIGHT,
+  REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
   REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX,
   WORKBENCH_AUTO_SIDE_MIN_WIDTH,
-  reviewPanelFlexWeights,
 } from '../lib/deep-research-review-panel-layout';
 import { isAgentRunActivelyStreaming } from '../lib/trace-tab-live';
 import { useResizablePanelRatio } from '../hooks/useResizablePanelRatio';
@@ -812,14 +811,12 @@ export default function DeepResearchTaskPanel({
   const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
-  const reviewFlexWeights = useMemo(
-    () => reviewPanelFlexWeights(reviewPanelRatio),
-    [reviewPanelRatio],
-  );
   const reviewDecisionBeforeTranscript = reviewPanelOpen && stackedWorkbench;
   const reviewPanelHeader = pendingInterrupt ? (
     <>
-      <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
+      {!reviewPanelOpen ? (
+        <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
+      ) : null}
       <DeepResearchDecisionLead
         pending={pendingInterrupt}
         task={task}
@@ -829,7 +826,13 @@ export default function DeepResearchTaskPanel({
       {reviewPanelOpen ? (
         <Box
           data-testid="review-limitations-scroller"
-          sx={{ flexShrink: 0, maxHeight: REVIEW_LIMITATIONS_MAX_HEIGHT, overflowY: 'auto', pr: 0.25 }}
+          sx={{
+            flex: '1 1 auto',
+            minHeight: REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
+            minWidth: 0,
+            overflowY: 'auto',
+            pr: 0.25,
+          }}
         >
           <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
         </Box>
@@ -893,10 +896,9 @@ export default function DeepResearchTaskPanel({
     decisionBeforeTranscript={reviewDecisionBeforeTranscript}
     transcriptDataTestId={reviewPanelOpen ? 'review-transcript-frame' : undefined}
     transcriptSx={reviewPanelOpen ? {
-      flex: reviewDecisionBeforeTranscript
-        ? '0 0 auto'
-        : `${reviewFlexWeights.transcript} 1 0`,
-      ...(reviewDecisionBeforeTranscript ? { maxHeight: REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX } : {}),
+      flex: '0 0 auto',
+      flexShrink: 0,
+      maxHeight: REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX,
       minHeight: 48,
       minWidth: 0,
       overflow: 'hidden',
@@ -907,7 +909,7 @@ export default function DeepResearchTaskPanel({
       minHeight: 0,
     }}
     decisionSx={reviewPanelOpen ? {
-      flex: reviewDecisionBeforeTranscript ? '1 1 0' : `${reviewFlexWeights.decision} 1 0`,
+      flex: '1 1 0',
       minHeight: 0,
       overflow: 'hidden',
       display: 'flex',
@@ -959,9 +961,9 @@ export default function DeepResearchTaskPanel({
       {frozen && task && <Alert severity="info" sx={{ mb: 1 }} icon={false}>
         Model, agent, and context window are locked for this task. Start a new Deep Research task to change them.
       </Alert>}
-      {liveBudgetSnapshot && task && <Box sx={{ mb: 1 }}>
+      {liveBudgetSnapshot && task && !reviewPanelOpen ? <Box sx={{ mb: 1 }}>
         <DeepResearchBudgetChips snapshot={liveBudgetSnapshot} />
-      </Box>}
+      </Box> : null}
       {task?.research_canvases?.length && !reviewPanelOpen ? (
         <DeepResearchTaskDeliverables
           canvases={task.research_canvases}
@@ -998,6 +1000,7 @@ export default function DeepResearchTaskPanel({
       rootRef={panelRef}
       horizontalInset={1}
       fillColumn
+      showResizeHandle={!reviewDecisionBeforeTranscript}
       panelRatio={reviewPanelRatio}
       resizing={reviewPanelResizing}
       onResizeStart={onReviewPanelResizeStart}
@@ -1034,6 +1037,7 @@ export default function DeepResearchTaskPanel({
       rootRef={panelRef}
       horizontalInset={1}
       fillColumn
+      showResizeHandle={!reviewDecisionBeforeTranscript}
       panelRatio={reviewPanelRatio}
       resizing={reviewPanelResizing}
       onResizeStart={onReviewPanelResizeStart}

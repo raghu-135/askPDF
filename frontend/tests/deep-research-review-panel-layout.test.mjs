@@ -15,7 +15,7 @@ import {
 test('review panel scroll grid keeps a limitations floor without the footer row', () => {
   assert.equal(
     REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS,
-    `auto auto minmax(${REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX}px, auto) minmax(0, 1fr)`,
+    `auto auto minmax(${REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX}px, 1fr) minmax(0, auto)`,
   );
 });
 
