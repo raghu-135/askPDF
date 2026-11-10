@@ -62,11 +62,9 @@ import { AGENT_SSE_RECONNECT_INTERVAL_MS, AGENT_TASK_POLL_INTERVAL_MS } from '..
 import {
   DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
   REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
-  REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX,
   WORKBENCH_AUTO_SIDE_MIN_WIDTH,
 } from '../lib/deep-research-review-panel-layout';
 import { isAgentRunActivelyStreaming } from '../lib/trace-tab-live';
-import { useResizablePanelRatio } from '../hooks/useResizablePanelRatio';
 import {
   ConversationComposer,
   ConversationArtifactList,
@@ -89,6 +87,7 @@ import {
   DeepResearchIssueList,
   DeepResearchProvisionalAnswer,
 } from './conversation/DeepResearchDecisionContent';
+import { DeepResearchReviewTranscriptToggle } from './conversation/DeepResearchReviewTranscriptToggle';
 import {
   budgetUsageFromInterrupt,
   budgetUsageFromTask,
@@ -383,6 +382,7 @@ export default function DeepResearchTaskPanel({
   const [busy, setBusy] = useState(false);
   const [decisionSubmitting, setDecisionSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [reviewGuidance, setReviewGuidance] = useState('');
+  const [reviewTranscriptOpen, setReviewTranscriptOpen] = useState(false);
   const [courseCorrection, setCourseCorrection] = useState('');
   const [courseCorrectionStatus, setCourseCorrectionStatus] = useState('');
   const [decisionError, setDecisionError] = useState('');
@@ -399,7 +399,6 @@ export default function DeepResearchTaskPanel({
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
   const panelRef = useRef<HTMLDivElement>(null);
-  const { ratio: reviewPanelRatio, resizing: reviewPanelResizing, onResizeStart: onReviewPanelResizeStart } = useResizablePanelRatio(panelRef, 0.58);
   const selectedRun = runs[runIndex] || null;
   const selectedCapabilitiesState = useAgentRunCapabilities(selectedRun?.id, threadId, `${selectedRun?.status}:${selectedRun?.runtime_binding_status}:${selectedRun?.pending_interrupt?.interrupt_id}:${selectedRun?.pending_interrupt?.status}:${selectedRun?.pending_interrupt?.resume_version}:${task?.version}`);
   const activeCapabilitiesState = useAgentRunCapabilities(
@@ -811,18 +810,19 @@ export default function DeepResearchTaskPanel({
   const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
-  const reviewDecisionBeforeTranscript = reviewPanelOpen && stackedWorkbench;
   const reviewPanelHeader = pendingInterrupt ? (
     <>
       {!reviewPanelOpen ? (
         <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
       ) : null}
-      <DeepResearchDecisionLead
-        pending={pendingInterrupt}
-        task={task}
-        isBudgetReview={isBudgetReview}
-        todoTitles={reviewTodoTitles}
-      />
+      <Box sx={{ flexShrink: 0 }}>
+        <DeepResearchDecisionLead
+          pending={pendingInterrupt}
+          task={task}
+          isBudgetReview={isBudgetReview}
+          todoTitles={reviewTodoTitles}
+        />
+      </Box>
       {reviewPanelOpen ? (
         <Box
           data-testid="review-limitations-scroller"
@@ -883,6 +883,10 @@ export default function DeepResearchTaskPanel({
   }, [interactionDescriptors, interactionOperation]);
 
   useEffect(() => {
+    if (!reviewPanelOpen) setReviewTranscriptOpen(false);
+  }, [reviewPanelOpen]);
+
+  useEffect(() => {
     if (!reviewPanelOpen || !stackedWorkbench) return undefined;
     window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: true } }));
     return () => {
@@ -890,18 +894,44 @@ export default function DeepResearchTaskPanel({
     };
   }, [reviewPanelOpen, stackedWorkbench]);
 
+  const timelineTranscript = (
+    <ConversationTranscriptFrame sx={reviewPanelOpen && reviewTranscriptOpen ? { minHeight: 0 } : undefined}>
+      {items.map((item) => <TimelineBubble
+        key={item.id}
+        item={item}
+        taskId={task?.id || ''}
+        threadId={threadId}
+        onSaveToMemory={onSaveToMemory}
+        onOpenCanvas={onOpenCanvas}
+        citationSources={timelineCitationSources}
+        copied={copiedId === item.id}
+        active={activeItemId === item.id}
+        onCopy={() => copyItem(item)}
+        onReadAloud={() => readItem(item.id)}
+        rootRef={(node) => { if (node) itemRefs.current.set(item.id, node); else itemRefs.current.delete(item.id); }}
+        onSelectAttempt={(attempt) => {
+          const index = runs.findIndex((run) => run.attempt === attempt);
+          if (index >= 0) setRunIndex(index);
+        }}
+      />)}
+    </ConversationTranscriptFrame>
+  );
+
   return <ConversationPanelTemplate
     ref={panelRef}
-    sx={{ p: 1 }}
-    decisionBeforeTranscript={reviewDecisionBeforeTranscript}
+    sx={{
+      p: 1,
+      ...(reviewPanelOpen ? {
+        overflowX: 'hidden',
+        overflowY: reviewTranscriptOpen ? 'auto' : 'hidden',
+      } : {}),
+    }}
+    decisionBeforeTranscript={reviewPanelOpen}
     transcriptDataTestId={reviewPanelOpen ? 'review-transcript-frame' : undefined}
     transcriptSx={reviewPanelOpen ? {
       flex: '0 0 auto',
       flexShrink: 0,
-      maxHeight: REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX,
-      minHeight: 48,
       minWidth: 0,
-      overflow: 'hidden',
       display: 'flex',
       flexDirection: 'column',
     } : {
@@ -972,24 +1002,14 @@ export default function DeepResearchTaskPanel({
         />
       ) : null}
     </>}
-    transcript={<ConversationTranscriptFrame sx={reviewPanelOpen ? { flex: '1 1 auto', minHeight: 0, overflow: 'auto' } : undefined}>{items.map((item) => <TimelineBubble
-      key={item.id}
-      item={item}
-      taskId={task?.id || ''}
-      threadId={threadId}
-      onSaveToMemory={onSaveToMemory}
-      onOpenCanvas={onOpenCanvas}
-      citationSources={timelineCitationSources}
-      copied={copiedId === item.id}
-      active={activeItemId === item.id}
-      onCopy={() => copyItem(item)}
-      onReadAloud={() => readItem(item.id)}
-      rootRef={(node) => { if (node) itemRefs.current.set(item.id, node); else itemRefs.current.delete(item.id); }}
-      onSelectAttempt={(attempt) => {
-        const index = runs.findIndex((run) => run.attempt === attempt);
-        if (index >= 0) setRunIndex(index);
-      }}
-    />)}</ConversationTranscriptFrame>}
+    transcript={reviewPanelOpen ? (
+      <DeepResearchReviewTranscriptToggle
+        open={reviewTranscriptOpen}
+        onToggle={() => setReviewTranscriptOpen((expanded) => !expanded)}
+      >
+        {timelineTranscript}
+      </DeepResearchReviewTranscriptToggle>
+    ) : timelineTranscript}
     decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : !decisionVisible ? undefined : pendingInterrupt && isTaskPauseInterrupt ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">Deep research paused</Typography>
       <Typography variant="body2" color="text.secondary">The task is paused at a durable checkpoint. Use Resume to continue or Cancel to stop the task.</Typography>
@@ -1000,10 +1020,7 @@ export default function DeepResearchTaskPanel({
       rootRef={panelRef}
       horizontalInset={1}
       fillColumn
-      showResizeHandle={!reviewDecisionBeforeTranscript}
-      panelRatio={reviewPanelRatio}
-      resizing={reviewPanelResizing}
-      onResizeStart={onReviewPanelResizeStart}
+      showResizeHandle={false}
       fixedHeader={reviewPanelHeader}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField
@@ -1037,10 +1054,7 @@ export default function DeepResearchTaskPanel({
       rootRef={panelRef}
       horizontalInset={1}
       fillColumn
-      showResizeHandle={!reviewDecisionBeforeTranscript}
-      panelRatio={reviewPanelRatio}
-      resizing={reviewPanelResizing}
-      onResizeStart={onReviewPanelResizeStart}
+      showResizeHandle={false}
       fixedHeader={reviewPanelHeader}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField

@@ -7,14 +7,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixture = path.join(__dirname, 'fixtures', 'deep-research-review-panel.html');
 const buildScript = path.join(__dirname, 'scripts', 'build-review-panel-fixture.mjs');
 
+const LONG_GUIDANCE =
+  'Please tighten grounding against the attached paper. Cite every limitation with explicit page or section references.';
+
 test.beforeAll(() => {
   execFileSync(process.execPath, [buildScript], { cwd: path.join(__dirname, '..') });
 });
 
 async function readPaneBounds(page) {
-  const secondary = await page.locator('.secondary-pane').boundingBox();
+  const box = await page.locator('.secondary-pane').boundingBox();
   const viewport = page.viewportSize();
-  return secondary ?? { x: 0, y: 0, width: viewport?.width || 0, height: viewport?.height || 0 };
+  return box ?? { x: 0, y: 0, width: viewport?.width || 0, height: viewport?.height || 0 };
 }
 
 async function assertFooterButtonsInViewportAndClickable(page) {
@@ -46,72 +49,82 @@ async function assertFooterButtonsInViewportAndClickable(page) {
 async function assertAtLeastTwoLimitationItemsVisible(page) {
   const pane = await readPaneBounds(page);
   const paneBottom = pane.y + pane.height;
-  await page.locator('#decision-panel').evaluate((el) => { el.scrollTop = 0; });
+  const footer = await page.getByTestId('review-decision-footer').boundingBox();
+  expect(footer).not.toBeNull();
+  const visibleCeiling = Math.min(paneBottom, footer.y);
+
+  await page.getByTestId('review-decision-scroll').evaluate((el) => { el.scrollTop = 0; });
   const items = page.locator('#limitations li');
   await expect(items).toHaveCount(8);
+
   let visibleCount = 0;
   const count = await items.count();
   for (let index = 0; index < Math.min(count, 8); index += 1) {
     const box = await items.nth(index).boundingBox();
     if (!box) continue;
-    const fullyVisible = box.y >= pane.y && box.y + box.height <= paneBottom;
+    const fullyVisible = box.y >= pane.y && box.y + box.height <= visibleCeiling + 0.5;
     if (fullyVisible) visibleCount += 1;
   }
   expect(visibleCount).toBeGreaterThanOrEqual(2);
 }
 
-async function assertGuidanceFocusedContinueClickable(page) {
+async function assertGuidanceStates(page) {
   const guidance = page.locator('#guidance');
+
+  await guidance.blur();
+  await assertAtLeastTwoLimitationItemsVisible(page);
+  await assertFooterButtonsInViewportAndClickable(page);
+
   await guidance.focus();
-  await guidance.fill('Please tighten grounding against the attached paper.');
+  await assertAtLeastTwoLimitationItemsVisible(page);
+  await assertFooterButtonsInViewportAndClickable(page);
+
+  await guidance.fill(LONG_GUIDANCE);
   const continueBtn = page.getByRole('button', { name: /Continue with guidance/i });
   await expect(continueBtn).toBeEnabled();
+  await assertAtLeastTwoLimitationItemsVisible(page);
   await assertFooterButtonsInViewportAndClickable(page);
+
   await guidance.fill('');
   await guidance.blur();
   await expect(guidance).toHaveClass(/compact/);
 }
 
-async function assertResizeChangesDecisionScrollHeight(page) {
-  const scroll = page.getByTestId('review-decision-scroll');
-  const before = await scroll.evaluate((node) => parseFloat(getComputedStyle(node).minHeight) || node.getBoundingClientRect().height);
-  const handle = page.locator('#resize-handle');
-  const handleBox = await handle.boundingBox();
-  expect(handleBox).not.toBeNull();
-  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y - 80, { steps: 8 });
-  await page.mouse.up();
-  const after = await scroll.evaluate((node) => parseFloat(getComputedStyle(node).minHeight) || node.getBoundingClientRect().height);
-  expect(Math.abs(after - before)).toBeGreaterThan(8);
+async function assertTranscriptToggleShowsBody(page) {
+  const toggle = page.getByTestId('review-transcript-toggle-button');
+  const body = page.getByTestId('review-transcript-body');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(body).toBeHidden();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toHaveText(/Hide transcript/i);
+  await expect(body).toBeVisible();
+  await expect(body.locator('.transcript-bubble')).toBeVisible();
 }
 
+async function assertReviewLayout(page) {
+  await expect(page.getByRole('separator', { name: 'Resize decision panel' })).toHaveCount(0);
+  await assertAtLeastTwoLimitationItemsVisible(page);
+  await assertFooterButtonsInViewportAndClickable(page);
+  await assertGuidanceStates(page);
+  await assertTranscriptToggleShowsBody(page);
+}
+
+const viewports = [
+  { name: '1280x800', width: 1280, height: 800, stacked: false },
+  { name: '1280x650', width: 1280, height: 650, stacked: false },
+  { name: '1024x768 stacked', width: 1024, height: 768, stacked: true },
+];
+
 test.describe('Deep Research review panel layout fixture', () => {
-  test('1280x800', async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto(`file://${fixture}`);
-    await assertAtLeastTwoLimitationItemsVisible(page);
-    await assertFooterButtonsInViewportAndClickable(page);
-    await assertGuidanceFocusedContinueClickable(page);
-    await assertResizeChangesDecisionScrollHeight(page);
-  });
-
-  test('1280x650', async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 650 });
-    await page.goto(`file://${fixture}`);
-    await assertAtLeastTwoLimitationItemsVisible(page);
-    await assertFooterButtonsInViewportAndClickable(page);
-    await assertGuidanceFocusedContinueClickable(page);
-    await assertResizeChangesDecisionScrollHeight(page);
-  });
-
-  test('1024x768 stacked', async ({ page }) => {
-    await page.setViewportSize({ width: 1024, height: 768 });
-    await page.goto(`file://${fixture}`);
-    await expect(page.locator('.workbench.stacked')).toHaveCount(1);
-    await expect(page.getByRole('separator', { name: 'Resize decision panel' })).toHaveCount(0);
-    await assertAtLeastTwoLimitationItemsVisible(page);
-    await assertFooterButtonsInViewportAndClickable(page);
-    await assertGuidanceFocusedContinueClickable(page);
-  });
+  for (const viewport of viewports) {
+    test(viewport.name, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`file://${fixture}`);
+      if (viewport.stacked) {
+        await expect(page.locator('.workbench.stacked')).toHaveCount(1);
+      }
+      await assertReviewLayout(page);
+    });
+  }
 });

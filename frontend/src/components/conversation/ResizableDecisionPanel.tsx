@@ -9,7 +9,6 @@ import {
   REVIEW_DECISION_PANEL_GRID_ROWS,
   REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
   REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS,
-  REVIEW_DECISION_PANEL_SCROLL_MIN_PX,
 } from '../../lib/deep-research-review-panel-layout';
 
 export function ResizableDecisionPanel({
@@ -103,10 +102,9 @@ export function ResizableDecisionPanel({
       px: 1,
       pt: fixedHeader ? 0 : 1,
       pb: fillColumn && footer ? 0 : (footer ? 0 : 1),
-      overflowY: 'auto',
       overflowX: 'hidden',
       minHeight: 0,
-      ...(fillColumn ? {} : { flex: '1 1 0' }),
+      ...(fillColumn ? { flexShrink: 0, overflowY: 'visible' } : { flex: '1 1 0', overflowY: 'auto' }),
     }}>
       {children}
     </Box>
@@ -136,10 +134,6 @@ export function ResizableDecisionPanel({
   ) : null;
 
   if (fillColumn) {
-    const scrollGridRows = fixedHeader
-      ? REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS
-      : 'auto auto minmax(0, auto)';
-
     return (
       <Box sx={{
         display: 'flex',
@@ -153,28 +147,39 @@ export function ResizableDecisionPanel({
         mx: horizontalInset,
         bgcolor: 'background.default',
         borderRadius: 1,
-        overflowY: 'auto',
-        overflowX: 'hidden',
+        overflow: 'hidden',
         ...shellBorderSx,
         flexShrink: 1,
       }}>
         <Box
           data-testid="review-decision-scroll"
           sx={{
-            display: 'grid',
-            gridTemplateRows: scrollGridRows,
-            flex: '1 0 auto',
-            minHeight: Math.max(
-              REVIEW_DECISION_PANEL_SCROLL_MIN_PX,
-              Math.round(120 + ratio * 320),
-            ),
+            flex: '1 1 0',
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
           {showResizeHandle ? (
             <ResizablePanelHandle resizing={resizing} onResizeStart={onResizeStart} label="Resize decision panel" />
           ) : null}
           {titleRow}
-          {fixedHeaderRow}
+          {fixedHeader ? (
+            <Box sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
+              px: 1,
+              pb: 1,
+              flex: '1 1 auto',
+              minHeight: REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
+              overflow: 'hidden',
+            }}>
+              {fixedHeader}
+            </Box>
+          ) : null}
           {bodyRow}
         </Box>
         {footer ? (
@@ -182,9 +187,6 @@ export function ResizableDecisionPanel({
             data-testid="review-decision-footer"
             sx={{
               flexShrink: 0,
-              position: 'sticky',
-              bottom: 0,
-              zIndex: 2,
               px: 1,
               pb: 1,
               pt: 0.5,
