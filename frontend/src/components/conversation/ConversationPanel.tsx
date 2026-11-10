@@ -27,6 +27,7 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   footer?: React.ReactNode;
   transcriptSx?: SxProps<Theme>;
   decisionSx?: SxProps<Theme>;
+  decisionBeforeTranscript?: boolean;
   sx?: SxProps<Theme>;
 }>(function ConversationPanelTemplate({
   header,
@@ -37,6 +38,7 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   footer,
   transcriptSx,
   decisionSx,
+  decisionBeforeTranscript = false,
   sx,
 }, ref) {
   return (
@@ -55,21 +57,35 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
     >
       {header}
       {status}
+      {decision && decisionBeforeTranscript ? (
+        <Box sx={{
+          flex: '1 1 0',
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          ...decisionSx,
+        }}>
+          {decision}
+        </Box>
+      ) : null}
       <Box
         sx={{
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          ...(decision
+          ...(decision && !decisionBeforeTranscript
             ? { flex: '0 0 auto', flexShrink: 0 }
-            : { flex: 1 }),
+            : decision && decisionBeforeTranscript
+              ? { flex: '0 0 auto' }
+              : { flex: 1 }),
           ...transcriptSx,
         }}
       >
         {transcript}
       </Box>
-      {decision ? (
+      {decision && !decisionBeforeTranscript ? (
         <Box sx={{
           flex: '1 1 0',
           minHeight: 0,

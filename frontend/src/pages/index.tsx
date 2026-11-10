@@ -55,7 +55,11 @@ import { loadThreadTabs, loadProjectTabs, hydrateThreadPdfTab, createPdfTabFromU
 import { closeDocumentTabUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { isParsedSentencePayload, transformSentences } from "../lib/bbox-derivation";
 import { ProcessStatus, ThreadFileSourceType } from "../lib/enums";
-import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
+import { normalizeWorkbenchLayout, type ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
+import {
+  DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
+  REVIEW_STACKED_WORKBENCH_BOTTOM_RATIO,
+} from '../lib/deep-research-review-panel-layout';
 import { checkEmbeddingModelReady } from '../lib/models-api';
 import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
 import { defaultMemoryManagerIntent, reviewManagerIntent, type MemoryManagerIntent } from '../lib/memory-manager';
@@ -115,8 +119,37 @@ export default function Home() {
   const [isBrowserCapturing, setIsBrowserCapturing] = useState(false);
 
   const [workbenchLayout, setWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.normal');
+  const reviewBoostedBottomRatioRef = useRef<number | null>(null);
   const [resolvedPlacement, setResolvedPlacement] = useState<ResolvedWorkbenchPlacement>('right');
   const [isResizing, setIsResizing] = useState(false);
+
+  useEffect(() => {
+    const onReviewBoost = (event: Event) => {
+      const active = Boolean((event as CustomEvent<{ active?: boolean }>).detail?.active);
+      if (active) {
+        setWorkbenchLayout((previous) => {
+          if (reviewBoostedBottomRatioRef.current === null) {
+            reviewBoostedBottomRatioRef.current = previous.bottomRatio;
+          }
+          return normalizeWorkbenchLayout({
+            ...previous,
+            bottomRatio: Math.max(previous.bottomRatio, REVIEW_STACKED_WORKBENCH_BOTTOM_RATIO),
+          });
+        });
+        return;
+      }
+      if (reviewBoostedBottomRatioRef.current !== null) {
+        const restored = reviewBoostedBottomRatioRef.current;
+        reviewBoostedBottomRatioRef.current = null;
+        setWorkbenchLayout((previous) => normalizeWorkbenchLayout({
+          ...previous,
+          bottomRatio: restored,
+        }));
+      }
+    };
+    window.addEventListener(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, onReviewBoost);
+    return () => window.removeEventListener(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, onReviewBoost);
+  }, [setWorkbenchLayout]);
   const {
     traceTabs,
     activeTraceId,

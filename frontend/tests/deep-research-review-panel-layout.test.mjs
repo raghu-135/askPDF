@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT,
   REVIEW_DECISION_PANEL_GRID_ROWS,
+  REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
   REVIEW_LIMITATIONS_MAX_HEIGHT,
   REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX,
   reviewPanelFlexWeights,
@@ -13,7 +14,7 @@ import {
 test('review panel grid reserves a sticky footer row with shrinkable header', () => {
   assert.match(
     REVIEW_DECISION_PANEL_GRID_ROWS,
-    /^auto auto minmax\(0,\s*auto\) minmax\(0,\s*1fr\) auto$/,
+    new RegExp(`^auto auto minmax\\(${REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX}px,\\s*auto\\) minmax\\(0,\\s*1fr\\) auto$`),
   );
 });
 

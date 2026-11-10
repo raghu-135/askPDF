@@ -126,27 +126,33 @@ export function DeepResearchGuidanceField({
   value,
   onChange,
   required,
+  compactUntilFocus = false,
 }: {
   label: string;
   helperText?: string;
   value: string;
   onChange: (value: string) => void;
   required?: boolean;
+  compactUntilFocus?: boolean;
 }) {
   const fieldId = 'deep-research-guidance-input';
+  const [expanded, setExpanded] = useState(Boolean(value.trim()));
+  const compact = compactUntilFocus && !expanded;
   return (
     <TextField
       fullWidth
-      multiline
-      minRows={2}
-      maxRows={6}
+      multiline={!compact}
+      minRows={compact ? 1 : 2}
+      maxRows={compact ? 1 : 6}
+      size={compact ? 'small' : 'medium'}
       id={fieldId}
       name="research-guidance"
       label={label}
-      helperText={helperText}
+      helperText={compact ? undefined : helperText}
       required={required}
       value={value}
       onChange={(event) => onChange(event.target.value)}
+      onFocus={() => setExpanded(true)}
       inputProps={{ 'aria-label': label }}
     />
   );
