@@ -3,7 +3,10 @@ import { Box, IconButton, Typography, useMediaQuery, useTheme } from '@mui/mater
 import CloseIcon from '@mui/icons-material/Close';
 import { useResizablePanelRatio } from '../../hooks/useResizablePanelRatio';
 import { ResizablePanelHandle } from './ResizablePanelHandle';
-import { REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT } from '../../lib/deep-research-review-panel-layout';
+import {
+  REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT,
+  REVIEW_DECISION_PANEL_GRID_ROWS,
+} from '../../lib/deep-research-review-panel-layout';
 
 export function ResizableDecisionPanel({
   title,
@@ -47,8 +50,10 @@ export function ResizableDecisionPanel({
   const onResizeStart = externalOnResizeStart ?? internal.onResizeStart;
 
   const shellSx = fillColumn ? {
-    display: 'flex',
-    flexDirection: 'column',
+    display: 'grid',
+    gridTemplateRows: fixedHeader
+      ? REVIEW_DECISION_PANEL_GRID_ROWS
+      : 'auto auto minmax(0, 1fr) auto',
     flex: '1 1 0',
     minWidth: 0,
     minHeight: 0,
@@ -91,7 +96,7 @@ export function ResizableDecisionPanel({
           gap: 1,
           px: 1,
           pb: 1,
-          flexShrink: 0,
+          flex: '0 1 auto',
           minHeight: 0,
           maxHeight: REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT,
           overflowY: 'auto',
@@ -109,8 +114,8 @@ export function ResizableDecisionPanel({
         pb: footer ? 0 : 1,
         overflowY: 'auto',
         overflowX: 'hidden',
-        flex: '1 1 0',
         minHeight: 0,
+        ...(fillColumn ? {} : { flex: '1 1 0' }),
       }}>
         {children}
       </Box>

@@ -5,68 +5,173 @@
     <title>Deep Research review panel layout fixture</title>
     <style>
       * { box-sizing: border-box; }
-      body { margin: 0; font-family: system-ui, sans-serif; background: #f5f5f5; }
-      .shell {
+      body { margin: 0; font-family: system-ui, sans-serif; background: #f5f5f5; font-size: 13px; }
+      .workbench {
         display: flex;
         flex-direction: column;
         height: 100vh;
         padding: 8px;
+        gap: 0;
+        overflow: hidden;
+      }
+      .header {
+        flex-shrink: 0;
+        height: 96px;
+        background: #fff;
+        border: 1px solid #ddd;
+        padding: 8px;
+        margin-bottom: 8px;
+      }
+      .status {
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .alert {
+        background: #e3f2fd;
+        border: 1px solid #90caf9;
+        padding: 8px 10px;
+        border-radius: 4px;
+      }
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+      .chip {
+        background: #eee;
+        border-radius: 12px;
+        padding: 2px 8px;
+        font-size: 12px;
+      }
+      .deliverables {
+        background: #fff;
+        border: 1px solid #ddd;
+        padding: 8px;
+        border-radius: 4px;
       }
       .transcript {
-        flex: 0.42 1 0;
+        flex: 0.52 1 0;
         min-height: 72px;
+        min-width: 0;
         overflow: auto;
         background: #fff;
         border: 1px solid #ddd;
-        margin-bottom: 8px;
+        margin-bottom: 0;
       }
-      .decision {
-        flex: 0.58 1 0;
+      .decision-shell {
+        flex: 0.48 1 0;
         min-height: 0;
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-rows: auto minmax(0, auto) minmax(0, 1fr) auto;
         overflow: hidden;
         background: #fff;
         border: 1px solid #ddd;
+        border-top: 2px solid #0288d1;
+        border-radius: 4px;
+        margin-top: 0;
       }
-      .decision-header {
-        flex-shrink: 0;
+      .decision-title {
+        text-align: center;
+        padding: 8px;
+        font-weight: 700;
+        color: #666;
+        font-size: 12px;
+      }
+      .decision-fixed-header {
+        min-height: 0;
         max-height: min(36vh, 260px);
         overflow: auto;
-        padding: 8px;
-        border-bottom: 1px solid #eee;
+        padding: 0 8px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
       }
       .decision-body {
-        flex: 1 1 0;
         min-height: 0;
         overflow: auto;
         padding: 8px;
       }
       .decision-footer {
-        flex-shrink: 0;
         padding: 8px;
         border-top: 1px solid #ddd;
         background: #fafafa;
       }
-      button { margin-right: 8px; }
-      .filler { height: 1200px; background: linear-gradient(#fff, #eee); }
+      .guidance {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 8px;
+      }
+      .guidance input {
+        width: 100%;
+        padding: 6px 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      .limitations li { margin-bottom: 6px; }
+      button { margin-right: 8px; margin-bottom: 4px; }
+      .filler-line { height: 48px; background: linear-gradient(90deg, #fff, #f0f0f0); margin-bottom: 4px; }
     </style>
   </head>
   <body>
-    <div class="shell" id="panel-root">
-      <div class="transcript"><div class="filler">Transcript</div></div>
-      <div class="decision" id="decision-panel">
-        <div class="decision-header">
-          <div>Budget chips · limitations list</div>
-          <div class="filler" style="height: 400px">Many limitations</div>
+    <div class="workbench" id="panel-root">
+      <div class="header">Model · Agent · Context controls (workbench header)</div>
+      <div class="status">
+        <div class="alert">Model, agent, and context window are locked for this task.</div>
+        <div class="chips">
+          <span class="chip">Tranche 1</span>
+          <span class="chip">Model calls 40/10000</span>
+          <span class="chip">Model tokens 500000/500000</span>
+          <span class="chip">Tool calls 20/100</span>
+          <span class="chip">Active runtime 2m 47s/2h</span>
         </div>
-        <div class="decision-body">
-          <div class="filler">Provisional answer</div>
+        <div class="deliverables">Research canvases from this task (1 canvas)</div>
+      </div>
+      <div class="transcript" id="transcript">
+        <div class="filler-line"></div>
+        <div class="filler-line"></div>
+        <div>Runtime transcript (min-height 72px)</div>
+      </div>
+      <div class="decision-shell" id="decision-panel">
+        <div class="decision-title">Review incomplete result</div>
+        <div class="decision-fixed-header" id="decision-fixed-header">
+          <div class="chips">
+            <span class="chip">Budget reached</span>
+            <span class="chip">8 limitations</span>
+          </div>
+          <div class="alert">Research budget reached — review the provisional result.</div>
+          <ul class="limitations" id="limitations">
+            <li>Source retrieval for table 3 on page 7 did not complete within the tranche budget; numeric claims there remain unverified.</li>
+            <li>Cross-document comparison with the 2018 follow-up study was deferred after repeated indexer timeouts on the attachment store.</li>
+            <li>The methods section cites a proprietary toolkit whose license text was not available in the indexed corpus.</li>
+            <li>Ablation discussion in section 5.2 mixes two benchmark suites; units were not normalized before synthesis.</li>
+            <li>Figure 4 annotations could not be aligned to PDF coordinates on one scanned page, so quoted axis labels may be approximate.</li>
+            <li>Web search was disabled for this task, so industry baselines referenced only training-set papers.</li>
+            <li>Two todo checkpoints remained open when the run paused; coverage statements for related work may be incomplete.</li>
+            <li>Runtime memory pressure forced a truncated reread of appendix B; footnote cross-references were not double-checked.</li>
+            <li>Canvas export for the summary diagram failed once; the linked canvas may lag the transcript narrative.</li>
+            <li>Tokenizer mismatch on one highlighted span may have shifted quoted token counts in the limitation summary.</li>
+          </ul>
         </div>
-        <div class="decision-footer">
-          <button type="button">Finish with this result</button>
-          <button type="button">Continue with guidance</button>
+        <div class="decision-body" id="decision-body">
+          <p><strong>Provisional answer</strong> (scrollable)</p>
+          <motion-placeholder style="display:block;height:320px;background:linear-gradient(#fff,#eee)"></motion-placeholder>
         </div>
+        <div class="decision-footer" id="decision-footer">
+          <div class="guidance">
+            <label for="guidance">Guidance for the next research tranche</label>
+            <input id="guidance" type="text" placeholder="Optional steering for continue" />
+            <span style="color:#666;font-size:12px">Continuing with guidance resets the budget tranche counters.</span>
+          </div>
+          <button type="button" id="finish-btn">Finish with this result</button>
+          <button type="button" id="continue-btn">Continue with guidance</button>
+        </div>
+      </div>
+      <div class="status" style="margin-top:8px;margin-bottom:0">
+        <div class="chips">
+          <span class="chip">Awaiting your decision</span>
+          <span class="chip">Attempt 1 of 1</span>
+        </div>
+        <div style="padding:8px 0">START · PAUSE · RESUME · CANCEL · RETRY</div>
       </div>
     </div>
   </body>

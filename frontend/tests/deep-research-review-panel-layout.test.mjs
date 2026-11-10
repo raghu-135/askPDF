@@ -9,8 +9,11 @@ import {
   reviewPanelLayoutFitsViewport,
 } from '../src/lib/deep-research-review-panel-layout.ts';
 
-test('review panel grid reserves a sticky footer row', () => {
-  assert.match(REVIEW_DECISION_PANEL_GRID_ROWS, /^auto auto auto minmax\(0,\s*1fr\) auto$/);
+test('review panel grid reserves a sticky footer row with shrinkable header', () => {
+  assert.match(
+    REVIEW_DECISION_PANEL_GRID_ROWS,
+    /^auto auto minmax\(0,\s*auto\) minmax\(0,\s*1fr\) auto$/,
+  );
 });
 
 test('review panel flex weights keep transcript reachable at 1024x768', () => {
@@ -19,6 +22,12 @@ test('review panel flex weights keep transcript reachable at 1024x768', () => {
   assert.ok(weights.decision > 0);
   assert.equal(Number((weights.transcript + weights.decision).toFixed(2)), 1);
   assert.equal(reviewPanelLayoutFitsViewport(weights, 768), true);
+});
+
+test('review panel layout fits workbench chrome at 1280x800 and 1280x650', () => {
+  const weights = reviewPanelFlexWeights(0.48);
+  assert.equal(reviewPanelLayoutFitsViewport(weights, 800), true);
+  assert.equal(reviewPanelLayoutFitsViewport(weights, 650), true);
 });
 
 test('limitations region uses a bounded max height', () => {
