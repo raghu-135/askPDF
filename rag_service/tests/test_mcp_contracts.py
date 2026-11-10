@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -25,6 +26,14 @@ def test_document_source_ids_round_trip_through_context_contract():
     request = ReadContextRequest(source_id=source_id, token_budget=2000)
     assert request.source_id == source_id
     assert request.token_budget == 2000
+
+
+def test_publish_canvas_input_schema_has_no_refs_or_defs():
+    validate_registry()
+    schema = descriptor("publish_canvas", MCP_TOOL_DEFINITIONS["publish_canvas"])["inputSchema"]
+    encoded = json.dumps(schema)
+    assert "$defs" not in encoded
+    assert "$ref" not in encoded
 
 
 def test_publish_canvas_input_schema_accepts_string_table_cells():

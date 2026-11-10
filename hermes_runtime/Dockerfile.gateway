@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1
 # Overlay on the pinned upstream Hermes image: bake askPDF's gateway patch into
 # the sealed venv via site-packages .pth so v0.23 launchers that unset
-# PYTHONPATH still import sitecustomize at gateway startup.
+# PYTHONPATH still import sitecustomize and runtime_protocol at gateway startup.
 FROM hermes-upstream
 
 ARG ASKPDF_HERMES_PATCH_ROOT=/opt/askpdf-hermes-pinned-patch
+ARG ASKPDF_PYLIB_ROOT=/opt/askpdf-pylib
 COPY hermes_runtime/hermes_pinned_patch ${ASKPDF_HERMES_PATCH_ROOT}
+COPY runtime_protocol ${ASKPDF_PYLIB_ROOT}/runtime_protocol
 
-RUN ["/opt/hermes/.venv/bin/python", "-c", "import pathlib, site; root = pathlib.Path('/opt/askpdf-hermes-pinned-patch'); assert (root / 'sitecustomize.py').is_file(), root; site_dir = next(p for p in site.getsitepackages() if p.endswith('site-packages')); pth = pathlib.Path(site_dir) / 'askpdf-hermes-pinned.pth'; pth.write_text(f\"{root}\\n\", encoding='utf-8'); assert pth.is_file(), pth"]
+RUN ["/opt/hermes/.venv/bin/python", "-c", "import pathlib, site; patch_root = pathlib.Path('/opt/askpdf-hermes-pinned-patch'); pylib_root = pathlib.Path('/opt/askpdf-pylib'); assert (patch_root / 'sitecustomize.py').is_file(); assert (pylib_root / 'runtime_protocol' / '__init__.py').is_file(); site_dir = next(p for p in site.getsitepackages() if p.endswith('site-packages')); pth = pathlib.Path(site_dir) / 'askpdf-hermes-pinned.pth'; pth.write_text(f'{patch_root}\\n{pylib_root}\\n', encoding='utf-8'); import importlib; importlib.invalidate_caches(); assert pth.is_file(); import runtime_protocol.provider_tool_schema"]

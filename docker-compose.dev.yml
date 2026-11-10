@@ -86,6 +86,7 @@ services:
       GATEWAY_MULTIPLEX_PROFILES: "true"
       ASKPDF_HERMES_COMPAT_ENABLED: "1"
       HERMES_UPSTREAM_REVISION: ${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+      PYTHONPATH: /opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib
 
   hermes-runtime:
     environment:

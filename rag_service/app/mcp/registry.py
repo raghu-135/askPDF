@@ -116,7 +116,10 @@ def enabled_definitions() -> dict[str, MCPToolDefinition]:
 
 
 def _schema(model: type[BaseModel]) -> dict[str, Any]:
-    return model.model_json_schema() if hasattr(model, "model_json_schema") else model.schema()
+    from runtime_protocol.provider_tool_schema import provider_compatible_json_schema
+
+    raw = model.model_json_schema() if hasattr(model, "model_json_schema") else model.schema()
+    return provider_compatible_json_schema(raw)
 
 
 def descriptor(name: str, definition: MCPToolDefinition | type[BaseModel]) -> dict[str, Any]:
