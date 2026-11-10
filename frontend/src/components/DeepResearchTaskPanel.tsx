@@ -827,7 +827,10 @@ export default function DeepResearchTaskPanel({
         todoTitles={reviewTodoTitles}
       />
       {reviewPanelOpen ? (
-        <Box sx={{ flexShrink: 0, maxHeight: REVIEW_LIMITATIONS_MAX_HEIGHT, overflowY: 'auto', pr: 0.25 }}>
+        <Box
+          data-testid="review-limitations-scroller"
+          sx={{ flexShrink: 0, maxHeight: REVIEW_LIMITATIONS_MAX_HEIGHT, overflowY: 'auto', pr: 0.25 }}
+        >
           <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
         </Box>
       ) : null}
@@ -888,11 +891,12 @@ export default function DeepResearchTaskPanel({
     ref={panelRef}
     sx={{ p: 1 }}
     decisionBeforeTranscript={reviewDecisionBeforeTranscript}
+    transcriptDataTestId={reviewPanelOpen ? 'review-transcript-frame' : undefined}
     transcriptSx={reviewPanelOpen ? {
       flex: reviewDecisionBeforeTranscript
         ? '0 0 auto'
         : `${reviewFlexWeights.transcript} 1 0`,
-      maxHeight: REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX,
+      ...(reviewDecisionBeforeTranscript ? { maxHeight: REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX } : {}),
       minHeight: 48,
       minWidth: 0,
       overflow: 'hidden',

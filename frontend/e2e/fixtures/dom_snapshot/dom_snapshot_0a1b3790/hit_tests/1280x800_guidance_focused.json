@@ -1,0 +1,986 @@
+{
+  "finish": {
+    "button": {
+      "tag": "BUTTON",
+      "id": null,
+      "role": null,
+      "testId": null,
+      "ariaLabel": null,
+      "className": "MuiButtonBase-root MuiButton-root MuiButton-contained MuiButton-containedPrimary MuiButton-sizeSmall MuiButton-containedSizeSmall MuiButton-colorPrimary MuiButton-root MuiButton-contained MuiButton-containedPrimary MuiButton-sizeSmall MuiButton-containedSizeSmall MuiButton-colorPrimary css-271wgt",
+      "text": "FINISH WITH THIS RESULT (8 LIMITATIONS)",
+      "rect": {
+        "x": 894.41,
+        "y": 597.17,
+        "width": 291.73,
+        "height": 30.75,
+        "top": 597.17,
+        "bottom": 627.92,
+        "left": 894.41,
+        "right": 1186.14
+      },
+      "disabled": false,
+      "pointerEvents": "auto"
+    },
+    "point": {
+      "x": 1040.27,
+      "y": 612.55
+    },
+    "elementFromPoint": {
+      "tag": "BUTTON",
+      "id": null,
+      "role": null,
+      "testId": null,
+      "ariaLabel": null,
+      "className": "MuiButtonBase-root MuiButton-root MuiButton-contained MuiButton-containedPrimary MuiButton-sizeSmall MuiButton-containedSizeSmall MuiButton-colorPrimary MuiButton-root MuiButton-contained MuiButton-containedPrimary MuiButton-sizeSmall MuiButton-containedSizeSmall MuiButton-colorPrimary css-271wgt",
+      "text": "FINISH WITH THIS RESULT (8 LIMITATIONS)",
+      "rect": {
+        "x": 894.41,
+        "y": 597.17,
+        "width": 291.73,
+        "height": 30.75,
+        "top": 597.17,
+        "bottom": 627.92,
+        "left": 894.41,
+        "right": 1186.14
+      }
+    },
+    "hitsButton": true,
+    "closestButtonText": "FINISH WITH THIS RESULT (8 LIMITATIONS)",
+    "ancestry": [
+      {
+        "tag": "BUTTON",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiButtonBase-root MuiButton-root MuiButton-contained MuiButton-containedPrimary MuiButton-sizeSmall MuiButton-containedSizeSmall MuiButton-colorPrimary MuiButton-root MuiButton-contained MuiButton-containedPrimary MuiButton-sizeSmall MuiButton-containedSizeSmall MuiButton-colorPrimary css-271wgt",
+        "text": "FINISH WITH THIS RESULT (8 LIMITATIONS)",
+        "rect": {
+          "x": 894.41,
+          "y": 597.17,
+          "width": 291.73,
+          "height": 30.75,
+          "top": 597.17,
+          "bottom": 627.92,
+          "left": 894.41,
+          "right": 1186.14
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "relative",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-wq87pz",
+        "text": "FINISH WITH THIS RESULT (8 LIMITATIONS) CONTINUE WITH GUIDANCE (ANOTHER TRANCHE)",
+        "rect": {
+          "x": 894.41,
+          "y": 597.17,
+          "width": 361.59,
+          "height": 67.5,
+          "top": 597.17,
+          "bottom": 664.67,
+          "left": 894.41,
+          "right": 1256
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1p05eew",
+        "text": "Guidance for the next research tranche * Guidance for the next research tranche * Continuing with guidance resets the budget tranche counters and may start a li",
+        "rect": {
+          "x": 894.41,
+          "y": 458.36,
+          "width": 361.59,
+          "height": 206.31,
+          "top": 458.36,
+          "bottom": 664.67,
+          "left": 894.41,
+          "right": 1256
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1js3606",
+        "text": "Guidance for the next research tranche * Guidance for the next research tranche * Continuing with guidance resets the budget tranche counters and may start a li",
+        "rect": {
+          "x": 886.41,
+          "y": 449.36,
+          "width": 377.59,
+          "height": 223.31,
+          "top": 449.36,
+          "bottom": 672.67,
+          "left": 886.41,
+          "right": 1264
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "sticky",
+          "zIndex": "2",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-cscn5l",
+        "text": "Research budget reached Tranche 1 Model calls 40/10000 Model tokens 500000/500000 Tool calls 20/100 Active runtime 2m 47s/2h Research budget for Model tokens is",
+        "rect": {
+          "x": 886.41,
+          "y": 427.53,
+          "width": 377.59,
+          "height": 245.14,
+          "top": 427.53,
+          "bottom": 672.67,
+          "left": 886.41,
+          "right": 1264
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden auto",
+          "overflowY": "auto"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1ortyul",
+        "text": "Research budget reached Tranche 1 Model calls 40/10000 Model tokens 500000/500000 Tool calls 20/100 Active runtime 2m 47s/2h Research budget for Model tokens is",
+        "rect": {
+          "x": 878.41,
+          "y": 427.53,
+          "width": 393.59,
+          "height": 253.14,
+          "top": 427.53,
+          "bottom": 680.67,
+          "left": 878.41,
+          "right": 1272
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation0 css-otllmr",
+        "text": "CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for this task. Start a new Deep Re",
+        "rect": {
+          "x": 870.41,
+          "y": 49,
+          "width": 409.59,
+          "height": 751,
+          "top": 49,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1sm2s1z",
+        "text": "CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for this task. Start a new Deep Re",
+        "rect": {
+          "x": 870.41,
+          "y": 49,
+          "width": 409.59,
+          "height": 751,
+          "top": 49,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-3xb7l1",
+        "text": "CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for this task. Start a new Deep Re",
+        "rect": {
+          "x": 870.41,
+          "y": 49,
+          "width": 409.59,
+          "height": 751,
+          "top": 49,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-13o2xzb",
+        "text": "Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for",
+        "rect": {
+          "x": 870.41,
+          "y": 0,
+          "width": 409.59,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-12t7b09",
+        "text": "Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for",
+        "rect": {
+          "x": 870.41,
+          "y": 0,
+          "width": 409.59,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-6pnmcd",
+        "text": "Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for",
+        "rect": {
+          "x": 870.41,
+          "y": 0,
+          "width": 409.59,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": "Threads and chat",
+        "className": "MuiBox-root css-1vdnf1z",
+        "text": "Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for",
+        "rect": {
+          "x": 870.41,
+          "y": 0,
+          "width": 409.59,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1vyjdef",
+        "text": "Thread Memory 1 Documents Browser 0 Canvas Embeddings 0 Debug Trace 1706.03762.pdf Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select age",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 0,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1mvtzlb",
+        "text": "Thread Memory 1 Documents Browser 0 Canvas Embeddings 0 Debug Trace 1706.03762.pdf Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select age",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 0,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": "__next",
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "",
+        "text": "Thread Memory 1 Documents Browser 0 Canvas Embeddings 0 Debug Trace 1706.03762.pdf Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select age",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 0,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "BODY",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "",
+        "text": "Thread Memory 1 Documents Browser 0 Canvas Embeddings 0 Debug Trace 1706.03762.pdf Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select age",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 0,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      }
+    ]
+  },
+  "continue": {
+    "button": {
+      "tag": "BUTTON",
+      "id": null,
+      "role": null,
+      "testId": null,
+      "ariaLabel": null,
+      "className": "MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-outlinedPrimary MuiButton-sizeSmall MuiButton-outlinedSizeSmall MuiButton-colorPrimary MuiButton-root MuiButton-outlined MuiButton-outlinedPrimary MuiButton-sizeSmall MuiButton-outlinedSizeSmall MuiButton-colorPrimary css-1dupue7",
+      "text": "CONTINUE WITH GUIDANCE (ANOTHER TRANCHE)",
+      "rect": {
+        "x": 894.41,
+        "y": 633.92,
+        "width": 333.02,
+        "height": 30.75,
+        "top": 633.92,
+        "bottom": 664.67,
+        "left": 894.41,
+        "right": 1227.42
+      },
+      "disabled": false,
+      "pointerEvents": "auto"
+    },
+    "point": {
+      "x": 1060.91,
+      "y": 649.3
+    },
+    "elementFromPoint": {
+      "tag": "BUTTON",
+      "id": null,
+      "role": null,
+      "testId": null,
+      "ariaLabel": null,
+      "className": "MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-outlinedPrimary MuiButton-sizeSmall MuiButton-outlinedSizeSmall MuiButton-colorPrimary MuiButton-root MuiButton-outlined MuiButton-outlinedPrimary MuiButton-sizeSmall MuiButton-outlinedSizeSmall MuiButton-colorPrimary css-1dupue7",
+      "text": "CONTINUE WITH GUIDANCE (ANOTHER TRANCHE)",
+      "rect": {
+        "x": 894.41,
+        "y": 633.92,
+        "width": 333.02,
+        "height": 30.75,
+        "top": 633.92,
+        "bottom": 664.67,
+        "left": 894.41,
+        "right": 1227.42
+      }
+    },
+    "hitsButton": true,
+    "closestButtonText": "CONTINUE WITH GUIDANCE (ANOTHER TRANCHE)",
+    "ancestry": [
+      {
+        "tag": "BUTTON",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiButtonBase-root MuiButton-root MuiButton-outlined MuiButton-outlinedPrimary MuiButton-sizeSmall MuiButton-outlinedSizeSmall MuiButton-colorPrimary MuiButton-root MuiButton-outlined MuiButton-outlinedPrimary MuiButton-sizeSmall MuiButton-outlinedSizeSmall MuiButton-colorPrimary css-1dupue7",
+        "text": "CONTINUE WITH GUIDANCE (ANOTHER TRANCHE)",
+        "rect": {
+          "x": 894.41,
+          "y": 633.92,
+          "width": 333.02,
+          "height": 30.75,
+          "top": 633.92,
+          "bottom": 664.67,
+          "left": 894.41,
+          "right": 1227.42
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "relative",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-wq87pz",
+        "text": "FINISH WITH THIS RESULT (8 LIMITATIONS) CONTINUE WITH GUIDANCE (ANOTHER TRANCHE)",
+        "rect": {
+          "x": 894.41,
+          "y": 597.17,
+          "width": 361.59,
+          "height": 67.5,
+          "top": 597.17,
+          "bottom": 664.67,
+          "left": 894.41,
+          "right": 1256
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1p05eew",
+        "text": "Guidance for the next research tranche * Guidance for the next research tranche * Continuing with guidance resets the budget tranche counters and may start a li",
+        "rect": {
+          "x": 894.41,
+          "y": 458.36,
+          "width": 361.59,
+          "height": 206.31,
+          "top": 458.36,
+          "bottom": 664.67,
+          "left": 894.41,
+          "right": 1256
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1js3606",
+        "text": "Guidance for the next research tranche * Guidance for the next research tranche * Continuing with guidance resets the budget tranche counters and may start a li",
+        "rect": {
+          "x": 886.41,
+          "y": 449.36,
+          "width": 377.59,
+          "height": 223.31,
+          "top": 449.36,
+          "bottom": 672.67,
+          "left": 886.41,
+          "right": 1264
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "sticky",
+          "zIndex": "2",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-cscn5l",
+        "text": "Research budget reached Tranche 1 Model calls 40/10000 Model tokens 500000/500000 Tool calls 20/100 Active runtime 2m 47s/2h Research budget for Model tokens is",
+        "rect": {
+          "x": 886.41,
+          "y": 427.53,
+          "width": 377.59,
+          "height": 245.14,
+          "top": 427.53,
+          "bottom": 672.67,
+          "left": 886.41,
+          "right": 1264
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden auto",
+          "overflowY": "auto"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1ortyul",
+        "text": "Research budget reached Tranche 1 Model calls 40/10000 Model tokens 500000/500000 Tool calls 20/100 Active runtime 2m 47s/2h Research budget for Model tokens is",
+        "rect": {
+          "x": 878.41,
+          "y": 427.53,
+          "width": 393.59,
+          "height": 253.14,
+          "top": 427.53,
+          "bottom": 680.67,
+          "left": 878.41,
+          "right": 1272
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiPaper-root MuiPaper-elevation MuiPaper-rounded MuiPaper-elevation0 css-otllmr",
+        "text": "CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for this task. Start a new Deep Re",
+        "rect": {
+          "x": 870.41,
+          "y": 49,
+          "width": 409.59,
+          "height": 751,
+          "top": 49,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1sm2s1z",
+        "text": "CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for this task. Start a new Deep Re",
+        "rect": {
+          "x": 870.41,
+          "y": 49,
+          "width": 409.59,
+          "height": 751,
+          "top": 49,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-3xb7l1",
+        "text": "CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for this task. Start a new Deep Re",
+        "rect": {
+          "x": 870.41,
+          "y": 49,
+          "width": 409.59,
+          "height": 751,
+          "top": 49,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-13o2xzb",
+        "text": "Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for",
+        "rect": {
+          "x": 870.41,
+          "y": 0,
+          "width": 409.59,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-12t7b09",
+        "text": "Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for",
+        "rect": {
+          "x": 870.41,
+          "y": 0,
+          "width": 409.59,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-6pnmcd",
+        "text": "Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for",
+        "rect": {
+          "x": 870.41,
+          "y": 0,
+          "width": 409.59,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": "Threads and chat",
+        "className": "MuiBox-root css-1vdnf1z",
+        "text": "Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select agent Deep Research Agent Select agent Model, agent, and context window are locked for",
+        "rect": {
+          "x": 870.41,
+          "y": 0,
+          "width": 409.59,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 870.41,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1vyjdef",
+        "text": "Thread Memory 1 Documents Browser 0 Canvas Embeddings 0 Debug Trace 1706.03762.pdf Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select age",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 0,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "MuiBox-root css-1mvtzlb",
+        "text": "Thread Memory 1 Documents Browser 0 Canvas Embeddings 0 Debug Trace 1706.03762.pdf Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select age",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 0,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "hidden",
+          "overflowY": "hidden"
+        }
+      },
+      {
+        "tag": "DIV",
+        "id": "__next",
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "",
+        "text": "Thread Memory 1 Documents Browser 0 Canvas Embeddings 0 Debug Trace 1706.03762.pdf Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select age",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 0,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      },
+      {
+        "tag": "BODY",
+        "id": null,
+        "role": null,
+        "testId": null,
+        "ariaLabel": null,
+        "className": "",
+        "text": "Thread Memory 1 Documents Browser 0 Canvas Embeddings 0 Debug Trace 1706.03762.pdf Personal REVIEWPANEL attention CONTEXT 8,192 Select LLM Select LLM Select age",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1280,
+          "height": 800,
+          "top": 0,
+          "bottom": 800,
+          "left": 0,
+          "right": 1280
+        },
+        "styles": {
+          "pointerEvents": "auto",
+          "position": "static",
+          "zIndex": "auto",
+          "overflow": "visible",
+          "overflowY": "visible"
+        }
+      }
+    ]
+  }
+}

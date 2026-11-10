@@ -5,17 +5,22 @@ import {
   REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT,
   REVIEW_DECISION_PANEL_GRID_ROWS,
   REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
+  REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS,
   REVIEW_LIMITATIONS_MAX_HEIGHT,
   REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX,
   reviewPanelFlexWeights,
   reviewPanelOpenDecisionSlicePx,
 } from '../src/lib/deep-research-review-panel-layout.ts';
 
-test('review panel grid reserves a sticky footer row with shrinkable header', () => {
-  assert.match(
-    REVIEW_DECISION_PANEL_GRID_ROWS,
-    new RegExp(`^auto auto minmax\\(${REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX}px,\\s*auto\\) minmax\\(0,\\s*1fr\\) auto$`),
+test('review panel scroll grid keeps a limitations floor without the footer row', () => {
+  assert.equal(
+    REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS,
+    `auto auto minmax(${REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX}px, auto) minmax(0, 1fr)`,
   );
+});
+
+test('non-fill panel grid appends a footer row', () => {
+  assert.equal(REVIEW_DECISION_PANEL_GRID_ROWS, `${REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS} auto`);
 });
 
 test('review panel flex weights keep transcript reachable at 1024x768', () => {

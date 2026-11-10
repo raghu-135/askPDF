@@ -1,0 +1,203 @@
+{
+  "tasks": [
+    {
+      "id": "e239e046-628e-4439-8596-09cdaf0e3d97",
+      "thread_id": "c405b612-8e59-4ef2-bda6-5129f4efe8f5",
+      "project_id": "2279c966-4ac4-45cc-9e6f-7dbf2c4afb16",
+      "workflow_id": "deep_research_agent",
+      "objective": "Critically review the attached paper as a conference reviewer. Identify and list every limitation, threat to validity, unaddressed assumption, missing experiment, methodological weakness, and claim that is under-supported. Include both limitations the authors acknowledge and additional ones a reviewer would raise. Write at least twelve distinct, detailed limitation items, each with a short citation to the PDF. Do not write a short summary; the review of limitations is the main deliverable.",
+      "status": "awaiting_approval",
+      "version": 6,
+      "primary_run_id": "a899c5cb-ec75-4e31-bf77-e527c5f587d5",
+      "active_run_id": "a899c5cb-ec75-4e31-bf77-e527c5f587d5",
+      "run_attempt": 1,
+      "progress": 25,
+      "completed_todos": 1,
+      "total_todos": 4,
+      "current_phase": "awaiting_result_review",
+      "terminal_reason": "incomplete_result",
+      "budgets": {
+        "boundary": {
+          "status": "requested",
+          "dimensions": [
+            "model_tokens"
+          ],
+          "tranche_index": 1
+        },
+        "tranche_index": 1,
+        "tranche_usage": {
+          "tool_calls": 20,
+          "model_calls": 40,
+          "model_tokens": 500000,
+          "elapsed_active_ms": 167322
+        },
+        "lifetime_usage": {
+          "tool_calls": 20,
+          "model_calls": 40,
+          "model_tokens": 500000,
+          "artifact_bytes": 0,
+          "elapsed_active_ms": 167322,
+          "subagent_attempts": 4
+        },
+        "tranche_limits": {
+          "tool_calls": 100,
+          "model_calls": 10000,
+          "model_tokens": 500000,
+          "elapsed_active_ms": 7200000
+        }
+      },
+      "configuration": {
+        "limits": {
+          "max_todos": 50,
+          "max_fanout": 2,
+          "max_replans": 5,
+          "max_artifacts": 200,
+          "max_concurrency": 2,
+          "max_artifact_bytes": 104857600,
+          "max_plan_revisions": 8,
+          "max_attempts_per_todo": 2,
+          "max_single_artifact_bytes": 10485760
+        },
+        "llm_model": "google/gemini-3.5-flash",
+        "objective": "Critically review the attached paper as a conference reviewer. Identify and list every limitation, threat to validity, unaddressed assumption, missing experiment, methodological weakness, and claim that is under-supported. Include both limitations the authors acknowledge and additional ones a reviewer would raise. Write at least twelve distinct, detailed limitation items, each with a short citation to the PDF. Do not write a short summary; the review of limitations is the main deliverable.",
+        "context_budget": {
+          "recent_ratio": 0.22,
+          "usable_ratio": 0.8,
+          "document_ratio": 0.28,
+          "semantic_ratio": 0.12,
+          "durable_memory_ratio": 0.06,
+          "memory_expanded_ratio": 0.12
+        },
+        "context_window": 8192,
+        "use_web_search": false,
+        "web_search_mode": "off",
+        "enabled_profiles": [
+          "document_researcher",
+          "memory_researcher",
+          "evidence_critic"
+        ]
+      },
+      "created_at": "2026-11-10T03:51:54.590718Z",
+      "updated_at": "2026-11-10T03:55:23.488114Z",
+      "started_at": "2026-11-10T03:51:55.400094Z",
+      "paused_at": null,
+      "completed_at": null,
+      "expires_at": null,
+      "cancelled_by": null,
+      "research_canvases": [
+        {
+          "id": "efeb7a92-846d-4d74-bcbe-63faaaa9b095",
+          "title": "Critical Review of 'Attention Is All You Need': Limitations & Weaknesses",
+          "run_id": "a899c5cb-ec75-4e31-bf77-e527c5f587d5",
+          "attempt": 1,
+          "created_at": "2026-11-10T03:55:21.130308Z",
+          "is_current_on_thread": true,
+          "chat_turn_id": "dbb57d5b-a6db-4954-888c-14433a10e71d",
+          "supersedes_id": null
+        }
+      ],
+      "active_run": {
+        "id": "a899c5cb-ec75-4e31-bf77-e527c5f587d5",
+        "status": "awaiting_human",
+        "runtime_binding_status": "unbound",
+        "pending_interrupt": {
+          "interrupt_id": "result-review:a899c5cb-ec75-4e31-bf77-e527c5f587d5:task:e239e046-628e-4439-8596-09cdaf0e3d97:run:a899c5cb-ec75-4e31-bf77-e527c5f587d5:start",
+          "type": "incomplete_result_review",
+          "kind": "approval",
+          "status": "pending",
+          "title": "Research budget reached",
+          "trigger": "budget",
+          "body": "Research budget for model tokens is at the tranche limit. 3 flagged claims and 4 open gaps remain. Finish with this result or continue with guidance (starts a new budget tranche).",
+          "response_operation": "task.result_review.respond",
+          "allowed_actions": [
+            "accept",
+            "retry_with_input"
+          ],
+          "response_schema": {
+            "type": "object",
+            "properties": {
+              "followup_input": {
+                "type": "string",
+                "maxLength": 20000
+              }
+            }
+          },
+          "review_round": 1,
+          "max_review_rounds": 3,
+          "provisional_answer": "## Unresolved required work\\n- Analyze Model Architecture and Structural Weaknesses: failed\\n- Analyze Experimental Setup, Hyperparameters, and Evaluation Gaps: max_attempts_exhausted\\n- Synthesize and Refine Twelve Distinct Limitations: dependency_failed:todo-2",
+          "warnings": [
+            {
+              "code": "task_result_envelope_invalid",
+              "details": {
+                "error_type": "ValueError"
+              },
+              "message": "The subagent returned usable text outside the neutral result envelope."
+            },
+            {
+              "code": "evidence_critic_issues",
+              "details": {
+                "issues": [
+                  "The report makes detailed claims and cites 'doc:18e1b007a1dab45b30cc861ba2dfda25', but this source is entirely missing from the evidence manifest. Under the read-only evidence critic policy, claims about an attached document must be supported by a successful, nonempty document-retrieval result from the manifest.",
+                  "The report fails to address or resolve the known result gaps: todo-2, todo-3, and todo-4."
+                ]
+              }
+            },
+            {
+              "code": "grounding_requirement_unsatisfied",
+              "details": {
+                "grounded": false,
+                "requirement": "document",
+                "failure_codes": [],
+                "failed_tool_count": 0,
+                "evidence_result_count": 90,
+                "successful_evidence_tools": [
+                  "search_knowledge"
+                ]
+              }
+            }
+          ],
+          "gaps": [
+            "todo-2",
+            "todo-3",
+            "todo-4",
+            "Required document evidence was not established."
+          ],
+          "usage": {
+            "boundary": {
+              "status": "requested",
+              "dimensions": [
+                "model_tokens"
+              ],
+              "tranche_index": 1
+            },
+            "tranche_index": 1,
+            "tranche_usage": {
+              "tool_calls": 20,
+              "model_calls": 40,
+              "model_tokens": 500000,
+              "elapsed_active_ms": 167322
+            },
+            "lifetime_usage": {
+              "tool_calls": 20,
+              "model_calls": 40,
+              "model_tokens": 500000,
+              "artifact_bytes": 0,
+              "elapsed_active_ms": 167322,
+              "subagent_attempts": 4
+            },
+            "tranche_limits": {
+              "tool_calls": 100,
+              "model_calls": 10000,
+              "model_tokens": 500000,
+              "elapsed_active_ms": 7200000
+            },
+            "exhausted_dimensions": [
+              "model_tokens"
+            ]
+          },
+          "result_outcome": "completed_with_warnings"
+        }
+      }
+    }
+  ]
+}

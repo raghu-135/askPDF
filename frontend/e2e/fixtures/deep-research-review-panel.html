@@ -2,37 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Deep Research review panel layout fixture</title>
+    <title>Deep Research review panel (from dom_snapshot_0a1b3790)</title>
     <style>
       * { box-sizing: border-box; }
-      body { margin: 0; font-family: system-ui, sans-serif; background: #f5f5f5; font-size: 13px; }
-      .app-shell {
-        display: flex;
-        height: 100vh;
-        width: 100vw;
-        overflow: hidden;
-      }
-      .primary-doc {
-        background: #e8e8e8;
-        border-right: 1px solid #ccc;
-        min-height: 0;
-        min-width: 0;
-      }
-      .secondary-pane {
-        min-height: 0;
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        background: #f5f5f5;
-      }
+      body { margin: 0; font-family: system-ui, sans-serif; font-size: 13px; background: #fafafa; }
+      .app-shell { display: flex; height: 100vh; width: 100vw; overflow: hidden; }
+      .primary-doc { background: #eee; min-height: 0; min-width: 0; }
+      .secondary-pane { min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
       @media (min-width: 1100px) {
         .app-shell { flex-direction: row; }
-        .primary-doc { flex: 1 1 68%; }
+        .primary-doc { flex: 1 1 0.42; }
         .secondary-pane { flex: 0 0 32%; }
       }
       @media (max-width: 1099px) {
         .app-shell { flex-direction: column; }
-        .primary-doc { flex: 1 1 48%; border-right: none; border-bottom: 1px solid #ccc; }
+        .primary-doc { flex: 1 1 0.42; }
         .secondary-pane { flex: 0 0 58%; }
       }
       .workbench {
@@ -42,203 +26,168 @@
         padding: 8px;
         overflow: hidden;
       }
-      .decision-wrap { flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
-      .transcript-wrap { flex: 0 0 auto; }
-      .workbench.stacked .transcript-wrap { order: 2; }
-      .workbench.stacked .decision-wrap { order: 1; }
-      .workbench.stacked .decision-footer button {
-        display: inline-block;
-        width: calc(50% - 4px);
-        margin-bottom: 0;
-        vertical-align: top;
-      }
-      .header {
-        flex-shrink: 0;
-        height: 104px;
-        background: #fff;
-        border: 1px solid #ddd;
-        padding: 8px;
-        margin-bottom: 8px;
-      }
-      .status {
-        flex-shrink: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        margin-bottom: 8px;
-      }
-      .alert {
-        background: #e3f2fd;
-        border: 1px solid #90caf9;
-        padding: 8px 10px;
-        border-radius: 4px;
-      }
-      .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-      .chip {
-        background: #eee;
-        border-radius: 12px;
-        padding: 2px 8px;
-        font-size: 12px;
-      }
-      .objective {
-        background: #1565c0;
-        color: #fff;
-        padding: 10px 12px;
-        border-radius: 6px;
-        font-weight: 600;
-      }
-      .transcript-wrap {
-        display: flex;
-        flex-direction: column;
+      .workbench.stacked .transcript-shell { order: 2; }
+      .workbench.stacked .decision-shell-wrap { order: 1; }
+      .header, .status { flex-shrink: 0; margin-bottom: 8px; }
+      .header { height: 96px; border: 1px solid #ddd; background: #fff; padding: 8px; }
+      .alert { background: #e3f2fd; border: 1px solid #90caf9; padding: 8px; margin-bottom: 8px; }
+      .transcript-shell {
+        flex: 0.42 1 0;
+        min-height: 48px;
         min-width: 0;
         overflow: hidden;
-      }
-      .transcript {
-        flex: 1 1 0;
-        max-height: 72px;
-        min-height: 48px;
-        overflow: auto;
-        background: #fff;
-        border: 1px solid #ddd;
-      }
-      .decision-wrap {
-        flex: 1 1 0;
-        min-height: 0;
         display: flex;
         flex-direction: column;
       }
+      .workbench.stacked .transcript-shell {
+        flex: 0 0 auto;
+        max-height: 72px;
+      }
+      .transcript { flex: 1 1 0; min-height: 0; overflow: auto; background: #fff; border: 1px solid #ddd; }
+      .decision-shell-wrap {
+        flex: 0.58 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
       .decision-shell {
+        display: flex;
+        flex-direction: column;
         flex: 1 1 0;
         min-height: 0;
-        display: grid;
-        grid-template-rows: auto minmax(120px, auto) minmax(0, 1fr) auto;
-        overflow-y: auto;
-        overflow-x: hidden;
-        background: #fff;
         border: 1px solid #ddd;
         border-top: 2px solid #0288d1;
-        border-radius: 4px;
+        background: #fff;
+        overflow: hidden;
       }
-      .decision-title {
-        text-align: center;
-        padding: 8px;
-        font-weight: 700;
-        color: #666;
-        font-size: 12px;
+      .decision-scroll {
+        display: grid;
+        grid-template-rows: auto auto minmax(120px, auto) minmax(0, 1fr);
+        flex: 1 1 0;
+        min-height: 0;
+        overflow: auto;
       }
-      .decision-fixed-header {
+      .decision-title { text-align: center; padding: 8px; font-weight: 700; color: #666; }
+      #review-limitations-scroller {
         min-height: 120px;
         max-height: min(36vh, 260px);
         overflow: auto;
         padding: 0 8px 8px;
       }
-      .decision-body {
-        min-height: 0;
-        overflow: auto;
-        padding: 8px;
-      }
-      .decision-footer {
-        position: sticky;
-        bottom: 0;
-        z-index: 2;
+      .decision-body { min-height: 0; overflow: auto; padding: 8px; }
+      #review-decision-footer {
+        flex-shrink: 0;
         padding: 8px;
         border-top: 1px solid #ddd;
         background: #fafafa;
       }
-      .guidance { margin-bottom: 8px; }
-      .guidance input {
-        width: 100%;
-        padding: 6px 8px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        font: inherit;
-      }
-      .decision-footer button {
-        display: block;
-        width: 100%;
-        margin: 0 0 6px;
-        padding: 6px 12px;
-        font: inherit;
-        border-radius: 4px;
-      }
-      .decision-footer button.primary { background: #1976d2; color: #fff; border: none; }
-      .decision-footer button.secondary { background: #fff; border: 1px solid #1976d2; color: #1976d2; }
-      .composer-lifecycle, .composer-placeholder { display: none; }
+      .resize-handle { height: 6px; cursor: ns-resize; background: #ddd; }
+      #guidance { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
+      #guidance.compact { padding: 4px 8px; height: 36px; }
+      button { width: 100%; margin-top: 6px; padding: 6px 12px; font: inherit; border-radius: 4px; }
+      #finish-btn { background: #1976d2; color: #fff; border: none; }
+      #continue-btn { background: #fff; border: 1px solid #1976d2; color: #1976d2; }
+      .workbench.stacked #review-decision-footer button { display: inline-block; width: calc(50% - 4px); }
       .limitations li { margin-bottom: 6px; }
-      .resize-handle { height: 6px; cursor: ns-resize; background: #ddd; flex-shrink: 0; }
     </style>
   </head>
   <body>
     <div class="app-shell" id="app-shell">
-      <div class="primary-doc" aria-hidden="true">Documents / PDF viewer</div>
+      <div class="primary-doc" aria-hidden="true">Documents viewer</div>
       <div class="secondary-pane">
         <div class="workbench" id="panel-root">
-          <div class="header">Back · Select LLM · Select agent · Context 8,192</div>
+          <div class="header">CONTEXT 8,192 · LLM · Deep Research Agent</div>
           <div class="status">
-            <div class="alert">
-              Model, agent, and context window are locked for this task.
-            </div>
-            <div class="chips">
-              <span class="chip">Tranche 1</span>
-              <span class="chip">Model calls 40/10000</span>
-              <span class="chip">Model tokens 500000/500000</span>
-              <span class="chip">Tool calls 20/100</span>
-              <span class="chip">Active runtime 2m 47s/2h</span>
-            </div>
-            <div class="objective">objective · Awaiting your decision</div>
+            <div class="alert">Model, agent, and context window are locked for this task.</div>
           </div>
-          <div class="decision-wrap" id="decision-wrap">
-            <div class="resize-handle" id="resize-handle" title="Resize decision panel"> </div>
+          <div class="decision-shell-wrap">
             <div class="decision-shell" id="decision-panel">
-              <div class="decision-title">Review incomplete result</div>
-              <div class="decision-fixed-header" id="decision-fixed-header">
-                <div class="chips">
-                  <span class="chip">Research budget reached</span>
-                  <span class="chip">8 limitations</span>
+              <div class="decision-scroll">
+                <div class="resize-handle" id="resize-handle" role="separator" aria-label="Resize decision panel"></div>
+                <div class="decision-title">Research budget reached</div>
+                <div id="review-limitations-scroller">
+                  <ul class="limitations" id="limitations">
+                    <li>todo-2</li>
+                    <li>todo-3</li>
+                    <li>todo-4</li>
+                    <li>Required document evidence was not established.</li>
+                    <li>The report makes detailed claims and cites 'doc:18e1b007a1dab45b30cc861ba2dfda25', but this source is entirely missing from the evidence manifest. Under the read-only evidence critic policy, claims about an attached document must be supported by a successful, nonempty document-retrieval result from the manifest.</li>
+                    <li>The report fails to address or resolve the known result gaps: todo-2, todo-3, and todo-4.</li>
+                    <li>Incomplete review coverage on PDF attachments.</li>
+                    <li>Unverified numeric claims in section 3.</li>
+                  </ul>
                 </div>
-                <ul class="limitations" id="limitations">
-                  <li>Source retrieval for table 3 on page 7 did not complete within the tranche budget.</li>
-                  <li>Cross-document comparison with the 2018 follow-up study was deferred after indexer timeouts.</li>
-                  <li>The methods section cites a proprietary toolkit whose license text was not available.</li>
-                  <li>Ablation discussion mixes two benchmark suites without normalizing units.</li>
-                  <li>Figure 4 annotations could not be aligned to PDF coordinates on one scanned page.</li>
-                  <li>Web search was disabled, so industry baselines referenced only training-set papers.</li>
-                  <li>Two todo checkpoints remained open when the run paused.</li>
-                  <li>Runtime memory pressure forced a truncated reread of appendix B.</li>
-                </ul>
+                <div class="decision-body"><strong>Provisional answer</strong></div>
               </div>
-              <div class="decision-body" id="decision-body">
-                <p><strong>Provisional answer</strong></p>
-                <motion-placeholder style="display:block;height:320px;background:linear-gradient(#fff,#eee)"></motion-placeholder>
-              </div>
-              <div class="decision-footer" id="decision-footer">
-                <div class="guidance">
-                  <label for="guidance">Guidance for the next research tranche</label>
-                  <input id="guidance" type="text" aria-label="Guidance for the next research tranche" placeholder="Steer the next tranche" />
-                </div>
-                <button type="button" class="primary" id="finish-btn">Finish with this result (8 limitations)</button>
-                <button type="button" class="secondary" id="continue-btn">Continue with guidance</button>
+              <div id="review-decision-footer">
+                <label for="guidance">Guidance for the next research tranche</label>
+                <input id="guidance" class="compact" type="text" aria-label="Guidance for the next research tranche" />
+                <button type="button" id="finish-btn">Finish with this result (8 limitations)</button>
+                <button type="button" id="continue-btn">Continue with guidance (another tranche)</button>
               </div>
             </div>
           </div>
-          <div class="transcript-wrap" id="transcript-wrap">
-            <div class="transcript" id="transcript">
-              <div style="height: 200px">Runtime transcript (capped at 72px)</div>
-            </div>
+          <div class="transcript-shell" data-testid="review-transcript-frame">
+            <div class="transcript" id="transcript"><div style="height:240px">Transcript</div></div>
           </div>
         </div>
       </div>
     </div>
     <script>
       (function () {
-        const root = document.getElementById('panel-root');
-        const workbench = root;
-        const syncLayout = () => {
+        const workbench = document.getElementById('panel-root');
+        const transcriptShell = document.querySelector('.transcript-shell');
+        const decisionWrap = document.querySelector('.decision-shell-wrap');
+        const guidance = document.getElementById('guidance');
+        let panelRatio = 0.58;
+        const syncStacked = () => {
           const stacked = window.innerWidth < 1100;
           workbench.classList.toggle('stacked', stacked);
+          if (stacked) {
+            transcriptShell.style.flex = '0 0 auto';
+            transcriptShell.style.maxHeight = '72px';
+            decisionWrap.style.flex = '1 1 0';
+          } else {
+            transcriptShell.style.maxHeight = '';
+            transcriptShell.style.flex = (1 - panelRatio) + ' 1 0';
+            decisionWrap.style.flex = panelRatio + ' 1 0';
+          }
         };
-        syncLayout();
-        window.addEventListener('resize', syncLayout);
+        syncStacked();
+        window.addEventListener('resize', syncStacked);
+
+        guidance.addEventListener('focus', () => guidance.classList.remove('compact'));
+        guidance.addEventListener('blur', () => {
+          if (!guidance.value.trim()) guidance.classList.add('compact');
+        });
+
+        const handle = document.getElementById('resize-handle');
+        let dragging = false;
+        let startY = 0;
+        let startRatio = panelRatio;
+        handle.addEventListener('pointerdown', (event) => {
+          if (workbench.classList.contains('stacked')) return;
+          dragging = true;
+          startY = event.clientY;
+          startRatio = panelRatio;
+          handle.setPointerCapture(event.pointerId);
+        });
+        handle.addEventListener('pointermove', (event) => {
+          if (!dragging || workbench.classList.contains('stacked')) return;
+          const panel = document.getElementById('panel-root');
+          const delta = (startY - event.clientY) / panel.getBoundingClientRect().height;
+          panelRatio = Math.max(0.16, Math.min(0.82, startRatio + delta));
+          transcriptShell.style.flex = (1 - panelRatio) + ' 1 0';
+          decisionWrap.style.flex = panelRatio + ' 1 0';
+        });
+        const stopDrag = (event) => {
+          if (!dragging) return;
+          dragging = false;
+          if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+        };
+        handle.addEventListener('pointerup', stopDrag);
+        handle.addEventListener('pointercancel', stopDrag);
       })();
     </script>
   </body>

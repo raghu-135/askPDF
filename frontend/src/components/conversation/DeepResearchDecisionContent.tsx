@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Box, Button, Chip, Collapse, Stack, TextField, Typography,
 } from '@mui/material';
@@ -138,6 +138,9 @@ export function DeepResearchGuidanceField({
   const fieldId = 'deep-research-guidance-input';
   const [expanded, setExpanded] = useState(Boolean(value.trim()));
   const compact = compactUntilFocus && !expanded;
+  useEffect(() => {
+    if (compactUntilFocus && !value.trim()) setExpanded(false);
+  }, [compactUntilFocus, value]);
   return (
     <TextField
       fullWidth
@@ -153,6 +156,9 @@ export function DeepResearchGuidanceField({
       value={value}
       onChange={(event) => onChange(event.target.value)}
       onFocus={() => setExpanded(true)}
+      onBlur={() => {
+        if (compactUntilFocus && !value.trim()) setExpanded(false);
+      }}
       inputProps={{ 'aria-label': label }}
     />
   );

@@ -1,0 +1,248 @@
+{
+  "resource": "run",
+  "runtime_id": "langgraph:langgraph_graph",
+  "framework": "langgraph",
+  "builder_id": "langgraph_graph",
+  "runtime_available": true,
+  "capabilities": {
+    "operations": {
+      "artifact.list": {
+        "support": "native",
+        "owner": "product",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "product_task_artifact_listing"
+      },
+      "run.approval.respond": {
+        "support": "unsupported",
+        "owner": "runtime",
+        "enabled": false,
+        "disabled_reason": "runtime_capability_unsupported"
+      },
+      "run.cancel": {
+        "support": "native",
+        "owner": "runtime",
+        "enabled": false,
+        "disabled_reason": "run_terminal",
+        "modes": [
+          "interrupt"
+        ],
+        "confirmation": "asynchronous",
+        "terminal_states": [
+          "cancelled",
+          "interrupted"
+        ]
+      },
+      "run.events": {
+        "support": "native",
+        "owner": "product",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "persisted_product_event_journal"
+      },
+      "run.get": {
+        "support": "native",
+        "owner": "product",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "product_run_inspection"
+      },
+      "run.inspect_state": {
+        "support": "conditional",
+        "owner": "runtime",
+        "enabled": false,
+        "disabled_reason": "run_not_checkpoint_boundary",
+        "semantics": "checkpoint_state_inspection",
+        "requires_runtime_binding": true,
+        "requires_checkpoint_boundary": true
+      },
+      "run.interrupt_with_input": {
+        "support": "unsupported",
+        "owner": "runtime",
+        "enabled": false,
+        "disabled_reason": "runtime_capability_unsupported"
+      },
+      "run.list": {
+        "support": "native",
+        "owner": "product",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "product_run_listing"
+      },
+      "run.resume": {
+        "support": "conditional",
+        "owner": "runtime",
+        "enabled": false,
+        "disabled_reason": "run_terminal",
+        "semantics": "resume_from_interrupt",
+        "requires_runtime_binding": true,
+        "requires_checkpoint_boundary": true
+      },
+      "run.send_followup": {
+        "support": "unsupported",
+        "owner": "runtime",
+        "enabled": false,
+        "disabled_reason": "runtime_capability_unsupported"
+      },
+      "run.steer_live": {
+        "support": "unsupported",
+        "owner": "runtime",
+        "enabled": false,
+        "disabled_reason": "runtime_capability_unsupported"
+      },
+      "run.update_state": {
+        "support": "unsupported",
+        "owner": "runtime",
+        "enabled": false,
+        "disabled_reason": "runtime_capability_unsupported"
+      },
+      "task.budget_review.respond": {
+        "support": "conditional",
+        "owner": "product",
+        "enabled": false,
+        "disabled_reason": "run_terminal",
+        "semantics": "product_task_budget_review",
+        "preserves_run_id": true,
+        "preserves_session_id": true
+      },
+      "task.cancel": {
+        "support": "conditional",
+        "owner": "product",
+        "enabled": false,
+        "disabled_reason": "run_terminal",
+        "semantics": "product_task_cancel"
+      },
+      "task.course_correction.submit": {
+        "support": "conditional",
+        "owner": "product",
+        "enabled": false,
+        "disabled_reason": "task_terminal",
+        "semantics": "product_task_course_correction",
+        "preserves_run_id": false,
+        "preserves_session_id": true
+      },
+      "task.pause": {
+        "support": "conditional",
+        "owner": "product",
+        "enabled": false,
+        "disabled_reason": "task_terminal",
+        "semantics": "product_task_pause",
+        "confirmation": "bounded",
+        "terminal_states": [
+          "interrupted"
+        ],
+        "preserves_run_id": true,
+        "preserves_session_id": true
+      },
+      "task.result_review.respond": {
+        "support": "conditional",
+        "owner": "product",
+        "enabled": true,
+        "semantics": "product_task_result_review"
+      },
+      "task.resume": {
+        "support": "conditional",
+        "owner": "product",
+        "enabled": false,
+        "disabled_reason": "task_not_resumable",
+        "semantics": "product_task_resume",
+        "confirmation": "bounded",
+        "preserves_run_id": true,
+        "preserves_session_id": true,
+        "requires_runtime_binding": true
+      },
+      "task.retry": {
+        "support": "conditional",
+        "owner": "product",
+        "enabled": false,
+        "disabled_reason": "task_not_retryable",
+        "semantics": "product_task_retry"
+      },
+      "task.start": {
+        "support": "conditional",
+        "owner": "product",
+        "enabled": false,
+        "disabled_reason": "task_already_started",
+        "semantics": "product_task_start"
+      }
+    },
+    "features": {
+      "artifacts": {
+        "support": "native",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "definition_artifact_policy"
+      },
+      "memory": {
+        "support": "native",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "definition_tool_policy",
+        "details": {
+          "tool_id": "durable_memory"
+        }
+      },
+      "parallel_dispatch": {
+        "support": "native",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "definition_parallel_dispatch"
+      },
+      "planning": {
+        "support": "native",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "definition_planner_nodes"
+      },
+      "subagent_orchestration": {
+        "support": "native",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "product_managed_subagents",
+        "details": {
+          "profiles": [
+            "document_researcher",
+            "evidence_critic",
+            "memory_researcher"
+          ]
+        }
+      },
+      "tools": {
+        "support": "native",
+        "enabled": true,
+        "disabled_reason": null,
+        "semantics": "definition_tool_policy",
+        "details": {
+          "count": 16
+        }
+      }
+    },
+    "deployment": {
+      "runtime_mode": "external_service",
+      "checkpointer_backend": "postgres",
+      "checkpoint_available": true,
+      "durable_persistence": true,
+      "runtime_available": true,
+      "configuration_error": null
+    },
+    "behavior": {
+      "continuation_semantics": "same_run_safe_boundary",
+      "usage_accounting_owner": "runtime",
+      "preserves_run_id": true,
+      "artifact_inheritance": "valid_artifacts",
+      "supports_orchestration_delta": true,
+      "required_input_fields": [
+        "task_context",
+        "resolved_spec",
+        "embedding_model"
+      ],
+      "supports_pause_resume": true,
+      "supports_course_correction": true,
+      "budget_boundary_owner": "runtime",
+      "grounding_owner": "runtime"
+    }
+  },
+  "definition_id": "deep_research_agent",
+  "run_id": "a899c5cb-ec75-4e31-bf77-e527c5f587d5",
+  "run_status": "awaiting_human"
+}

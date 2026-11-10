@@ -3,9 +3,13 @@ import { clampDecisionPanelRatio } from './conversation-ui-state.ts';
 /** Minimum scroll height for the limitations block inside the decision shell. */
 export const REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX = 120;
 
-/** Grid contract: handle, title, bounded header (limitations floor), scroll body, pinned footer. */
+/** Column-fill panel: scroll region only (footer is a sibling outside overflow). */
+export const REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS =
+  `auto auto minmax(${REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX}px, auto) minmax(0, 1fr)`;
+
+/** Non-fill panels: handle, title, header, body, footer in one grid. */
 export const REVIEW_DECISION_PANEL_GRID_ROWS =
-  `auto auto minmax(${REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX}px, auto) minmax(0, 1fr) auto`;
+  `${REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS} auto`;
 
 export const REVIEW_LIMITATIONS_MAX_HEIGHT = 'min(24vh, 180px)';
 

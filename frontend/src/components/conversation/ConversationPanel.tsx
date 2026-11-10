@@ -28,6 +28,7 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   transcriptSx?: SxProps<Theme>;
   decisionSx?: SxProps<Theme>;
   decisionBeforeTranscript?: boolean;
+  transcriptDataTestId?: string;
   sx?: SxProps<Theme>;
 }>(function ConversationPanelTemplate({
   header,
@@ -39,6 +40,7 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   transcriptSx,
   decisionSx,
   decisionBeforeTranscript = false,
+  transcriptDataTestId,
   sx,
 }, ref) {
   return (
@@ -70,6 +72,7 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
         </Box>
       ) : null}
       <Box
+        data-testid={transcriptDataTestId}
         sx={{
           minHeight: 0,
           display: 'flex',

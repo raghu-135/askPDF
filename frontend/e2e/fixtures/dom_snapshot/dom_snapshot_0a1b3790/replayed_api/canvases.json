@@ -1,0 +1,15 @@
+{
+  "task_id": "e239e046-628e-4439-8596-09cdaf0e3d97",
+  "research_canvases": [
+    {
+      "id": "efeb7a92-846d-4d74-bcbe-63faaaa9b095",
+      "title": "Critical Review of 'Attention Is All You Need': Limitations & Weaknesses",
+      "run_id": "a899c5cb-ec75-4e31-bf77-e527c5f587d5",
+      "attempt": 1,
+      "created_at": "2026-11-10T03:55:21.130308Z",
+      "is_current_on_thread": true,
+      "chat_turn_id": "dbb57d5b-a6db-4954-888c-14433a10e71d",
+      "supersedes_id": null
+    }
+  ]
+}
