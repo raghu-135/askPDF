@@ -68,13 +68,21 @@ async def serve_run_events(
 
     stream = adapter._run_streams[run_id]
     if hasattr(stream, "attach") and _api_server is not None:
-        return await _serve_v023(adapter, request, _api_server=_api_server, on_terminal=on_terminal, run_id=run_id, stream=stream)
+        return await _serve_v023(
+            adapter,
+            request,
+            web=web,
+            _api_server=_api_server,
+            on_terminal=on_terminal,
+            run_id=run_id,
+            stream=stream,
+        )
     return await _serve_legacy(
         adapter, request, web=web, encode_frame=encode_frame, on_terminal=on_terminal, run_id=run_id
     )
 
 
-async def _serve_v023(adapter, request, *, _api_server, on_terminal, run_id: str, stream: Any):
+async def _serve_v023(adapter, request, *, web, _api_server, on_terminal, run_id: str, stream: Any):
     from gateway.platforms.api_server_runs import _RUN_STREAM_SUBSCRIBER_OVERFLOW, _run_event
 
     raw_last_seq = request.headers.get("Last-Event-ID") or request.query.get("last_seq")
