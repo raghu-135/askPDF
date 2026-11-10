@@ -311,6 +311,13 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
     fi
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T hermes-runtime python -c \
         'import importlib.util; import hermes_runtime, runtime_protocol; assert importlib.util.find_spec("app") is None'
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T hermes /opt/hermes/.venv/bin/python -c \
+        'import importlib.util; import runtime_protocol.provider_tool_schema; assert importlib.util.find_spec("sitecustomize") is not None'
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm \
+        -e HERMES_GATEWAY_PATCH_PROOF=true \
+        -e HERMES_API_URL=http://hermes:8642 \
+        -e HERMES_API_TOKEN=7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c \
+        test-runner --file test_hermes_gateway_pinned_patch_active_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_runtime_mcp_contract_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_builder_provider_pytest.py
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm test-runner --file test_hermes_execution_store_pytest.py

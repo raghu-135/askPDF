@@ -305,7 +305,7 @@ class RunProfileManager:
             if config_file.exists():
                 config_file.write_text(
                     "# Retired askPDF runtime profile; contains no secrets.\n"
-                    "_config_version: 37\n"
+                    f"_config_version: {HERMES_CONFIG_SCHEMA_VERSION}\n"
                     "platforms: {}\n"
                     "auxiliary:\n"
                     "  title_generation:\n"
@@ -320,6 +320,12 @@ class RunProfileManager:
             }
             (destination / TOMBSTONE_FILE).write_text(json.dumps(tombstone, sort_keys=True))
         self._active.discard(profile_name)
+        from hermes_runtime.gateway_control import release_profile_served
+
+        if not release_profile_served(profile_name):
+            raise RuntimeError(
+                f"Hermes gateway did not unserve retired profile {profile_name}"
+            )
 
     def remove(self, profile_name: str | None) -> None:
         """Permanently remove an inactive generated profile."""

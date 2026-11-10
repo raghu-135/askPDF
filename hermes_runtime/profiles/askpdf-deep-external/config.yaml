@@ -1,6 +1,6 @@
 # Managed profile for Hermes Deep Research with approved external access.
-# Pinned to NousResearch/hermes-agent@bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894.
-_config_version: 37
+# Pinned to NousResearch/hermes-agent@v0.23.0 (2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19).
+_config_version: 52
 model:
   default: askpdf-runtime-selected
   provider: custom

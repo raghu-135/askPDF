@@ -209,6 +209,7 @@ services:
       - HERMES_DATA_ROOT=/opt/data
       - HERMES_CONFIG_TEMPLATE_ROOT=/app/hermes_runtime
       - HERMES_MODEL_CONTEXT_LENGTH=${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
+      - HERMES_GATEWAY_HOME=/opt/data
       - HERMES_PROFILE_ROOT=${HERMES_PROFILE_ROOT:?HERMES_PROFILE_ROOT must be set in .env}
       - HERMES_PROFILE_UID=${HERMES_PROFILE_UID:?HERMES_PROFILE_UID must be set in .env}
       - HERMES_PROFILE_GID=${HERMES_PROFILE_GID:?HERMES_PROFILE_GID must be set in .env}
@@ -225,19 +226,29 @@ services:
       - env_secrets:/secrets:ro
       - hermes_data:/opt/data
 
+  hermes-upstream:
+    profiles: ["hermes"]
+    image: askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+    build:
+      context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+    entrypoint: ["/bin/true"]
+
   hermes:
     profiles: ["hermes"]
     build:
-      # Keep this pinned revision visible for consistency checks; the actual
-      # build context is always supplied by HERMES_UPSTREAM_REVISION in .env.
-      # Pinned revision: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
-      context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+      # Pinned revision: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19 (v0.23.0)
+      context: .
+      dockerfile: hermes_runtime/Dockerfile.gateway
+      additional_contexts:
+        hermes-upstream: service:hermes-upstream
     environment:
       - API_SERVER_ENABLED=true
       - API_SERVER_HOST=0.0.0.0
       - API_SERVER_PORT=8642
       - GATEWAY_MULTIPLEX_PROFILES=true
       - ASKPDF_HERMES_COMPAT_ENABLED=1
+      - HERMES_UPSTREAM_REVISION=${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+      # Documented loader paths; v0.23 launchers unset PYTHONPATH — see askpdf-hermes-pinned.pth in the image.
       - PYTHONPATH=/opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib
       - API_SERVER_KEY=${HERMES_API_TOKEN:?HERMES_API_TOKEN must be set in .env}
       - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
@@ -251,6 +262,8 @@ services:
     command: ["gateway"]
     depends_on:
       env-secrets:
+        condition: service_completed_successfully
+      hermes-upstream:
         condition: service_completed_successfully
       hermes-config-init:
         condition: service_completed_successfully
@@ -289,6 +302,7 @@ services:
       - HERMES_RUNTIME_STORAGE_BACKEND=${HERMES_RUNTIME_STORAGE_BACKEND:?HERMES_RUNTIME_STORAGE_BACKEND must be set in .env}
       - HERMES_RUN_PROFILE_MAX_AGE_SECONDS=${HERMES_RUN_PROFILE_MAX_AGE_SECONDS:?HERMES_RUN_PROFILE_MAX_AGE_SECONDS must be set in .env}
       - HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS=${HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS:?HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS must be set in .env}
+      - HERMES_GATEWAY_HOME=/opt/data
       - HERMES_PROFILE_ROOT=${HERMES_PROFILE_ROOT:?HERMES_PROFILE_ROOT must be set in .env}
       - HERMES_PROFILE_UID=${HERMES_PROFILE_UID:?HERMES_PROFILE_UID must be set in .env}
       - HERMES_PROFILE_GID=${HERMES_PROFILE_GID:?HERMES_PROFILE_GID must be set in .env}

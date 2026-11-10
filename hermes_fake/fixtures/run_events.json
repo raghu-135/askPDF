@@ -1,5 +1,5 @@
 {
-  "hermes_revision": "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894",
+  "hermes_revision": "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19",
   "success": [
     {"event": "message.delta", "delta": "deterministic "},
     {"event": "tool.started", "tool": "document_evidence", "preview": "querying evidence"},

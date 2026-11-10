@@ -1,8 +1,8 @@
 """Dependency-free authority for the pinned askPDF/Hermes contract."""
 
 HERMES_REPOSITORY = "https://github.com/NousResearch/hermes-agent"
-HERMES_REVISION = "bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894"
-HERMES_CONFIG_SCHEMA_VERSION = 37
+HERMES_REVISION = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
+HERMES_CONFIG_SCHEMA_VERSION = 52
 HERMES_MIN_CONTEXT_LENGTH = 64_000
 HERMES_CHAT_PROVIDER = "custom"
 HERMES_OFFLINE_PROFILE = "askpdf-deep-offline"

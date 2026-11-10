@@ -41,14 +41,25 @@ def test_bootstrap_profiles_defer_mcp_to_isolated_run_profiles():
         assert config["auxiliary"]["title_generation"]["enabled"] is False
 
 
+def test_gateway_overlay_dockerfile_installs_patch_via_site_packages_pth():
+    dockerfile = (REPOSITORY_ROOT / "hermes_runtime/Dockerfile.gateway").read_text()
+    assert "askpdf-hermes-pinned.pth" in dockerfile
+    assert "hermes_runtime/hermes_pinned_patch" in dockerfile
+    assert "runtime_protocol" in dockerfile
+    assert "/opt/askpdf-pylib" in dockerfile
+
+
 def test_main_compose_keeps_pinned_real_hermes_opt_in():
     services = _compose("docker-compose.yml")["services"]
     hermes = services["hermes"]
     adapter = services["hermes-runtime"]
     assert hermes["profiles"] == ["hermes"]
     assert adapter["profiles"] == ["hermes"]
+    assert any(str(entry).startswith("HERMES_GATEWAY_HOME=") for entry in adapter["environment"])
     assert services["hermes-config-init"]["profiles"] == ["hermes"]
-    assert "${HERMES_UPSTREAM_REVISION:?" in hermes["build"]["context"]
+    assert hermes["build"]["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
+    assert hermes["build"]["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream"
+    assert "${HERMES_UPSTREAM_REVISION:?" in services["hermes-upstream"]["build"]["context"]
     assert hermes["healthcheck"]["test"][-1].endswith("/health")
     assert "ASKPDF_HERMES_COMPAT_ENABLED=1" in set(hermes["environment"])
     assert "LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
@@ -58,6 +69,7 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert "PYTHONPATH=/opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib" in set(hermes["environment"])
     assert adapter["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_API_URL=http://hermes:8642" in set(adapter["environment"])
+    assert any(entry.startswith("HERMES_GATEWAY_HOME=") for entry in adapter["environment"])
     assert any(
         entry.startswith("HERMES_RUNTIME_WORKERS=")
         for entry in adapter["environment"]
@@ -148,7 +160,12 @@ def test_control_plane_and_gateway_use_one_pinned_contract():
 def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     compose = _compose("docker-compose.runtime-integration.yml")
     assert "hermes-fake" not in compose["services"]
-    assert compose["services"]["hermes"]["build"]["context"].endswith("#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894")
+    hermes_build = compose["services"]["hermes"]["build"]
+    assert hermes_build["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
+    assert hermes_build["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream"
+    assert compose["services"]["hermes-upstream"]["build"]["context"].endswith(
+        "#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
+    )
     assert compose["services"]["hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["hermes"]["volumes"]
     assert "./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro" in compose["services"]["hermes"]["volumes"]

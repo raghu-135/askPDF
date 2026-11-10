@@ -74,7 +74,7 @@ services:
       MCP_EXECUTION_CONTEXT_SECRET: integration-mcp-execution-context-secret-32-bytes-minimum
       HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
       HERMES_RUNTIME_URL: http://hermes-runtime:8200
-      HERMES_UPSTREAM_REVISION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
       ASKPDF_MCP_REQUIRED: "true"
       ASKPDF_CORS_ORIGINS: http://localhost:3000
       MCP_OTEL_ENABLED: "false"
@@ -305,10 +305,20 @@ services:
     volumes:
       - runtime_integration_hermes_data:/opt/data
 
+  hermes-upstream:
+    profiles: !reset []
+    image: askpdf-hermes-upstream:2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+    build:
+      context: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+    entrypoint: ["/bin/true"]
+
   hermes:
     profiles: !reset []
     build:
-      context: https://github.com/NousResearch/hermes-agent.git#bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      context: .
+      dockerfile: hermes_runtime/Dockerfile.gateway
+      additional_contexts:
+        hermes-upstream: service:hermes-upstream
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: 0.0.0.0
@@ -319,11 +329,13 @@ services:
       OPENAI_BASE_URL: http://fake-llm:9000/v1
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
       GATEWAY_MULTIPLEX_PROFILES: "true"
-      HERMES_UPSTREAM_REVISION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
       ASKPDF_HERMES_COMPAT_ENABLED: "1"
       PYTHONPATH: /opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib
     command: ["gateway"]
     depends_on:
+      hermes-upstream:
+        condition: service_completed_successfully
       hermes-config-init:
         condition: service_completed_successfully
       fake-llm:
@@ -362,13 +374,15 @@ services:
       ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
       ASKPDF_MCP_HEALTH_URL: http://rag-service:8000/health
       ASKPDF_MCP_REQUIRED: "true"
-      HERMES_UPSTREAM_REVISION: bdd0a79c6a0ebc2344d5d6913c70bd89fa59c894
+      HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
       HERMES_RUNTIME_VERSION: integration
       HERMES_RUNTIME_WORKERS: "1"
       PYTHONPATH: /workspace:/app
       HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
+      HERMES_DATA_ROOT: /opt/data
+      HERMES_GATEWAY_HOME: /opt/data
       HERMES_PROFILE_ROOT: /opt/data/profiles
       HERMES_PROFILE_UID: "10000"
       HERMES_PROFILE_GID: "10000"
@@ -503,6 +517,7 @@ services:
       MCP_EXECUTION_CONTEXT_SECRET: integration-mcp-execution-context-secret-32-bytes-minimum
       HERMES_RUNTIME_URL: http://hermes-runtime:8200
       HERMES_API_URL: http://hermes:8642
+      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
       HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
       HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
       HERMES_RUNTIME_STORAGE_BACKEND: file
