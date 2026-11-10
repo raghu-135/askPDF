@@ -312,7 +312,7 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T hermes-runtime python -c \
         'import importlib.util; import hermes_runtime, runtime_protocol; assert importlib.util.find_spec("app") is None'
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T hermes /opt/hermes/.venv/bin/python -c \
-        'import importlib.util, pathlib, site; site_dir = next(p for p in site.getsitepackages() if p.endswith("site-packages")); lines = pathlib.Path(site_dir, "askpdf-hermes-pinned.pth").read_text().splitlines(); assert "/opt/askpdf-hermes-pinned-patch" in lines and "/opt/askpdf-pylib" in lines; spec = importlib.util.spec_from_file_location("askpdf_provider_tool_schema", "/opt/askpdf-pylib/runtime_protocol/provider_tool_schema.py"); module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); assert callable(module.provider_compatible_function_tools); import runtime_protocol.provider_tool_schema as loaded; assert loaded.provider_compatible_function_tools is module.provider_compatible_function_tools'
+        'import importlib.util, pathlib, site; site_dir = next(p for p in site.getsitepackages() if p.endswith("site-packages")); lines = pathlib.Path(site_dir, "askpdf-hermes-pinned.pth").read_text().splitlines(); assert "/opt/askpdf-hermes-pinned-patch" in lines and "/opt/askpdf-pylib" in lines; import runtime_protocol.provider_tool_schema as schema; assert callable(schema.provider_compatible_function_tools)'
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" run --rm \
         -e HERMES_GATEWAY_PATCH_PROOF=true \
         -e HERMES_API_URL=http://hermes:8642 \
