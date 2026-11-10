@@ -7,7 +7,6 @@ import {
   REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT,
   REVIEW_DECISION_PANEL_FOOTER_MAX_HEIGHT,
   REVIEW_DECISION_PANEL_GRID_ROWS,
-  REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
   REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS,
 } from '../../lib/deep-research-review-panel-layout';
 
@@ -82,7 +81,7 @@ export function ResizableDecisionPanel({
       minHeight: 0,
       overflow: 'hidden',
       ...(fillColumn
-        ? { minHeight: REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX }
+        ? { flex: '1 1 0', minHeight: 0 }
         : {
           height: '100%',
           maxHeight: REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT,
@@ -173,8 +172,8 @@ export function ResizableDecisionPanel({
               gap: 1,
               px: 1,
               pb: 1,
-              flex: '1 1 auto',
-              minHeight: REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
+              flex: '1 1 0',
+              minHeight: 0,
               overflow: 'hidden',
             }}>
               {fixedHeader}

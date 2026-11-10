@@ -5,9 +5,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX = 120;
-const REVIEW_DECISION_PANEL_SCROLL_MIN_PX = REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX + 56;
 const REVIEW_DECISION_PANEL_FOOTER_MAX_HEIGHT = 'min(30vh, 136px)';
+const REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT = 'min(28vh, 220px)';
+const REVIEW_DECISION_COLUMN_MIN_HEIGHT = 'min(36vh, 240px)';
 const REVIEW_STACKED_WORKBENCH_BOTTOM_RATIO = 0.58;
 const WORKBENCH_AUTO_SIDE_MIN_WIDTH = 1100;
 
@@ -63,14 +63,13 @@ const html = `<!DOCTYPE html>
         padding: 8px;
         overflow: hidden;
       }
-      .workbench.panel-scroll { overflow-y: auto; overflow-x: hidden; }
       .header { flex-shrink: 0; height: ${LIVE_LAYOUT.headerPx}px; border: 1px solid #ddd; background: #fff; padding: 8px; margin-bottom: 8px; }
       .status { flex-shrink: 0; height: ${LIVE_LAYOUT.statusPx}px; overflow: hidden; margin-bottom: 8px; }
       .alert { background: #e3f2fd; border: 1px solid #90caf9; padding: 8px; margin-bottom: 8px; }
       .objective { background: #1565c0; color: #fff; padding: 10px; border-radius: 6px; margin-top: 8px; }
       .decision-wrap {
         flex: 1 1 0;
-        min-height: 0;
+        min-height: ${REVIEW_DECISION_COLUMN_MIN_HEIGHT};
         overflow: hidden;
         display: flex;
         flex-direction: column;
@@ -93,11 +92,11 @@ const html = `<!DOCTYPE html>
         flex-direction: column;
       }
       .decision-title { text-align: center; padding: 8px; font-weight: 700; color: #666; flex-shrink: 0; }
-      .decision-header { display: flex; flex-direction: column; flex: 1 1 auto; min-height: ${REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX}px; padding: 0 8px 8px; overflow: hidden; }
+      .decision-header { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; padding: 0 8px 8px; overflow: hidden; }
       .decision-lead { flex-shrink: 0; margin-bottom: 8px; color: #444; }
       #review-limitations-scroller {
-        flex: 1 1 auto;
-        min-height: ${REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX}px;
+        flex: 1 1 0;
+        min-height: 0;
         overflow-y: auto;
       }
       .decision-body { flex-shrink: 0; padding: 8px; }
@@ -142,9 +141,9 @@ const html = `<!DOCTYPE html>
         padding: 4px 8px;
         cursor: pointer;
       }
-      #review-transcript-body { display: none; max-height: min(42vh, 360px); overflow-y: auto; border: 1px solid #ddd; padding: 8px; background: #fff; }
+      #review-transcript-body { display: none; max-height: ${REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT}; overflow-y: auto; border: 1px solid #ddd; padding: 8px; background: #fff; }
       #review-transcript-body.open { display: block; }
-      .transcript-bubble { height: 180px; background: #e3f2fd; padding: 8px; }
+      .transcript-bubble { min-height: 320px; background: #e3f2fd; padding: 8px; }
       @media (max-width: ${WORKBENCH_AUTO_SIDE_MIN_WIDTH - 1}px) {
         .workbench.stacked .header { height: 40px; margin-bottom: 4px; padding: 4px; }
         .workbench.stacked .status { height: 56px; margin-bottom: 4px; }
@@ -216,7 +215,6 @@ const html = `<!DOCTYPE html>
           const open = transcriptBody.classList.toggle('open');
           toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
           toggleBtn.textContent = open ? 'Hide transcript' : 'Show transcript';
-          workbench.classList.toggle('panel-scroll', open);
         });
         guidance.addEventListener('focus', () => {
           guidance.classList.remove('compact');

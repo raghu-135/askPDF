@@ -1,7 +1,8 @@
 import React from 'react';
-import { Box, Button, Collapse } from '@mui/material';
+import { Box, Button } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import { REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT } from '../../lib/deep-research-review-panel-layout';
 
 export function DeepResearchReviewTranscriptToggle({
   open,
@@ -28,14 +29,19 @@ export function DeepResearchReviewTranscriptToggle({
       >
         {open ? 'Hide transcript' : 'Show transcript'}
       </Button>
-      <Collapse in={open} unmountOnExit={false}>
-        <Box
-          data-testid="review-transcript-body"
-          sx={{ maxHeight: 'min(42vh, 360px)', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}
-        >
-          {children}
-        </Box>
-      </Collapse>
+      <Box
+        data-testid="review-transcript-body"
+        sx={{
+          display: open ? 'block' : 'none',
+          maxHeight: REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          flexShrink: 1,
+        }}
+      >
+        {children}
+      </Box>
     </Box>
   );
 }

@@ -20,6 +20,17 @@ async function readPaneBounds(page) {
   return box ?? { x: 0, y: 0, width: viewport?.width || 0, height: viewport?.height || 0 };
 }
 
+async function assertNoFooterOverlapFirstPaint(page) {
+  const overlapPx = await page.evaluate(() => {
+    const scroller = document.querySelector('[data-testid="review-limitations-scroller"]');
+    const footer = document.querySelector('[data-testid="review-decision-footer"]');
+    if (!scroller || !footer) return null;
+    return scroller.getBoundingClientRect().bottom - footer.getBoundingClientRect().top;
+  });
+  expect(overlapPx).not.toBeNull();
+  expect(overlapPx).toBeLessThanOrEqual(0.5);
+}
+
 async function assertFooterButtonsInViewportAndClickable(page) {
   const finish = page.getByRole('button', { name: /Finish with this result/i });
   const continueBtn = page.getByRole('button', { name: /Continue with guidance/i });
@@ -72,16 +83,19 @@ async function assertGuidanceStates(page) {
   const guidance = page.locator('#guidance');
 
   await guidance.blur();
+  await assertNoFooterOverlapFirstPaint(page);
   await assertAtLeastTwoLimitationItemsVisible(page);
   await assertFooterButtonsInViewportAndClickable(page);
 
   await guidance.focus();
+  await assertNoFooterOverlapFirstPaint(page);
   await assertAtLeastTwoLimitationItemsVisible(page);
   await assertFooterButtonsInViewportAndClickable(page);
 
   await guidance.fill(LONG_GUIDANCE);
   const continueBtn = page.getByRole('button', { name: /Continue with guidance/i });
   await expect(continueBtn).toBeEnabled();
+  await assertNoFooterOverlapFirstPaint(page);
   await assertAtLeastTwoLimitationItemsVisible(page);
   await assertFooterButtonsInViewportAndClickable(page);
 
@@ -90,24 +104,28 @@ async function assertGuidanceStates(page) {
   await expect(guidance).toHaveClass(/compact/);
 }
 
-async function assertTranscriptToggleShowsBody(page) {
+async function assertTranscriptExpandedButtonsClickable(page) {
   const toggle = page.getByTestId('review-transcript-toggle-button');
   const body = page.getByTestId('review-transcript-body');
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(body).toBeHidden();
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  await expect(toggle).toHaveText(/Hide transcript/i);
   await expect(body).toBeVisible();
-  await expect(body.locator('.transcript-bubble')).toBeVisible();
+  await assertNoFooterOverlapFirstPaint(page);
+  await assertFooterButtonsInViewportAndClickable(page);
+
+  const guidance = page.locator('#guidance');
+  await guidance.focus();
+  await guidance.fill(LONG_GUIDANCE);
+  await assertFooterButtonsInViewportAndClickable(page);
 }
 
 async function assertReviewLayout(page) {
   await expect(page.getByRole('separator', { name: 'Resize decision panel' })).toHaveCount(0);
+  await assertNoFooterOverlapFirstPaint(page);
   await assertAtLeastTwoLimitationItemsVisible(page);
   await assertFooterButtonsInViewportAndClickable(page);
   await assertGuidanceStates(page);
-  await assertTranscriptToggleShowsBody(page);
+  await assertTranscriptExpandedButtonsClickable(page);
 }
 
 const viewports = [

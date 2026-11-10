@@ -14,6 +14,12 @@ export const REVIEW_DECISION_PANEL_SCROLL_MIN_PX =
 /** Footer never grows past this; guidance scrolls inside, buttons stay in the band. */
 export const REVIEW_DECISION_PANEL_FOOTER_MAX_HEIGHT = 'min(30vh, 136px)';
 
+/** Expanded transcript scroll cap so the decision column keeps the footer. */
+export const REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT = 'min(28vh, 220px)';
+
+/** Floor for the decision column while review is open (footer + limitations). */
+export const REVIEW_DECISION_COLUMN_MIN_HEIGHT = 'min(36vh, 240px)';
+
 /** Non-fill panels: handle, title, header, body, footer in one grid. */
 export const REVIEW_DECISION_PANEL_GRID_ROWS =
   `${REVIEW_DECISION_PANEL_SCROLL_GRID_ROWS} auto`;

@@ -61,7 +61,7 @@ import type { ChatTraceDescriptor } from './ChatInterface';
 import { AGENT_SSE_RECONNECT_INTERVAL_MS, AGENT_TASK_POLL_INTERVAL_MS } from '../lib/agent-ui-config';
 import {
   DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
-  REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
+  REVIEW_DECISION_COLUMN_MIN_HEIGHT,
   WORKBENCH_AUTO_SIDE_MIN_WIDTH,
 } from '../lib/deep-research-review-panel-layout';
 import { isAgentRunActivelyStreaming } from '../lib/trace-tab-live';
@@ -811,24 +811,21 @@ export default function DeepResearchTaskPanel({
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
   const reviewPanelHeader = pendingInterrupt ? (
-    <>
-      {!reviewPanelOpen ? (
-        <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
-      ) : null}
-      <Box sx={{ flexShrink: 0 }}>
-        <DeepResearchDecisionLead
-          pending={pendingInterrupt}
-          task={task}
-          isBudgetReview={isBudgetReview}
-          todoTitles={reviewTodoTitles}
-        />
-      </Box>
-      {reviewPanelOpen ? (
+    reviewPanelOpen ? (
+      <Box sx={{ display: 'flex', flexDirection: 'column', flex: '1 1 0', minHeight: 0, height: '100%' }}>
+        <Box sx={{ flexShrink: 0 }}>
+          <DeepResearchDecisionLead
+            pending={pendingInterrupt}
+            task={task}
+            isBudgetReview={isBudgetReview}
+            todoTitles={reviewTodoTitles}
+          />
+        </Box>
         <Box
           data-testid="review-limitations-scroller"
           sx={{
-            flex: '1 1 auto',
-            minHeight: REVIEW_DECISION_PANEL_LIMITATIONS_MIN_PX,
+            flex: '1 1 0',
+            minHeight: 0,
             minWidth: 0,
             overflowY: 'auto',
             pr: 0.25,
@@ -836,8 +833,18 @@ export default function DeepResearchTaskPanel({
         >
           <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
         </Box>
-      ) : null}
-    </>
+      </Box>
+    ) : (
+      <>
+        <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
+        <DeepResearchDecisionLead
+          pending={pendingInterrupt}
+          task={task}
+          isBudgetReview={isBudgetReview}
+          todoTitles={reviewTodoTitles}
+        />
+      </>
+    )
   ) : null;
   const timelineCitationSources = useMemo(
     () => citationSourcesFromTimelineItems(items),
@@ -921,10 +928,7 @@ export default function DeepResearchTaskPanel({
     ref={panelRef}
     sx={{
       p: 1,
-      ...(reviewPanelOpen ? {
-        overflowX: 'hidden',
-        overflowY: reviewTranscriptOpen ? 'auto' : 'hidden',
-      } : {}),
+      ...(reviewPanelOpen ? { overflowX: 'hidden', overflow: 'hidden' } : {}),
     }}
     decisionBeforeTranscript={reviewPanelOpen}
     transcriptDataTestId={reviewPanelOpen ? 'review-transcript-frame' : undefined}
@@ -940,7 +944,7 @@ export default function DeepResearchTaskPanel({
     }}
     decisionSx={reviewPanelOpen ? {
       flex: '1 1 0',
-      minHeight: 0,
+      minHeight: REVIEW_DECISION_COLUMN_MIN_HEIGHT,
       overflow: 'hidden',
       display: 'flex',
       flexDirection: 'column',
