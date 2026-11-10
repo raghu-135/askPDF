@@ -134,12 +134,62 @@ async function assertAllLimitationsReachableByScroll(page) {
   expect(lastBox.y + lastBox.height).toBeLessThanOrEqual(footer.y + 0.5);
 }
 
+async function assertTranscriptInsidePaneWhenExpanded(page) {
+  const pane = await readPaneBounds(page);
+  const paneBottom = pane.y + pane.height;
+  const body = page.getByTestId('review-transcript-body');
+  const bodyBox = await body.boundingBox();
+  expect(bodyBox).not.toBeNull();
+  expect(bodyBox.y).toBeGreaterThanOrEqual(pane.y);
+  expect(bodyBox.y + bodyBox.height).toBeLessThanOrEqual(paneBottom + 0.5);
+  const toggle = page.getByTestId('review-transcript-toggle');
+  const toggleBox = await toggle.boundingBox();
+  expect(toggleBox).not.toBeNull();
+  expect(toggleBox.y + toggleBox.height).toBeLessThanOrEqual(paneBottom + 0.5);
+  const footer = await page.getByTestId('review-decision-footer').boundingBox();
+  expect(footer).not.toBeNull();
+  expect(bodyBox.y + bodyBox.height).toBeLessThanOrEqual(footer.y + 0.5);
+}
+
+async function assertLimitationRowsDoNotPaintOverFooter(page) {
+  await page.getByTestId('review-decision-scroll').evaluate((el) => { el.scrollTop = 0; });
+  const footer = await page.getByTestId('review-decision-footer').boundingBox();
+  const scroll = await page.getByTestId('review-decision-scroll').boundingBox();
+  expect(footer).not.toBeNull();
+  expect(scroll).not.toBeNull();
+
+  const samples = await page.evaluate(({ footerTop, footerLeft, footerWidth, scrollBottom }) => {
+    const hits = [];
+    for (let x = footerLeft + 16; x < footerLeft + footerWidth - 16; x += 48) {
+      for (const y of [footerTop + 8, footerTop + 28, footerTop + 52]) {
+        const el = document.elementFromPoint(x, y);
+        hits.push({
+          x,
+          y,
+          limitation: Boolean(el?.closest('#limitations li')),
+        });
+      }
+    }
+    return hits;
+  }, {
+    footerTop: footer.y,
+    footerLeft: footer.x,
+    footerWidth: footer.width,
+    scrollBottom: scroll.y + scroll.height,
+  });
+
+  for (const sample of samples) {
+    expect(sample.limitation, `limitation row painted through footer at ${sample.x},${sample.y}`).toBe(false);
+  }
+}
+
 async function assertTranscriptExpandedButtonsClickable(page) {
   const toggle = page.getByTestId('review-transcript-toggle-button');
   const body = page.getByTestId('review-transcript-body');
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(body).toBeVisible();
+  await assertTranscriptInsidePaneWhenExpanded(page);
   await assertNoFooterOverlapFirstPaint(page);
   await assertFooterButtonsInViewportAndClickable(page);
 
@@ -152,6 +202,7 @@ async function assertTranscriptExpandedButtonsClickable(page) {
 async function assertReviewLayout(page) {
   await expect(page.getByRole('separator', { name: 'Resize decision panel' })).toHaveCount(0);
   await assertNoFooterOverlapFirstPaint(page);
+  await assertLimitationRowsDoNotPaintOverFooter(page);
   await assertAtLeastTwoLimitationItemsVisible(page);
   await assertAllLimitationsReachableByScroll(page);
   await assertFooterButtonsInViewportAndClickable(page);

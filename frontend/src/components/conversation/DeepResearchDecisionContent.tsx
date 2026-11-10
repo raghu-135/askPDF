@@ -46,7 +46,7 @@ export function DeepResearchIssueList({
   const [open, setOpen] = useState(Boolean(defaultExpanded));
   if (!items.length) return null;
   return (
-    <Box sx={{ flexShrink: 0 }}>
+    <Box sx={{ flexShrink: 0, overflow: 'hidden', minWidth: 0 }}>
       <Button
         size="small"
         color="inherit"
@@ -56,8 +56,8 @@ export function DeepResearchIssueList({
       >
         {items.length} limitation{items.length === 1 ? '' : 's'} identified
       </Button>
-      <Collapse in={open}>
-        <Box component="ul" sx={{ m: 0, pl: 0, listStyle: 'none', typography: 'body2', color: 'text.secondary', pb: 0.5 }}>
+      <Collapse in={open} sx={{ overflow: 'hidden' }}>
+        <Box component="ul" sx={{ m: 0, pl: 0, listStyle: 'none', typography: 'body2', color: 'text.secondary', pb: 0.5, overflow: 'hidden' }}>
           {items.map((item, index) => (
             <Box component="li" key={`${index}-${item.text.slice(0, 24)}`} sx={{ display: 'flex', gap: 0.75, alignItems: 'flex-start', mb: 0.75 }}>
               <Chip

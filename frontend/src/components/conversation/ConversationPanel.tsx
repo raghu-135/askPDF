@@ -20,7 +20,7 @@ import type { ContextBudgetRatios } from '../../lib/context-budget';
 
 export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
   header: React.ReactNode;
-  transcript: React.ReactNode;
+  transcript?: React.ReactNode;
   status?: React.ReactNode;
   decision?: React.ReactNode;
   composer?: React.ReactNode;
@@ -71,23 +71,25 @@ export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
           {decision}
         </Box>
       ) : null}
-      <Box
-        data-testid={transcriptDataTestId}
-        sx={{
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          ...(decision && !decisionBeforeTranscript
-            ? { flex: '0 0 auto', flexShrink: 0 }
-            : decision && decisionBeforeTranscript
-              ? { flex: '0 0 auto' }
-              : { flex: 1 }),
-          ...transcriptSx,
-        }}
-      >
-        {transcript}
-      </Box>
+      {transcript ? (
+        <Box
+          data-testid={transcriptDataTestId}
+          sx={{
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            ...(decision && !decisionBeforeTranscript
+              ? { flex: '0 0 auto', flexShrink: 0 }
+              : decision && decisionBeforeTranscript
+                ? { flex: '0 0 auto' }
+                : { flex: 1 }),
+            ...transcriptSx,
+          }}
+        >
+          {transcript}
+        </Box>
+      ) : null}
       {decision && !decisionBeforeTranscript ? (
         <Box sx={{
           flex: '1 1 0',

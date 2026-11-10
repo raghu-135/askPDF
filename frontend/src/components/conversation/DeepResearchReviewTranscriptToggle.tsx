@@ -4,19 +4,24 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT } from '../../lib/deep-research-review-panel-layout';
 
-export function DeepResearchReviewTranscriptToggle({
+export function DeepResearchReviewTranscriptToggleControl({
   open,
   onToggle,
-  children,
 }: {
   open: boolean;
   onToggle: () => void;
-  children: React.ReactNode;
 }) {
   return (
     <Box
       data-testid="review-transcript-toggle"
-      sx={{ flexShrink: 0, borderTop: '1px solid', borderColor: 'divider', pt: 0.5 }}
+      sx={{
+        flexShrink: 0,
+        borderTop: '1px solid',
+        borderColor: 'divider',
+        pt: 0.5,
+        px: 1,
+        bgcolor: 'background.default',
+      }}
     >
       <Button
         size="small"
@@ -29,6 +34,43 @@ export function DeepResearchReviewTranscriptToggle({
       >
         {open ? 'Hide transcript' : 'Show transcript'}
       </Button>
+    </Box>
+  );
+}
+
+/** Transcript body rendered inside `#review-decision-scroll` while review is open. */
+export function DeepResearchReviewTranscriptScrollBody({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <Box
+      data-testid="review-transcript-body"
+      sx={{
+        flex: '1 1 0',
+        minHeight: 0,
+        overflowY: 'auto',
+        overflowX: 'hidden',
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
+export function DeepResearchReviewTranscriptToggle({
+  open,
+  onToggle,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Box sx={{ flexShrink: 0, borderTop: '1px solid', borderColor: 'divider', pt: 0.5 }}>
+      <DeepResearchReviewTranscriptToggleControl open={open} onToggle={onToggle} />
       <Box
         data-testid="review-transcript-body"
         sx={{
@@ -37,7 +79,6 @@ export function DeepResearchReviewTranscriptToggle({
           minHeight: 0,
           overflowY: 'auto',
           overflowX: 'hidden',
-          flexShrink: 1,
         }}
       >
         {children}

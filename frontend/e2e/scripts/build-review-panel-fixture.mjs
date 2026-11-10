@@ -100,14 +100,18 @@ const html = `<!DOCTYPE html>
       .decision-scroll {
         flex: 1 1 0;
         min-height: 0;
+        overflow-x: hidden;
         overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 8px;
         padding: 0 8px 8px;
+        position: relative;
+        z-index: 0;
+        isolation: isolate;
       }
       .decision-lead { white-space: pre-wrap; color: #444; flex-shrink: 0; }
-      #review-limitations-scroller { flex-shrink: 0; }
+      #review-limitations-scroller { flex-shrink: 0; overflow: hidden; min-width: 0; }
       .provisional-snippet { flex-shrink: 0; color: #555; white-space: pre-wrap; }
       #review-decision-footer {
         flex-shrink: 0;
@@ -119,6 +123,8 @@ const html = `<!DOCTYPE html>
         display: flex;
         flex-direction: column;
         box-shadow: 0 -4px 12px rgba(0,0,0,0.06);
+        position: relative;
+        z-index: 2;
       }
       #review-decision-footer .guidance-block {
         flex: 1 1 auto;
@@ -140,7 +146,8 @@ const html = `<!DOCTYPE html>
       .transcript-toggle {
         flex-shrink: 0;
         border-top: 1px solid #ddd;
-        padding-top: 4px;
+        padding: 4px 8px 0;
+        background: #fff;
       }
       #review-transcript-toggle-button {
         width: 100%;
@@ -151,9 +158,16 @@ const html = `<!DOCTYPE html>
         padding: 4px 8px;
         cursor: pointer;
       }
-      #review-transcript-body { display: none; max-height: ${REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT}; overflow-y: auto; border: 1px solid #ddd; padding: 8px; background: #fff; }
-      #review-transcript-body.open { display: block; }
+      #review-transcript-body {
+        flex: 1 1 0;
+        min-height: 0;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        padding: 8px;
+        background: #fff;
+      }
       .transcript-bubble { min-height: 320px; background: #e3f2fd; padding: 8px; }
+      .decision-scroll-swap-hidden { display: none !important; }
       @media (max-width: ${WORKBENCH_AUTO_SIDE_MIN_WIDTH - 1}px) {
         .workbench.stacked .header { height: 40px; margin-bottom: 4px; padding: 4px; }
         .workbench.stacked .status { height: 56px; margin-bottom: 4px; }
@@ -178,14 +192,22 @@ const html = `<!DOCTYPE html>
             <div class="decision-shell" id="decision-panel">
               <div class="decision-title">Research budget reached</div>
               <div class="decision-scroll" id="review-decision-scroll" data-testid="review-decision-scroll">
-                <div class="decision-lead">Research budget for Model tokens is at the tranche limit. 12 limitations (5 gaps · 7 review findings). You can finish with this result or continue with guidance (starts a new budget tranche).</div>
-                <div id="review-limitations-scroller" data-testid="review-limitations-scroller">
-                  <div class="limitations-header">12 limitations identified</div>
-                  <ul class="limitations" id="limitations">
-                    ${LIMITATION_LINES.map((line) => `<li>${line}</li>`).join('\n                    ')}
-                  </ul>
+                <div id="review-decision-default-scroll" data-testid="review-decision-default-scroll">
+                  <div class="decision-lead">Research budget for Model tokens is at the tranche limit. 12 limitations (5 gaps · 7 review findings). You can finish with this result or continue with guidance (starts a new budget tranche).</div>
+                  <div id="review-limitations-scroller" data-testid="review-limitations-scroller">
+                    <div class="limitations-header">12 limitations identified</div>
+                    <ul class="limitations" id="limitations">
+                      ${LIMITATION_LINES.map((line) => `<li>${line}</li>`).join('\n                    ')}
+                    </ul>
+                  </div>
+                  <div class="provisional-snippet">${PROVISIONAL_SNIPPET}</div>
                 </div>
-                <div class="provisional-snippet">${PROVISIONAL_SNIPPET}</div>
+                <div id="review-transcript-body" data-testid="review-transcript-body" class="decision-scroll-swap-hidden" hidden>
+                  <div class="transcript-bubble">objective · Completed — critique the attached paper…</div>
+                </div>
+              </div>
+              <div class="transcript-toggle" data-testid="review-transcript-toggle">
+                <button type="button" id="review-transcript-toggle-button" data-testid="review-transcript-toggle-button" aria-expanded="false">Show transcript</button>
               </div>
               <div id="review-decision-footer" data-testid="review-decision-footer">
                 <div class="guidance-block">
@@ -199,12 +221,6 @@ const html = `<!DOCTYPE html>
               </div>
             </div>
           </div>
-          <div class="transcript-toggle" data-testid="review-transcript-toggle">
-            <button type="button" id="review-transcript-toggle-button" data-testid="review-transcript-toggle-button" aria-expanded="false">Show transcript</button>
-            <div id="review-transcript-body" data-testid="review-transcript-body">
-              <div class="transcript-bubble">objective · Completed — critique the attached paper…</div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -214,15 +230,20 @@ const html = `<!DOCTYPE html>
         const guidance = document.getElementById('guidance');
         const toggleBtn = document.getElementById('review-transcript-toggle-button');
         const transcriptBody = document.getElementById('review-transcript-body');
+        const defaultScroll = document.getElementById('review-decision-default-scroll');
         const syncStacked = () => {
           workbench.classList.toggle('stacked', window.innerWidth < ${WORKBENCH_AUTO_SIDE_MIN_WIDTH});
         };
         syncStacked();
         window.addEventListener('resize', syncStacked);
         toggleBtn.addEventListener('click', () => {
-          const open = transcriptBody.classList.toggle('open');
-          toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-          toggleBtn.textContent = open ? 'Hide transcript' : 'Show transcript';
+          const willOpen = transcriptBody.hidden;
+          transcriptBody.hidden = !willOpen;
+          transcriptBody.classList.toggle('decision-scroll-swap-hidden', !willOpen);
+          defaultScroll.hidden = willOpen;
+          defaultScroll.classList.toggle('decision-scroll-swap-hidden', willOpen);
+          toggleBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+          toggleBtn.textContent = willOpen ? 'Hide transcript' : 'Show transcript';
         });
         guidance.addEventListener('focus', () => {
           guidance.classList.remove('compact');

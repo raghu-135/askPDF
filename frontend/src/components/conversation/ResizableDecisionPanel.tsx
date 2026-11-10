@@ -27,11 +27,13 @@ export function ResizableDecisionPanel({
   onResizeStart: externalOnResizeStart,
   resizing: externalResizing,
   showResizeHandle = true,
+  betweenScrollAndFooter,
 }: {
   title: React.ReactNode;
   children?: React.ReactNode;
   footer?: React.ReactNode;
   fixedHeader?: React.ReactNode;
+  betweenScrollAndFooter?: React.ReactNode;
   variant?: 'clarification' | 'conflict' | 'approval';
   onClose?: () => void;
   rootRef?: React.RefObject<HTMLElement | null>;
@@ -159,18 +161,26 @@ export function ResizableDecisionPanel({
           sx={{
             flex: '1 1 0',
             minHeight: 0,
-            overflowY: 'auto',
             overflowX: 'hidden',
+            overflowY: 'auto',
             display: 'flex',
             flexDirection: 'column',
             gap: 1,
             px: 1,
             pb: 1,
+            position: 'relative',
+            zIndex: 0,
+            isolation: 'isolate',
           }}
         >
           {fixedHeader}
           {children}
         </Box>
+        {betweenScrollAndFooter ? (
+          <Box sx={{ flexShrink: 0, position: 'relative', zIndex: 1, bgcolor: 'background.default' }}>
+            {betweenScrollAndFooter}
+          </Box>
+        ) : null}
         {footer ? (
           <Box
             data-testid="review-decision-footer"
@@ -187,6 +197,8 @@ export function ResizableDecisionPanel({
               gap: 0.5,
               maxHeight: REVIEW_DECISION_PANEL_FOOTER_MAX_HEIGHT,
               overflow: 'hidden',
+              position: 'relative',
+              zIndex: 2,
               boxShadow: '0 -4px 12px rgba(0,0,0,0.06)',
             }}
           >
