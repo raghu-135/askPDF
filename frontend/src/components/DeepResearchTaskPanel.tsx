@@ -1075,7 +1075,7 @@ export default function DeepResearchTaskPanel({
               size="small"
               color="error"
               variant="text"
-              disabled={busy || decisionSubmitting || !cancelControl.availability.enabled}
+              disabled={busy || Boolean(decisionSubmitting) || !cancelControl.availability.enabled}
               title={cancelControl.availability.disabledReason}
               onClick={() => void command('cancel')}
             >
@@ -1139,7 +1139,7 @@ export default function DeepResearchTaskPanel({
               size="small"
               color="error"
               variant="text"
-              disabled={busy || decisionSubmitting || !cancelControl.availability.enabled}
+              disabled={busy || Boolean(decisionSubmitting) || !cancelControl.availability.enabled}
               title={cancelControl.availability.disabledReason}
               onClick={() => void command('cancel')}
             >
