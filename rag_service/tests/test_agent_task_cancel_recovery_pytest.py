@@ -108,16 +108,30 @@ def test_defer_runtime_cancellation_on_run_not_found_until_confirm_timeout():
 
 def test_abandon_runtime_cancellation_on_run_not_found_after_confirm_timeout(monkeypatch):
     monkeypatch.setenv("AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS", "120")
-    task = type("Task", (), {"updated_at": utc_now() - timedelta(seconds=121)})()
-    run = type("Run", (), {"run_metadata_json": {"runtime_started": True}})()
+    task = type("Task", (), {"updated_at": utc_now()})()
+    run = type("Run", (), {
+        "run_metadata_json": {
+            "runtime_started": True,
+            "cancellation_request": {
+                "requested_at": (utc_now() - timedelta(seconds=121)).isoformat(),
+            },
+        },
+    })()
     error = AgentRuntimeError("runtime_run_not_found", "missing", retryable=False)
     assert cancellation.should_abandon_runtime_cancellation(task, run, error=error)
 
 
 def test_abandon_runtime_cancellation_after_confirm_timeout(monkeypatch):
     monkeypatch.setenv("AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS", "120")
-    task = type("Task", (), {"updated_at": utc_now() - timedelta(seconds=121)})()
-    run = type("Run", (), {"run_metadata_json": {"runtime_started": True}})()
+    task = type("Task", (), {"updated_at": utc_now()})()
+    run = type("Run", (), {
+        "run_metadata_json": {
+            "runtime_started": True,
+            "cancellation_request": {
+                "requested_at": (utc_now() - timedelta(seconds=121)).isoformat(),
+            },
+        },
+    })()
     assert cancellation.should_abandon_runtime_cancellation(task, run)
 
 

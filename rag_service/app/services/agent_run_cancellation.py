@@ -98,6 +98,7 @@ async def record_scheduled_task_cancellation(task: Any, run: Any | None) -> None
                 "run_id": str(run.id),
                 "reason": "cancelled_by_user",
                 "runtime_confirmation": "scheduled",
+                "requested_at": utc_now().isoformat(),
             }
             replace_jsonb_field(stored, "run_metadata_json", metadata)
 
@@ -135,15 +136,30 @@ def cancel_confirm_timeout_seconds() -> float:
     return float(os.environ["AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS"])
 
 
-def cancellation_confirm_deadline_elapsed(task: Any, run: Any | None) -> bool:
+def _cancellation_deadline_anchor(task: Any, run: Any | None):
+    """Anchor confirm-timeout to the original cancel request, not lease churn."""
+
+    from app.time_utils import parse_datetime_utc
+
+    if run is not None:
+        metadata = dict(getattr(run, "run_metadata_json", None) or {})
+        request = dict(metadata.get("cancellation_request") or {})
+        requested_at = request.get("requested_at")
+        if requested_at:
+            return parse_datetime_utc(str(requested_at))
     updated_at = getattr(task, "updated_at", None)
     if updated_at is None:
-        return False
+        return None
     if updated_at.tzinfo is None:
-        from app.time_utils import parse_datetime_utc
+        return parse_datetime_utc(str(updated_at))
+    return updated_at
 
-        updated_at = parse_datetime_utc(str(updated_at))
-    return (utc_now() - updated_at).total_seconds() >= cancel_confirm_timeout_seconds()
+
+def cancellation_confirm_deadline_elapsed(task: Any, run: Any | None) -> bool:
+    anchor = _cancellation_deadline_anchor(task, run)
+    if anchor is None:
+        return False
+    return (utc_now() - anchor).total_seconds() >= cancel_confirm_timeout_seconds()
 
 
 def should_finalize_cancel_on_terminal_runtime_ack(task: Any, run: Any) -> bool:

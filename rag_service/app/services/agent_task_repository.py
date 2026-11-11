@@ -972,8 +972,23 @@ async def apply_command(
                     "run_id": active_run.id,
                     "reason": "cancelled_by_user",
                     "runtime_confirmation": "scheduled",
+                    "requested_at": now.isoformat(),
                 }
                 replace_jsonb_field(active_run, "run_metadata_json", metadata)
+            if action == "cancel" and target == AgentTaskStatus.CANCELLING.value and active_run is not None and runtime_submitted:
+                metadata = dict(active_run.run_metadata_json or {})
+                request = dict(metadata.get("cancellation_request") or {})
+                if not request.get("requested_at"):
+                    metadata["cancel_requested"] = True
+                    metadata["cancellation_request"] = {
+                        **request,
+                        "task_id": task.id,
+                        "run_id": active_run.id,
+                        "reason": "cancelled_by_user",
+                        "requested_at": now.isoformat(),
+                        "runtime_confirmation": request.get("runtime_confirmation") or "pending",
+                    }
+                    replace_jsonb_field(active_run, "run_metadata_json", metadata)
             if action == "cancel":
                 pending_corrections = list((await session.execute(select(AgentTaskCommand).where(
                     AgentTaskCommand.task_id == task.id,
@@ -1261,7 +1276,8 @@ async def claim_next_task(worker_id: str, *, lease_seconds: int = 60) -> Optiona
                 task.completed_at = None
                 task.terminal_reason = None
             task.version += 1
-            task.updated_at = now
+            if not is_cancelling:
+                task.updated_at = now
             await _append_event(session, task, "task.claimed", agent_run_id=task.active_run_id, payload={"worker_id": worker_id, "version": task.version})
         await session.refresh(task)
         return task
