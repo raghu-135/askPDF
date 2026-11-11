@@ -398,7 +398,20 @@ async def command_agent_task(
         )
     await _require_task_capability(task, action)
     existing_run = await repository.get_task_run(task.id) if action == "cancel" else None
-    if action == "cancel" and existing_run is not None and runtime_cancel_submitted(existing_run):
+    from app.product_orchestration.interrupts import product_owned_review_pending
+
+    product_local_review_cancel = bool(
+        action == "cancel"
+        and existing_run is not None
+        and task.status == "awaiting_approval"
+        and product_owned_review_pending(existing_run)
+    )
+    if (
+        action == "cancel"
+        and existing_run is not None
+        and runtime_cancel_submitted(existing_run)
+        and not product_local_review_cancel
+    ):
         try:
             await require_task_cancellation(task, existing_run)
         except AgentRuntimeError as exc:

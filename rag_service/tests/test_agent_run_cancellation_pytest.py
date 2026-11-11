@@ -170,6 +170,31 @@ async def test_confirmed_cancellation_atomically_terminalizes_task_and_run(monke
 
 
 @pytest.mark.asyncio
+async def test_terminal_acknowledgement_during_product_review_cancels(monkeypatch):
+    abandon = AsyncMock(return_value=SimpleNamespace(status="cancelled"))
+    reconcile = AsyncMock()
+    monkeypatch.setattr(cancellation, "abandon_pending_cancellation", abandon)
+    monkeypatch.setattr("app.services.agent_runtime_reconciliation.reconcile_run_by_id", reconcile)
+    run = _run()
+    run.status = "awaiting_human"
+    run.pending_interrupt_json = {
+        "status": "pending",
+        "response_operation": "task.result_review.respond",
+        "interrupt_id": "review-1",
+    }
+    run.run_metadata_json = {"runtime_started": True, "projection": {"status": "applied"}}
+    task = SimpleNamespace(id="task-1", status="cancelling")
+
+    result = await cancellation.confirm_task_cancellation(
+        task, run, result={"status": "cancelling", "runtime_status": "completed"},
+    )
+
+    assert result.status == "cancelled"
+    abandon.assert_awaited_once()
+    reconcile.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["completed", "failed"])
 async def test_terminal_acknowledgement_reconciles_instead_of_forcing_cancel(monkeypatch, status):
     reconcile = AsyncMock(return_value="projected")

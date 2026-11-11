@@ -27,6 +27,7 @@ from app.db.models_sqlmodel import (
 )
 from app.models.deep_research import AgentTaskStatus, DeepResearchPlanProposal
 from app.time_utils import parse_datetime_utc, utc_now
+from app.product_orchestration.interrupts import product_owned_review_pending
 from app.product_orchestration.trace_details import sanitize_trace_detail
 from app.product_orchestration.trace_payloads import append_runtime_event_to_debug_payload
 from runtime_protocol.contracts import TERMINAL_RUNTIME_EVENT_KINDS
@@ -694,6 +695,145 @@ async def append_event(task_id: str, event_type: str, **kwargs) -> AgentTaskEven
         return event
 
 
+async def clear_product_review_interrupt(run_id: str) -> None:
+    """Drop a product-owned review interrupt without resolving through the runtime."""
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            run = await session.get(AgentRun, run_id, with_for_update=True)
+            if run is None:
+                return
+            pending = dict(run.pending_interrupt_json or {})
+            if pending:
+                pending["status"] = "rejected"
+                pending["decision"] = {"action": "cancel"}
+            replace_jsonb_field(run, "pending_interrupt_json", {})
+
+
+def _session_apply_product_local_cancel_to_run(
+    session,
+    task: AgentTask,
+    run: AgentRun,
+    *,
+    now,
+    clear_review_interrupt: bool = True,
+) -> None:
+    if clear_review_interrupt:
+        pending = dict(run.pending_interrupt_json or {})
+        if pending:
+            pending["status"] = "rejected"
+            pending["decision"] = {"action": "cancel"}
+        replace_jsonb_field(run, "pending_interrupt_json", {})
+    if run.status not in TERMINAL_TASK_RUN_STATUSES:
+        run.status = AgentRunStatus.CANCELLED.value
+        run.completed_at = now
+        replace_jsonb_field(
+            run,
+            "error_json",
+            {
+                "code": "run_cancelled",
+                "message": "Task cancelled before runtime execution started",
+                "retryable": False,
+            },
+        )
+    metadata = dict(run.run_metadata_json or {})
+    metadata["cancel_requested"] = False
+    metadata["cancellation_request"] = {
+        **dict(metadata.get("cancellation_request") or {}),
+        "reason": "cancelled_by_user",
+        "runtime_confirmation": "confirmed",
+        "task_id": task.id,
+        "run_id": str(run.id),
+    }
+    replace_jsonb_field(run, "run_metadata_json", metadata)
+    existing_terminal = (await session.execute(
+        select(AgentRunEvent).where(
+            AgentRunEvent.agent_run_id == run.id,
+            AgentRunEvent.terminal.is_(True),
+        )
+    )).scalar_one_or_none()
+    if existing_terminal is None:
+        sequence = int((await session.execute(
+            select(func.coalesce(func.max(AgentRunEvent.sequence), 0)).where(
+                AgentRunEvent.agent_run_id == run.id,
+            )
+        )).scalar_one()) + 1
+        terminal = create_runtime_event(
+            event_id=f"{run.id}:cancelled",
+            run_id=str(run.id),
+            sequence=sequence,
+            kind="run.cancelled",
+            payload={"status": "cancelled"},
+        )
+        session.add(AgentRunEvent(
+            agent_run_id=run.id,
+            event_id=terminal.event_id,
+            sequence=terminal.sequence,
+            attempt=max(1, int(run.task_attempt or 1)),
+            kind=terminal.kind,
+            payload_json=terminal.payload,
+            terminal=terminal.terminal,
+        ))
+    await _append_event(
+        session,
+        task,
+        "run.cancelled",
+        agent_run_id=run.id,
+        payload={"status": "cancelled", "version": task.version, "runtime_confirmation": "not_required"},
+    )
+
+
+async def finalize_product_local_cancellation(task_id: str, run_id: str) -> AgentTask:
+    """Atomically cancel a task/run that never needed a runtime cancel round-trip."""
+
+    from app.runtime.termination import cancellation_reason, confirmed_cancellation_details
+    from runtime_protocol.events import create_runtime_event
+
+    task = await get_task(task_id)
+    run = await get_task_run(task_id)
+    if task is None or run is None or str(run.id) != str(run_id):
+        raise AgentTaskConflict("task_run_missing", "Agent task run is missing for product-local cancellation")
+    if product_owned_review_pending(run):
+        await clear_product_review_interrupt(run_id)
+    error = {
+        "code": "run_cancelled",
+        "message": "Task cancelled before runtime execution started",
+        "retryable": False,
+    }
+    terminal = create_runtime_event(
+        event_id=f"{run_id}:cancelled",
+        run_id=str(run_id),
+        sequence=1,
+        kind="run.cancelled",
+        payload={
+            "status": "cancelled",
+            "error": error,
+            "cancellation": confirmed_cancellation_details(task, run),
+        },
+    )
+    finalized = await finalize_task_run(
+        task_id,
+        run_id,
+        run_status="cancelled",
+        task_status="cancelled",
+        metrics=dict(run.metrics_json or {}),
+        error=error,
+        debug_trace=dict(run.debug_trace_json or {}),
+        terminal_reason=cancellation_reason(task, run),
+        terminal_event=terminal,
+    )
+    await complete_pending_cancel_commands(
+        task_id,
+        result={
+            "status": "cancelled",
+            "task_id": task_id,
+            "run_id": run_id,
+            "runtime_confirmation": "confirmed",
+        },
+    )
+    return finalized
+
+
 COMMAND_TRANSITIONS = {
     "start": ({AgentTaskStatus.CREATED.value}, AgentTaskStatus.QUEUED.value),
     "pause": ({AgentTaskStatus.QUEUED.value, AgentTaskStatus.RUNNING.value}, AgentTaskStatus.PAUSING.value),
@@ -743,6 +883,7 @@ async def apply_command(
             now = utc_now()
             runtime_submitted = False
             active_run = None
+            product_local_review_cancel = False
             if action == "cancel" and task.active_run_id is not None:
                 active_run = (await session.execute(
                     select(AgentRun).where(AgentRun.id == task.active_run_id).with_for_update()
@@ -751,14 +892,22 @@ async def apply_command(
                     active_run
                     and (active_run.run_metadata_json or {}).get("runtime_started") is True
                 )
+                product_local_review_cancel = bool(
+                    active_run
+                    and prior_status == AgentTaskStatus.AWAITING_APPROVAL.value
+                    and product_owned_review_pending(active_run)
+                )
             if action == "pause" and task.status == AgentTaskStatus.QUEUED.value:
                 target = AgentTaskStatus.PAUSED.value
-            elif action == "cancel" and not runtime_submitted and task.status in {
-                AgentTaskStatus.CREATED.value,
-                AgentTaskStatus.QUEUED.value,
-                AgentTaskStatus.PAUSED.value,
-                AgentTaskStatus.AWAITING_APPROVAL.value,
-            }:
+            elif action == "cancel" and (
+                (not runtime_submitted and task.status in {
+                    AgentTaskStatus.CREATED.value,
+                    AgentTaskStatus.QUEUED.value,
+                    AgentTaskStatus.PAUSED.value,
+                    AgentTaskStatus.AWAITING_APPROVAL.value,
+                })
+                or product_local_review_cancel
+            ):
                 target = AgentTaskStatus.CANCELLED.value
             task.status = target
             task.current_phase = target
@@ -806,29 +955,13 @@ async def apply_command(
                 task.terminal_reason = "cancelled_by_user"
                 task.lease_owner = None
                 task.lease_expires_at = None
-                if (
-                    active_run is not None
-                    and active_run.status not in TERMINAL_TASK_RUN_STATUSES
-                ):
-                    active_run.status = AgentRunStatus.CANCELLED.value
-                    active_run.completed_at = now
-                    active_run.error_json = {
-                        "code": "run_cancelled",
-                        "message": "Task cancelled before runtime execution started",
-                        "retryable": False,
-                    }
-                    run_metadata = dict(active_run.run_metadata_json or {})
-                    run_metadata["cancel_requested"] = False
-                    replace_jsonb_field(active_run, "run_metadata_json", run_metadata)
-                    await _append_event(
+                if active_run is not None:
+                    _session_apply_product_local_cancel_to_run(
                         session,
                         task,
-                        "run.cancelled",
-                        agent_run_id=active_run.id,
-                        payload={
-                            "status": "cancelled",
-                            "runtime_confirmation": "not_required",
-                        },
+                        active_run,
+                        now=now,
+                        clear_review_interrupt=product_local_review_cancel,
                     )
             if action == "cancel" and target == AgentTaskStatus.CANCELLING.value and active_run is not None and not runtime_submitted:
                 metadata = dict(active_run.run_metadata_json or {})
