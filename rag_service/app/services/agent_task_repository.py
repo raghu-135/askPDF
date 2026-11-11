@@ -956,7 +956,7 @@ async def apply_command(
                 task.lease_owner = None
                 task.lease_expires_at = None
                 if active_run is not None:
-                    _session_apply_product_local_cancel_to_run(
+                    await _session_apply_product_local_cancel_to_run(
                         session,
                         task,
                         active_run,

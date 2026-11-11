@@ -5,7 +5,7 @@ import uuid
 import pytest
 
 from app.db import AgentRunStatus
-from app.db.models_sqlmodel import AgentRun
+from app.db.models_sqlmodel import AgentRun, AgentWorkflow
 from app.product_orchestration.builtin_workflows import load_builtin_workflows
 from app.services import agent_task_repository as repository
 
@@ -17,8 +17,24 @@ def _spec() -> dict:
     )
 
 
+async def _seed_deep_research_workflow(test_session_maker) -> None:
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add(AgentWorkflow(
+                id="deep_research_agent",
+                name="Deep Research",
+                description="test",
+                visibility="builtin",
+                is_builtin=True,
+                schema_version=1,
+                spec_json=_spec(),
+                metadata_json={"version": 1},
+            ))
+
+
 @pytest.mark.asyncio
 async def test_queued_cancel_closes_attached_run(test_session_maker, sample_thread):
+    await _seed_deep_research_workflow(test_session_maker)
     task, _ = await repository.create_task(
         thread_id=sample_thread.id,
         project_id=sample_thread.project_id,
@@ -59,6 +75,7 @@ async def test_queued_cancel_closes_attached_run(test_session_maker, sample_thre
 
 @pytest.mark.asyncio
 async def test_running_pre_submit_cancel_persists_scheduled_marker(test_session_maker, sample_thread):
+    await _seed_deep_research_workflow(test_session_maker)
     task, _ = await repository.create_task(
         thread_id=sample_thread.id,
         project_id=sample_thread.project_id,
