@@ -42,6 +42,7 @@ UNIT_TEST_FILES = [
     "test_agent_task_timeline_api_pytest.py",
     "test_agent_task_events_pytest.py",
     "test_agent_task_routes_pytest.py",
+    "test_agent_task_pause_command_pytest.py",
     "test_canonical_trace_projection_pytest.py",
     "test_canvas_api_pytest.py",
     "test_canvas_emit_pytest.py",
@@ -126,6 +127,7 @@ HERMES_TEST_FILES = [
 ]
 
 MCP_TEST_FILES = [
+    "test_mcp_allowed_hosts_pytest.py",
     "test_mcp_context.py",
     "test_mcp_transport.py",
     "test_mcp_contracts.py",
@@ -151,6 +153,7 @@ DB_TEST_FILES = [
     "test_repository_transactions_pytest.py",
     "test_agent_task_runtime_projection_pytest.py",
     "test_agent_task_cancel_recovery_pytest.py",
+    "test_agent_task_cancel_paths_pytest.py",
     "test_agent_task_research_canvases_pytest.py",
     "test_jsonb_operations_pytest.py",
     "test_thread_fork_service_pytest.py",

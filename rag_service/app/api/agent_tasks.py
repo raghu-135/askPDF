@@ -23,7 +23,14 @@ from app.services import agent_task_repository as repository
 from app.services.agent_task_runtime import (
     ensure_task_run,
 )
-from app.services.agent_run_cancellation import require_task_cancellation, request_task_cancellation
+from app.services.agent_run_cancellation import (
+    cancellation_submission_deferred,
+    record_scheduled_task_cancellation,
+    request_task_cancellation,
+    require_task_cancellation,
+    runtime_cancel_submitted,
+    scheduled_cancellation_result,
+)
 from app.services.agent_run_pause import request_task_pause
 from app.services.content_store import get_content_store
 from app.services.agent_task_presentation import (
@@ -402,19 +409,21 @@ async def command_agent_task(
     if (
         action == "cancel"
         and existing_run is not None
-        and (existing_run.run_metadata_json or {}).get("runtime_started") is True
+        and runtime_cancel_submitted(existing_run)
         and not product_local_review_cancel
     ):
         try:
             await require_task_cancellation(task, existing_run)
         except AgentRuntimeError as exc:
-            raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+            if not cancellation_submission_deferred(exc):
+                raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     try:
+        expected_version = req.expected_version
         task, command, duplicate = await repository.apply_command(
             task.id,
             action=action,
             idempotency_key=idempotency_key,
-            expected_version=req.expected_version,
+            expected_version=expected_version,
             actor_id=current_principal(),
         )
         if action in {"start", "retry"} and not duplicate:
@@ -440,27 +449,99 @@ async def command_agent_task(
                 )
         if action == "cancel" and not duplicate:
             run = existing_run or await repository.get_task_run(task.id)
-            if run is not None and task.status == "cancelling":
+            if task.status == "cancelled":
+                await repository.complete_control_command(
+                    command.id,
+                    result={
+                        "status": "cancelled",
+                        "task_id": task.id,
+                        "run_id": getattr(run, "id", None),
+                        "runtime_confirmation": "not_required",
+                    },
+                )
+            elif run is not None and task.status == "cancelling":
                 try:
                     result = await request_task_cancellation(task, run)
                 except AgentRuntimeError as exc:
-                    await repository.complete_control_command(
-                        command.id,
-                        result={"error": exc.to_dict(), "runtime_confirmation": "pending"},
-                        rejected=True,
-                    )
-                    if not exc.retryable:
-                        await repository.revert_cancel_after_runtime_failure(task.id, command.id)
+                    if cancellation_submission_deferred(exc):
+                        await record_scheduled_task_cancellation(task, run)
+                        result = scheduled_cancellation_result(task, run)
+                        await repository.complete_control_command(command.id, result=dict(result))
                         task = await repository.get_task(task.id) or task
-                    raise
-                await repository.complete_control_command(command.id, result=dict(result))
-                task = await repository.get_task(task.id) or task
+                    else:
+                        await repository.complete_control_command(
+                            command.id,
+                            result={"error": exc.to_dict(), "runtime_confirmation": "pending"},
+                            rejected=True,
+                        )
+                        if not exc.retryable:
+                            await repository.revert_cancel_after_runtime_failure(task.id, command.id)
+                            task = await repository.get_task(task.id) or task
+                        raise
+                else:
+                    await repository.complete_control_command(command.id, result=dict(result))
+                    task = await repository.get_task(task.id) or task
+            elif task.status == "cancelling":
+                await record_scheduled_task_cancellation(task, run)
+                await repository.complete_control_command(
+                    command.id,
+                    result=dict(scheduled_cancellation_result(task, run)),
+                )
         return {"task": await _task_payload(task), "command_id": command.id, "duplicate": duplicate}
     except repository.AgentTaskConflict as exc:
+        if (
+            action == "cancel"
+            and exc.code == "task_version_conflict"
+            and exc.current_version is not None
+            and exc.current_version != req.expected_version
+        ):
+            try:
+                task, command, duplicate = await repository.apply_command(
+                    task.id,
+                    action=action,
+                    idempotency_key=idempotency_key,
+                    expected_version=exc.current_version,
+                    actor_id=current_principal(),
+                )
+                run = existing_run or await repository.get_task_run(task.id)
+                if task.status == "cancelled":
+                    await repository.complete_control_command(
+                        command.id,
+                        result={
+                            "status": "cancelled",
+                            "task_id": task.id,
+                            "run_id": getattr(run, "id", None),
+                            "runtime_confirmation": "not_required",
+                        },
+                    )
+                elif run is not None and task.status == "cancelling":
+                    try:
+                        result = await request_task_cancellation(task, run)
+                    except AgentRuntimeError as retry_exc:
+                        if cancellation_submission_deferred(retry_exc):
+                            await record_scheduled_task_cancellation(task, run)
+                            result = scheduled_cancellation_result(task, run)
+                            await repository.complete_control_command(command.id, result=dict(result))
+                        else:
+                            raise _conflict(exc) from retry_exc
+                    else:
+                        await repository.complete_control_command(command.id, result=dict(result))
+                elif task.status == "cancelling":
+                    await record_scheduled_task_cancellation(task, run)
+                    await repository.complete_control_command(
+                        command.id,
+                        result=dict(scheduled_cancellation_result(task, run)),
+                    )
+                task = await repository.get_task(task.id) or task
+                return {"task": await _task_payload(task), "command_id": command.id, "duplicate": duplicate}
+            except repository.AgentTaskConflict as retry_conflict:
+                raise _conflict(retry_conflict) from retry_conflict
         raise _conflict(exc) from exc
     except AgentRuntimeError as exc:
         logger.warning("Runtime cancellation submission failed | task_id=%s code=%s", task.id, exc.code)
         raise HTTPException(status_code=503 if exc.retryable else 409, detail=exc.to_dict()) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception(
             "Failed to initialize agent task run",

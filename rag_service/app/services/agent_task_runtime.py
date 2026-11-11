@@ -19,6 +19,9 @@ from app.services import agent_task_repository as tasks
 from app.services.agent_runtime_reconciliation import record_terminal_result
 from app.services.agent_run_cancellation import (
     abandon_pending_cancellation,
+    cancellation_scheduled_on_run,
+    finalize_product_local_cancellation,
+    honor_product_cancellation_before_runtime_start,
     request_task_cancellation,
     should_abandon_runtime_cancellation,
     should_finalize_cancel_on_terminal_runtime_ack,
@@ -151,6 +154,11 @@ async def _invoke_task_runtime(
 
     pending = dict(run.pending_interrupt_json or {})
     if getattr(run, "_fresh_runtime_run", False):
+        task = await tasks.get_task(str(run.task_id or "")) if run.task_id else None
+        if task is not None:
+            pre_start_cancel = await honor_product_cancellation_before_runtime_start(task, run)
+            if pre_start_cancel is not None:
+                return pre_start_cancel
         await require_capability(
             definition,
             RuntimeOperationId.RUN_START,
@@ -161,6 +169,20 @@ async def _invoke_task_runtime(
         # established. Persist ownership first so cancellation and recovery
         # never mistake an active external execution for an unsubmitted run.
         await repository.mark_runtime_started(run.id)
+        if task is not None and await tasks.task_cancel_requested(task.id):
+            try:
+                await request_task_cancellation(task, run, registry=registry)
+            except AgentRuntimeError:
+                pass
+            await finalize_product_local_cancellation(task, run)
+            return AgentRuntimeResult(
+                status="cancelled",
+                error={
+                    "code": "run_cancelled",
+                    "message": "Task cancellation honoured during runtime start",
+                    "retryable": False,
+                },
+            )
         result = await adapter.start(
             runtime_request,
             context=runtime_context,
@@ -532,7 +554,16 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         return
     if task.status == AgentTaskStatus.CANCELLING.value:
         active_run = await tasks.get_task_run(task_id)
-        if active_run is not None and active_run.status in {
+        if (
+            active_run is not None
+            and active_run.status in {
+                AgentRunStatus.RUNNING.value,
+                AgentRunStatus.AWAITING_HUMAN.value,
+            }
+            and cancellation_scheduled_on_run(active_run)
+        ):
+            await finalize_product_local_cancellation(task, active_run)
+        elif active_run is not None and active_run.status in {
             AgentRunStatus.RUNNING.value,
             AgentRunStatus.AWAITING_HUMAN.value,
         }:
@@ -820,6 +851,15 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
         # runtime_operation_conflict.
         latest_task = await tasks.get_task(task.id)
         latest_run = await tasks.get_task_run(task.id)
+        if (
+            latest_task is not None
+            and latest_run is not None
+            and latest_run.id == run.id
+            and latest_task.status == AgentTaskStatus.CANCELLING.value
+            and not (dict(latest_run.run_metadata_json or {}).get("runtime_started") is True)
+        ):
+            await finalize_product_local_cancellation(latest_task, latest_run)
+            return
         if (
             latest_task is None
             or latest_run is None

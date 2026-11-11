@@ -716,17 +716,28 @@ async def _session_apply_product_local_cancel_to_run(
     run: AgentRun,
     *,
     now,
+    clear_review_interrupt: bool = True,
 ) -> None:
-    pending = dict(run.pending_interrupt_json or {})
-    if pending:
-        pending["status"] = "rejected"
-        pending["decision"] = {"action": "cancel"}
-    replace_jsonb_field(run, "pending_interrupt_json", {})
+    if clear_review_interrupt:
+        pending = dict(run.pending_interrupt_json or {})
+        if pending:
+            pending["status"] = "rejected"
+            pending["decision"] = {"action": "cancel"}
+        replace_jsonb_field(run, "pending_interrupt_json", {})
     if run.status not in TERMINAL_TASK_RUN_STATUSES:
         run.status = AgentRunStatus.CANCELLED.value
         run.completed_at = now
-        replace_jsonb_field(run, "error_json", {"code": "run_cancelled", "retryable": False})
+        replace_jsonb_field(
+            run,
+            "error_json",
+            {
+                "code": "run_cancelled",
+                "message": "Task cancelled before runtime execution started",
+                "retryable": False,
+            },
+        )
     metadata = dict(run.run_metadata_json or {})
+    metadata["cancel_requested"] = False
     metadata["cancellation_request"] = {
         **dict(metadata.get("cancellation_request") or {}),
         "reason": "cancelled_by_user",
@@ -768,8 +779,59 @@ async def _session_apply_product_local_cancel_to_run(
         task,
         "run.cancelled",
         agent_run_id=run.id,
-        payload={"status": "cancelled", "version": task.version},
+        payload={"status": "cancelled", "version": task.version, "runtime_confirmation": "not_required"},
     )
+
+
+async def finalize_product_local_cancellation(task_id: str, run_id: str) -> AgentTask:
+    """Atomically cancel a task/run that never needed a runtime cancel round-trip."""
+
+    from app.runtime.termination import cancellation_reason, confirmed_cancellation_details
+    from runtime_protocol.events import create_runtime_event
+
+    task = await get_task(task_id)
+    run = await get_task_run(task_id)
+    if task is None or run is None or str(run.id) != str(run_id):
+        raise AgentTaskConflict("task_run_missing", "Agent task run is missing for product-local cancellation")
+    if product_owned_review_pending(run):
+        await clear_product_review_interrupt(run_id)
+    error = {
+        "code": "run_cancelled",
+        "message": "Task cancelled before runtime execution started",
+        "retryable": False,
+    }
+    terminal = create_runtime_event(
+        event_id=f"{run_id}:cancelled",
+        run_id=str(run_id),
+        sequence=1,
+        kind="run.cancelled",
+        payload={
+            "status": "cancelled",
+            "error": error,
+            "cancellation": confirmed_cancellation_details(task, run),
+        },
+    )
+    finalized = await finalize_task_run(
+        task_id,
+        run_id,
+        run_status="cancelled",
+        task_status="cancelled",
+        metrics=dict(run.metrics_json or {}),
+        error=error,
+        debug_trace=dict(run.debug_trace_json or {}),
+        terminal_reason=cancellation_reason(task, run),
+        terminal_event=terminal,
+    )
+    await complete_pending_cancel_commands(
+        task_id,
+        result={
+            "status": "cancelled",
+            "task_id": task_id,
+            "run_id": run_id,
+            "runtime_confirmation": "confirmed",
+        },
+    )
+    return finalized
 
 
 COMMAND_TRANSITIONS = {
@@ -893,13 +955,40 @@ async def apply_command(
                 task.terminal_reason = "cancelled_by_user"
                 task.lease_owner = None
                 task.lease_expires_at = None
-            if (
-                action == "cancel"
-                and target == AgentTaskStatus.CANCELLED.value
-                and active_run is not None
-                and product_local_review_cancel
-            ):
-                await _session_apply_product_local_cancel_to_run(session, task, active_run, now=now)
+                if active_run is not None:
+                    await _session_apply_product_local_cancel_to_run(
+                        session,
+                        task,
+                        active_run,
+                        now=now,
+                        clear_review_interrupt=product_local_review_cancel,
+                    )
+            if action == "cancel" and target == AgentTaskStatus.CANCELLING.value and active_run is not None and not runtime_submitted:
+                metadata = dict(active_run.run_metadata_json or {})
+                metadata["cancel_requested"] = True
+                metadata["cancellation_request"] = {
+                    **dict(metadata.get("cancellation_request") or {}),
+                    "task_id": task.id,
+                    "run_id": active_run.id,
+                    "reason": "cancelled_by_user",
+                    "runtime_confirmation": "scheduled",
+                    "requested_at": now.isoformat(),
+                }
+                replace_jsonb_field(active_run, "run_metadata_json", metadata)
+            if action == "cancel" and target == AgentTaskStatus.CANCELLING.value and active_run is not None and runtime_submitted:
+                metadata = dict(active_run.run_metadata_json or {})
+                request = dict(metadata.get("cancellation_request") or {})
+                if not request.get("requested_at"):
+                    metadata["cancel_requested"] = True
+                    metadata["cancellation_request"] = {
+                        **request,
+                        "task_id": task.id,
+                        "run_id": active_run.id,
+                        "reason": "cancelled_by_user",
+                        "requested_at": now.isoformat(),
+                        "runtime_confirmation": request.get("runtime_confirmation") or "pending",
+                    }
+                    replace_jsonb_field(active_run, "run_metadata_json", metadata)
             if action == "cancel":
                 pending_corrections = list((await session.execute(select(AgentTaskCommand).where(
                     AgentTaskCommand.task_id == task.id,
@@ -1187,7 +1276,8 @@ async def claim_next_task(worker_id: str, *, lease_seconds: int = 60) -> Optiona
                 task.completed_at = None
                 task.terminal_reason = None
             task.version += 1
-            task.updated_at = now
+            if not is_cancelling:
+                task.updated_at = now
             await _append_event(session, task, "task.claimed", agent_run_id=task.active_run_id, payload={"worker_id": worker_id, "version": task.version})
         await session.refresh(task)
         return task

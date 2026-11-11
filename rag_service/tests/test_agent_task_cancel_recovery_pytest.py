@@ -99,22 +99,44 @@ async def test_product_review_cancel_is_local_without_runtime_round_trip(
     assert stored_run.completed_at is not None
 
 
-def test_abandon_runtime_cancellation_on_run_not_found():
+def test_defer_runtime_cancellation_on_run_not_found_until_confirm_timeout():
     task = type("Task", (), {"updated_at": utc_now()})()
     run = type("Run", (), {"run_metadata_json": {"runtime_started": True}})()
+    error = AgentRuntimeError("runtime_run_not_found", "missing", retryable=False)
+    assert not cancellation.should_abandon_runtime_cancellation(task, run, error=error)
+
+
+def test_abandon_runtime_cancellation_on_run_not_found_after_confirm_timeout(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS", "120")
+    task = type("Task", (), {"updated_at": utc_now()})()
+    run = type("Run", (), {
+        "run_metadata_json": {
+            "runtime_started": True,
+            "cancellation_request": {
+                "requested_at": (utc_now() - timedelta(seconds=121)).isoformat(),
+            },
+        },
+    })()
     error = AgentRuntimeError("runtime_run_not_found", "missing", retryable=False)
     assert cancellation.should_abandon_runtime_cancellation(task, run, error=error)
 
 
 def test_abandon_runtime_cancellation_after_confirm_timeout(monkeypatch):
     monkeypatch.setenv("AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS", "120")
-    task = type("Task", (), {"updated_at": utc_now() - timedelta(seconds=121)})()
-    run = type("Run", (), {"run_metadata_json": {"runtime_started": True}})()
+    task = type("Task", (), {"updated_at": utc_now()})()
+    run = type("Run", (), {
+        "run_metadata_json": {
+            "runtime_started": True,
+            "cancellation_request": {
+                "requested_at": (utc_now() - timedelta(seconds=121)).isoformat(),
+            },
+        },
+    })()
     assert cancellation.should_abandon_runtime_cancellation(task, run)
 
 
 @pytest.mark.asyncio
-async def test_execute_claimed_task_abandons_cancellation_when_runtime_run_missing(monkeypatch):
+async def test_execute_claimed_task_defers_cancellation_when_runtime_run_missing(monkeypatch):
     task = type("Task", (), {
         "id": "task-1",
         "status": AgentTaskStatus.CANCELLING.value,
@@ -129,17 +151,22 @@ async def test_execute_claimed_task_abandons_cancellation_when_runtime_run_missi
 
     monkeypatch.setattr(
         "app.services.agent_task_runtime.tasks.get_task",
-        AsyncMock(side_effect=[task, type("Task", (), {"status": AgentTaskStatus.CANCELLED.value})()]),
+        AsyncMock(side_effect=[task, task]),
     )
     monkeypatch.setattr("app.services.agent_task_runtime.tasks.get_task_run", AsyncMock(return_value=run))
     request = AsyncMock(side_effect=AgentRuntimeError("runtime_run_not_found", "missing", retryable=False))
     abandon = AsyncMock()
+    finalize = AsyncMock()
+    defer = AsyncMock()
     monkeypatch.setattr("app.services.agent_task_runtime.request_task_cancellation", request)
     monkeypatch.setattr("app.services.agent_task_runtime.abandon_pending_cancellation", abandon)
+    monkeypatch.setattr("app.services.agent_task_runtime.finalize_product_local_cancellation", finalize)
     monkeypatch.setattr("app.services.agent_task_runtime.tasks.release_task_lease", AsyncMock())
-    monkeypatch.setattr("app.services.agent_task_runtime.tasks.defer_task_lease", AsyncMock())
+    monkeypatch.setattr("app.services.agent_task_runtime.tasks.defer_task_lease", defer)
 
     await execute_claimed_task("task-1", "worker-1")
 
-    abandon.assert_awaited_once()
+    abandon.assert_not_awaited()
+    finalize.assert_not_awaited()
+    defer.assert_awaited_once()
     request.assert_awaited_once()
