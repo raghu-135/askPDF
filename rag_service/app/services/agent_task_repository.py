@@ -710,7 +710,7 @@ async def clear_product_review_interrupt(run_id: str) -> None:
             replace_jsonb_field(run, "pending_interrupt_json", {})
 
 
-def _session_apply_product_local_cancel_to_run(
+async def _session_apply_product_local_cancel_to_run(
     session,
     task: AgentTask,
     run: AgentRun,
