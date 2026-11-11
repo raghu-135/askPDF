@@ -540,6 +540,8 @@ async def command_agent_task(
     except AgentRuntimeError as exc:
         logger.warning("Runtime cancellation submission failed | task_id=%s code=%s", task.id, exc.code)
         raise HTTPException(status_code=503 if exc.retryable else 409, detail=exc.to_dict()) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception(
             "Failed to initialize agent task run",
