@@ -5,7 +5,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from app.product_orchestration.enums import (
     AgentRunResumeAction,
@@ -14,6 +14,7 @@ from app.product_orchestration.enums import (
     RESUME_ACTIONS,
     TERMINAL_INTERRUPT_STATUSES,
 )
+from app.db.enums import AgentRunStatus
 from app.db.models_sqlmodel import AgentRun
 from app.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
@@ -35,6 +36,23 @@ PENDING_INTERRUPT_RESPONSE_OPERATIONS = frozenset({
     "task.result_review.respond",
     "task.budget_review.respond",
 })
+PRODUCT_OWNED_REVIEW_RESPONSE_OPERATIONS = frozenset({
+    "task.result_review.respond",
+    "task.budget_review.respond",
+})
+
+
+def product_owned_review_pending(run: Any) -> bool:
+    """True when the run awaits a product-owned budget or result review."""
+
+    if str(getattr(run, "status", "") or "") not in {AgentRunStatus.AWAITING_HUMAN.value}:
+        return False
+    payload = getattr(run, "pending_interrupt_json", None)
+    if not isinstance(payload, Mapping):
+        return False
+    if str(payload.get("status") or "") != INTERRUPT_STATUS_PENDING:
+        return False
+    return str(payload.get("response_operation") or "") in PRODUCT_OWNED_REVIEW_RESPONSE_OPERATIONS
 
 
 class AgentRunInterruptError(ValueError):

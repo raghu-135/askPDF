@@ -22,6 +22,7 @@ from app.runtime.product_capabilities import product_operation_descriptors, proj
 from app.runtime.registry import RuntimeRegistry, RuntimeSelectionError
 from app.db.enums import AgentRunStatus
 from app.models.deep_research import AgentTaskStatus
+from app.product_orchestration.interrupts import product_owned_review_pending
 
 
 logger = logging.getLogger(__name__)
@@ -515,6 +516,8 @@ async def resolve_run_capability_resolution(
     binding_available = bool(binding) and str(getattr(run, "runtime_binding_status", "active")) == "active"
     run_metadata = getattr(run, "run_metadata_json", None)
     submitted = isinstance(run_metadata, Mapping) and run_metadata.get("runtime_started") is True
+    if submitted and product_owned_review_pending(run):
+        submitted = False
 
     if status in TERMINAL_RUN_STATES:
         for operation in ACTIVE_RUN_OPERATIONS | RESPONSE_OPERATIONS:
