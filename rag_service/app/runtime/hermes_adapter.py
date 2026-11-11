@@ -258,6 +258,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             "POST",
             f"/v1/runs/{request.run_id}/cancel",
             request=request,
+            timeout=self.transport._cancel_request_timeout(),
             json=json_payload({"request": request.to_dict(), "continuation": request.continuation.to_dict()}),
         )
         result = dict(value or {})

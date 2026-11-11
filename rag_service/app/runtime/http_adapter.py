@@ -233,7 +233,13 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         return None if result.status == "no_continuation" else result
 
     async def cancel(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        value = await self.transport._json("POST", f"/v1/runs/{request.run_id}/cancel", request=request, json=json_payload({"request": request.to_dict()}))
+        value = await self.transport._json(
+            "POST",
+            f"/v1/runs/{request.run_id}/cancel",
+            request=request,
+            timeout=self.transport._cancel_request_timeout(),
+            json=json_payload({"request": request.to_dict()}),
+        )
         return dict(value) if isinstance(value, Mapping) else {"result": value}
 
     async def pause(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:

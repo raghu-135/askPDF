@@ -171,9 +171,31 @@ class RuntimeTransportConnector:
         headers["authorization"] = f"Bearer {token}"
         return headers
 
-    async def _json(self, method: str, path: str, *, request: AgentRuntimeRequest | None = None, **kwargs: Any) -> Any:
+    def _cancel_request_timeout(self) -> httpx.Timeout:
+        read_seconds = required_positive_float("AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS")
+        return httpx.Timeout(
+            read_seconds,
+            connect=required_positive_float("AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS"),
+            write=required_positive_float("AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS"),
+        )
+
+    async def _json(
+        self,
+        method: str,
+        path: str,
+        *,
+        request: AgentRuntimeRequest | None = None,
+        timeout: httpx.Timeout | None = None,
+        **kwargs: Any,
+    ) -> Any:
         try:
-            response = await (await self._client_for_request()).request(method, self.base_url + path, headers=self._headers(request), **kwargs)
+            response = await (await self._client_for_request()).request(
+                method,
+                self.base_url + path,
+                headers=self._headers(request),
+                timeout=timeout or self._timeout,
+                **kwargs,
+            )
         except httpx.TimeoutException as exc:
             raise RuntimeError.from_exception(exc, code="runtime_timeout", retryable=True, safe_message="Agent runtime timed out") from exc
         except httpx.HTTPError as exc:

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.services import agent_run_cancellation as cancellation
+from runtime_protocol.contracts import AgentRuntimeResult
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 
 
@@ -36,6 +37,38 @@ def _run():
         framework="langgraph", builder_id="langgraph_graph", definition_category="task",
         runtime_binding_json={}, runtime_binding_status="active", status="running", task_id="task-1",
     )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AgentRuntimeError(code="runtime_run_not_found", safe_message="missing", retryable=False),
+        AgentRuntimeError(
+            code="runtime_capability_unavailable",
+            safe_message="binding",
+            retryable=False,
+            details={"disabled_reason": "runtime_binding_unavailable"},
+        ),
+    ],
+)
+def test_cancellation_submission_deferred_recognizes_pre_submit_failures(error):
+    assert cancellation.cancellation_submission_deferred(error) is True
+
+
+@pytest.mark.asyncio
+async def test_honor_product_cancellation_before_runtime_start_finalizes_locally(monkeypatch):
+    finalize = AsyncMock()
+    monkeypatch.setattr(cancellation, "finalize_product_local_cancellation", finalize)
+    task = SimpleNamespace(id="task-1", status="cancelling")
+    run = _run()
+    run.run_metadata_json = {"runtime_started": False}
+    setattr(run, "_fresh_runtime_run", True)
+
+    result = await cancellation.honor_product_cancellation_before_runtime_start(task, run)
+
+    assert isinstance(result, AgentRuntimeResult)
+    assert result.status == "cancelled"
+    finalize.assert_awaited_once_with(task, run)
 
 
 @pytest.mark.asyncio

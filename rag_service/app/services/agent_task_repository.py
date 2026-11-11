@@ -742,6 +742,7 @@ async def apply_command(
             session.add(command)
             now = utc_now()
             runtime_submitted = False
+            active_run = None
             if action == "cancel" and task.active_run_id is not None:
                 active_run = (await session.execute(
                     select(AgentRun).where(AgentRun.id == task.active_run_id).with_for_update()
@@ -805,6 +806,41 @@ async def apply_command(
                 task.terminal_reason = "cancelled_by_user"
                 task.lease_owner = None
                 task.lease_expires_at = None
+                if (
+                    active_run is not None
+                    and active_run.status not in TERMINAL_TASK_RUN_STATUSES
+                ):
+                    active_run.status = AgentRunStatus.CANCELLED.value
+                    active_run.completed_at = now
+                    active_run.error_json = {
+                        "code": "run_cancelled",
+                        "message": "Task cancelled before runtime execution started",
+                        "retryable": False,
+                    }
+                    run_metadata = dict(active_run.run_metadata_json or {})
+                    run_metadata["cancel_requested"] = False
+                    replace_jsonb_field(active_run, "run_metadata_json", run_metadata)
+                    await _append_event(
+                        session,
+                        task,
+                        "run.cancelled",
+                        agent_run_id=active_run.id,
+                        payload={
+                            "status": "cancelled",
+                            "runtime_confirmation": "not_required",
+                        },
+                    )
+            if action == "cancel" and target == AgentTaskStatus.CANCELLING.value and active_run is not None and not runtime_submitted:
+                metadata = dict(active_run.run_metadata_json or {})
+                metadata["cancel_requested"] = True
+                metadata["cancellation_request"] = {
+                    **dict(metadata.get("cancellation_request") or {}),
+                    "task_id": task.id,
+                    "run_id": active_run.id,
+                    "reason": "cancelled_by_user",
+                    "runtime_confirmation": "scheduled",
+                }
+                replace_jsonb_field(active_run, "run_metadata_json", metadata)
             if action == "cancel":
                 pending_corrections = list((await session.execute(select(AgentTaskCommand).where(
                     AgentTaskCommand.task_id == task.id,

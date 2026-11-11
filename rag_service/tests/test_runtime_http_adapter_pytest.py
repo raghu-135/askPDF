@@ -888,3 +888,24 @@ async def test_resume_keeps_saved_ask_policy_without_original_request(monkeypatc
         assert policies[1]["arxiv"]["mode"] == "ask"
     finally:
         await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cancel_request_uses_confirm_timeout(monkeypatch):
+    monkeypatch.setenv("AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS", "9")
+    monkeypatch.setenv("AGENT_RUNTIME_READ_TIMEOUT_SECONDS", "600")
+    captured: dict[str, object] = {}
+    adapter = HttpLangGraphRuntimeAdapter("http://runtime")
+
+    async def recording_json(method, path, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return {"status": "cancelled"}
+
+    monkeypatch.setattr(adapter.transport, "_json", recording_json)
+    try:
+        await adapter.cancel(_request())
+    finally:
+        await adapter.aclose()
+    timeout = captured.get("timeout")
+    assert timeout is not None
+    assert getattr(timeout, "read", None) == 9.0
