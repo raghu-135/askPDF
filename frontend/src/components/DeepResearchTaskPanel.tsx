@@ -59,9 +59,12 @@ import {
 } from '../lib/chat-sentence-cache';
 import type { ChatTraceDescriptor } from './ChatInterface';
 import { AGENT_SSE_RECONNECT_INTERVAL_MS, AGENT_TASK_POLL_INTERVAL_MS } from '../lib/agent-ui-config';
-import { REVIEW_LIMITATIONS_MAX_HEIGHT, reviewPanelFlexWeights } from '../lib/deep-research-review-panel-layout';
+import {
+  DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
+  REVIEW_DECISION_COLUMN_MIN_HEIGHT,
+  WORKBENCH_AUTO_SIDE_MIN_WIDTH,
+} from '../lib/deep-research-review-panel-layout';
 import { isAgentRunActivelyStreaming } from '../lib/trace-tab-live';
-import { useResizablePanelRatio } from '../hooks/useResizablePanelRatio';
 import {
   ConversationComposer,
   ConversationArtifactList,
@@ -84,6 +87,10 @@ import {
   DeepResearchIssueList,
   DeepResearchProvisionalAnswer,
 } from './conversation/DeepResearchDecisionContent';
+import {
+  DeepResearchReviewTranscriptScrollBody,
+  DeepResearchReviewTranscriptToggleControl,
+} from './conversation/DeepResearchReviewTranscriptToggle';
 import {
   budgetUsageFromInterrupt,
   budgetUsageFromTask,
@@ -378,6 +385,7 @@ export default function DeepResearchTaskPanel({
   const [busy, setBusy] = useState(false);
   const [decisionSubmitting, setDecisionSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [reviewGuidance, setReviewGuidance] = useState('');
+  const [reviewTranscriptOpen, setReviewTranscriptOpen] = useState(false);
   const [courseCorrection, setCourseCorrection] = useState('');
   const [courseCorrectionStatus, setCourseCorrectionStatus] = useState('');
   const [decisionError, setDecisionError] = useState('');
@@ -394,7 +402,6 @@ export default function DeepResearchTaskPanel({
   const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
   const itemRefs = useRef(new Map<string, HTMLLIElement>());
   const panelRef = useRef<HTMLDivElement>(null);
-  const { ratio: reviewPanelRatio, resizing: reviewPanelResizing, onResizeStart: onReviewPanelResizeStart } = useResizablePanelRatio(panelRef, 0.48);
   const selectedRun = runs[runIndex] || null;
   const selectedCapabilitiesState = useAgentRunCapabilities(selectedRun?.id, threadId, `${selectedRun?.status}:${selectedRun?.runtime_binding_status}:${selectedRun?.pending_interrupt?.interrupt_id}:${selectedRun?.pending_interrupt?.status}:${selectedRun?.pending_interrupt?.resume_version}:${task?.version}`);
   const activeCapabilitiesState = useAgentRunCapabilities(
@@ -710,6 +717,7 @@ export default function DeepResearchTaskPanel({
   })).filter((control) => control.availability.visible), [activeTaskCapabilities]);
   const theme = useTheme();
   const compactLifecycle = useMediaQuery(theme.breakpoints.down('md'));
+  const stackedWorkbench = useMediaQuery(`(max-width:${WORKBENCH_AUTO_SIDE_MIN_WIDTH - 1}px)`);
   const [lifecycleMenuAnchor, setLifecycleMenuAnchor] = useState<HTMLElement | null>(null);
   const frozen = Boolean(selectedRun);
   const displayedContextWindow = frozen
@@ -805,30 +813,73 @@ export default function DeepResearchTaskPanel({
   const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
   const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
-  const reviewFlexWeights = useMemo(
-    () => reviewPanelFlexWeights(reviewPanelRatio),
-    [reviewPanelRatio],
-  );
-  const reviewPanelHeader = pendingInterrupt ? (
-    <>
-      <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
-      <DeepResearchDecisionLead
-        pending={pendingInterrupt}
-        task={task}
-        isBudgetReview={isBudgetReview}
-        todoTitles={reviewTodoTitles}
-      />
-      {reviewPanelOpen ? (
-        <Box sx={{ flexShrink: 0, maxHeight: REVIEW_LIMITATIONS_MAX_HEIGHT, overflowY: 'auto', pr: 0.25 }}>
-          <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
-        </Box>
-      ) : null}
-    </>
-  ) : null;
   const timelineCitationSources = useMemo(
     () => citationSourcesFromTimelineItems(items),
     [items],
   );
+  const timelineTranscript = (
+    <ConversationTranscriptFrame sx={reviewPanelOpen && reviewTranscriptOpen ? { minHeight: 0 } : undefined}>
+      {items.map((item) => <TimelineBubble
+        key={item.id}
+        item={item}
+        taskId={task?.id || ''}
+        threadId={threadId}
+        onSaveToMemory={onSaveToMemory}
+        onOpenCanvas={onOpenCanvas}
+        citationSources={timelineCitationSources}
+        copied={copiedId === item.id}
+        active={activeItemId === item.id}
+        onCopy={() => copyItem(item)}
+        onReadAloud={() => readItem(item.id)}
+        rootRef={(node) => { if (node) itemRefs.current.set(item.id, node); else itemRefs.current.delete(item.id); }}
+        onSelectAttempt={(attempt) => {
+          const index = runs.findIndex((run) => run.attempt === attempt);
+          if (index >= 0) setRunIndex(index);
+        }}
+      />)}
+    </ConversationTranscriptFrame>
+  );
+  const reviewDecisionScrollBody = pendingInterrupt && reviewPanelOpen ? (
+    reviewTranscriptOpen ? (
+      <DeepResearchReviewTranscriptScrollBody>
+        {timelineTranscript}
+      </DeepResearchReviewTranscriptScrollBody>
+    ) : (
+      <>
+        <DeepResearchDecisionLead
+          pending={pendingInterrupt}
+          task={task}
+          isBudgetReview={isBudgetReview}
+          todoTitles={reviewTodoTitles}
+        />
+        <Box data-testid="review-limitations-scroller" sx={{ flexShrink: 0, minWidth: 0, pr: 0.25, overflow: 'hidden' }}>
+          <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
+        </Box>
+        <DeepResearchProvisionalAnswer
+          content={pendingInterrupt.provisional_answer}
+          citationSources={timelineCitationSources}
+          defaultCollapsed={isBudgetReview}
+          emptyMessage={isBudgetReview
+            ? 'No usable provisional answer was produced. Continue or steer the research.'
+            : undefined}
+        />
+      </>
+    )
+  ) : null;
+
+  const reviewPanelScrollContent = pendingInterrupt ? (
+    reviewPanelOpen ? reviewDecisionScrollBody : (
+      <>
+        <DeepResearchBudgetSummary pending={pendingInterrupt} task={task} />
+        <DeepResearchDecisionLead
+          pending={pendingInterrupt}
+          task={task}
+          isBudgetReview={isBudgetReview}
+          todoTitles={reviewTodoTitles}
+        />
+      </>
+    )
+  ) : null;
   const respondToResultReview = async (decision: 'accept' | 'retry_with_input') => {
     if (!task || !selectedRun || !pendingInterrupt) return;
     const followup = decision === 'retry_with_input' ? reviewGuidance : undefined;
@@ -868,23 +919,33 @@ export default function DeepResearchTaskPanel({
     }
   }, [interactionDescriptors, interactionOperation]);
 
+  useEffect(() => {
+    if (!reviewPanelOpen) setReviewTranscriptOpen(false);
+  }, [reviewPanelOpen]);
+
+  useEffect(() => {
+    if (!reviewPanelOpen || !stackedWorkbench) return undefined;
+    window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: true } }));
+    return () => {
+      window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: false } }));
+    };
+  }, [reviewPanelOpen, stackedWorkbench]);
+
   return <ConversationPanelTemplate
     ref={panelRef}
-    sx={{ p: 1 }}
-    transcriptSx={reviewPanelOpen ? {
-      flex: `${reviewFlexWeights.transcript} 1 0`,
-      minHeight: 72,
-      minWidth: 0,
-      overflow: 'hidden',
-      display: 'flex',
-      flexDirection: 'column',
-    } : {
+    sx={{
+      p: 1,
+      ...(reviewPanelOpen ? { overflowX: 'hidden', overflow: 'hidden' } : {}),
+    }}
+    decisionBeforeTranscript={reviewPanelOpen}
+    transcriptDataTestId={reviewPanelOpen ? undefined : 'review-transcript-frame'}
+    transcriptSx={reviewPanelOpen ? undefined : {
       flex: 1,
       minHeight: 0,
     }}
     decisionSx={reviewPanelOpen ? {
-      flex: `${reviewFlexWeights.decision} 1 0`,
-      minHeight: 0,
+      flex: '1 1 0',
+      minHeight: REVIEW_DECISION_COLUMN_MIN_HEIGHT,
       overflow: 'hidden',
       display: 'flex',
       flexDirection: 'column',
@@ -935,10 +996,10 @@ export default function DeepResearchTaskPanel({
       {frozen && task && <Alert severity="info" sx={{ mb: 1 }} icon={false}>
         Model, agent, and context window are locked for this task. Start a new Deep Research task to change them.
       </Alert>}
-      {liveBudgetSnapshot && task && <Box sx={{ mb: 1 }}>
+      {liveBudgetSnapshot && task && !reviewPanelOpen ? <Box sx={{ mb: 1 }}>
         <DeepResearchBudgetChips snapshot={liveBudgetSnapshot} />
-      </Box>}
-      {task?.research_canvases?.length ? (
+      </Box> : null}
+      {task?.research_canvases?.length && !reviewPanelOpen ? (
         <DeepResearchTaskDeliverables
           canvases={task.research_canvases}
           selectedRunId={selectedRun?.id}
@@ -946,24 +1007,7 @@ export default function DeepResearchTaskPanel({
         />
       ) : null}
     </>}
-    transcript={<ConversationTranscriptFrame sx={reviewPanelOpen ? { flex: '1 1 auto', minHeight: 0, overflow: 'auto' } : undefined}>{items.map((item) => <TimelineBubble
-      key={item.id}
-      item={item}
-      taskId={task?.id || ''}
-      threadId={threadId}
-      onSaveToMemory={onSaveToMemory}
-      onOpenCanvas={onOpenCanvas}
-      citationSources={timelineCitationSources}
-      copied={copiedId === item.id}
-      active={activeItemId === item.id}
-      onCopy={() => copyItem(item)}
-      onReadAloud={() => readItem(item.id)}
-      rootRef={(node) => { if (node) itemRefs.current.set(item.id, node); else itemRefs.current.delete(item.id); }}
-      onSelectAttempt={(attempt) => {
-        const index = runs.findIndex((run) => run.attempt === attempt);
-        if (index >= 0) setRunIndex(index);
-      }}
-    />)}</ConversationTranscriptFrame>}
+    transcript={reviewPanelOpen ? undefined : timelineTranscript}
     decision={invalidInterruptContract ? <Alert severity="error" sx={{ m: 2 }}>This human-input request has an invalid runtime response contract.</Alert> : !decisionVisible ? undefined : pendingInterrupt && isTaskPauseInterrupt ? <Box sx={{ p: 2 }}>
       <Typography variant="subtitle2">Deep research paused</Typography>
       <Typography variant="body2" color="text.secondary">The task is paused at a durable checkpoint. Use Resume to continue or Cancel to stop the task.</Typography>
@@ -974,40 +1018,48 @@ export default function DeepResearchTaskPanel({
       rootRef={panelRef}
       horizontalInset={1}
       fillColumn
-      panelRatio={reviewPanelRatio}
-      resizing={reviewPanelResizing}
-      onResizeStart={onReviewPanelResizeStart}
-      fixedHeader={reviewPanelHeader}
+      showResizeHandle={false}
+      fixedHeader={reviewPanelScrollContent}
+      betweenScrollAndFooter={reviewPanelOpen ? (
+        <DeepResearchReviewTranscriptToggleControl
+          open={reviewTranscriptOpen}
+          onToggle={() => setReviewTranscriptOpen((expanded) => !expanded)}
+        />
+      ) : undefined}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField
           label="Optional guidance for the next tranche"
           helperText="Continue and steer start another research tranche and use more budget."
           value={reviewGuidance}
           onChange={setReviewGuidance}
+          compactUntilFocus
         />
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+        <Box sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 0.75,
+          ...(stackedWorkbench ? { '& .MuiButton-root': { flex: '1 1 calc(50% - 6px)' } } : {}),
+        }}>
           <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !pendingInterrupt.provisional_answer || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('accept_partial')}>Finish with partial answer</Button>
           <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !budgetReviewAvailability.enabled} title="Uses another research tranche" onClick={() => void respondToBudgetReview('continue')}>Continue research (more budget)</Button>
           <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !budgetReviewAvailability.enabled} title="Uses another research tranche" onClick={() => void respondToBudgetReview('steer')}>Apply guidance and continue</Button>
         </Box>
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
-    >
-      <DeepResearchProvisionalAnswer
-        content={pendingInterrupt.provisional_answer}
-        emptyMessage="No usable provisional answer was produced. Continue or steer the research."
-        citationSources={timelineCitationSources}
-      />
-    </ResizableDecisionPanel> : pendingInterrupt && isResultReview ? <ResizableDecisionPanel
+    /> : pendingInterrupt && isResultReview ? <ResizableDecisionPanel
       title={pendingInterrupt.title || 'Review incomplete result'}
       variant="approval"
       rootRef={panelRef}
       horizontalInset={1}
       fillColumn
-      panelRatio={reviewPanelRatio}
-      resizing={reviewPanelResizing}
-      onResizeStart={onReviewPanelResizeStart}
-      fixedHeader={reviewPanelHeader}
+      showResizeHandle={false}
+      fixedHeader={reviewPanelScrollContent}
+      betweenScrollAndFooter={reviewPanelOpen ? (
+        <DeepResearchReviewTranscriptToggleControl
+          open={reviewTranscriptOpen}
+          onToggle={() => setReviewTranscriptOpen((expanded) => !expanded)}
+        />
+      ) : undefined}
       footer={<DeepResearchDecisionStickyFooter>
         <DeepResearchGuidanceField
           label="Guidance for the next research tranche"
@@ -1015,8 +1067,14 @@ export default function DeepResearchTaskPanel({
           value={reviewGuidance}
           onChange={setReviewGuidance}
           required
+          compactUntilFocus
         />
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+        <Box sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 0.75,
+          ...(stackedWorkbench ? { '& .MuiButton-root': { flex: '1 1 calc(50% - 6px)' } } : {}),
+        }}>
           <Button
             size="small"
             variant="contained"
@@ -1040,15 +1098,7 @@ export default function DeepResearchTaskPanel({
         </Box>
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
-    >
-      {pendingInterrupt.provisional_answer ? (
-        <DeepResearchProvisionalAnswer
-          content={pendingInterrupt.provisional_answer}
-          citationSources={timelineCitationSources}
-          defaultCollapsed={false}
-        />
-      ) : null}
-    </ResizableDecisionPanel> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
+    /> : pendingInterrupt && responseOperation ? <HumanReviewDecisionPanel
       interrupt={pendingInterrupt}
       submitting={decisionSubmitting}
       error={decisionError || null}
@@ -1058,7 +1108,7 @@ export default function DeepResearchTaskPanel({
       rootRef={panelRef}
       onAction={(action, options) => void decide(action, options)}
     /> : undefined}
-    composer={<Box sx={{ pb: 1 }}>
+    composer={reviewPanelOpen ? null : <Box sx={{ pb: 1 }}>
       {task && <Box sx={{ borderTop: 1, borderColor: 'divider', py: 0.75, px: 1, mb: 1 }}>
         <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
           <Chip size="small" label={formatAgentTaskStatus(task.status)} color={task.status === 'completed' ? 'success' : task.status === 'failed' ? 'error' : task.status === 'recovery_required' ? 'warning' : 'primary'} />

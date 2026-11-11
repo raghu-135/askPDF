@@ -346,6 +346,24 @@ function limitationBreakdownPhrase(gapCount: number, reviewFindingCount: number,
   return '';
 }
 
+const UNRESOLVED_WORK_SECTION_PATTERN = /(?:^|\n)##\s+Unresolved required work[\s\S]*$/i;
+
+export function normalizeInterruptNewlines(text: string): string {
+  return String(text || '').replace(/\\n/g, '\n');
+}
+
+export function stripUnresolvedWorkSection(text: string): string {
+  const normalized = normalizeInterruptNewlines(text);
+  return normalized.replace(UNRESOLVED_WORK_SECTION_PATTERN, '').trimEnd();
+}
+
+/** Interrupt body copy for the review scroll (excludes the runtime unresolved appendix). */
+export function reviewInterruptBodyForDisplay(
+  body: string | null | undefined,
+): string {
+  return stripUnresolvedWorkSection(body || '').trim();
+}
+
 export function buildDecisionLeadLine(options: {
   isBudgetReview: boolean;
   snapshot: BudgetUsageSnapshot | null;
@@ -375,7 +393,11 @@ export function buildDecisionLeadLine(options: {
   if (limitationCount > 0) {
     return `Open research issues remain.${breakdown} Finish with this result or continue with guidance for another tranche.`;
   }
-  return fallbackBody || 'Review the provisional answer before you continue or finish.';
+  const fallback = reviewInterruptBodyForDisplay(fallbackBody);
+  if (fallback) {
+    return fallback;
+  }
+  return 'Review the provisional answer before you continue or finish.';
 }
 
 export function resultReviewContinueLabel(limitationCount: number): string {

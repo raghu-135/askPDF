@@ -14,6 +14,8 @@ import {
   reviewLimitationItems,
   normalizeReviewGapText,
   resultReviewContinueLabel,
+  normalizeInterruptNewlines,
+  stripUnresolvedWorkSection,
 } from '../src/lib/deep-research-decision-ui.ts';
 
 test('budgetUsageFromInterrupt reads tranche usage from pending usage payload', () => {
@@ -122,4 +124,13 @@ test('reviewLimitationItems drops review findings that repeat gap topics', () =>
   });
   assert.equal(items.filter((item) => item.kind === 'finding').length, 1);
   assert.equal(items.find((item) => item.kind === 'finding')?.text, 'Other issue');
+});
+
+test('normalizeInterruptNewlines converts escaped newlines', () => {
+  assert.equal(normalizeInterruptNewlines('line one\\nline two'), 'line one\nline two');
+});
+
+test('stripUnresolvedWorkSection removes runtime appendix after escaped newlines', () => {
+  const raw = 'Summary only\\n\\n## Unresolved required work\\n- todo-2 failed';
+  assert.equal(stripUnresolvedWorkSection(raw), 'Summary only');
 });
