@@ -17,7 +17,12 @@ from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.deep_research import AgentTaskStatus
 from app.services import agent_task_repository as tasks
 from app.services.agent_runtime_reconciliation import record_terminal_result
-from app.services.agent_run_cancellation import request_task_cancellation
+from app.services.agent_run_cancellation import (
+    abandon_pending_cancellation,
+    request_task_cancellation,
+    should_abandon_runtime_cancellation,
+    should_finalize_cancel_on_terminal_runtime_ack,
+)
 from app.services.agent_grounding_evaluator import AgentGroundingEvaluator
 from app.services.agent_task_runtime_projection import (
     RuntimeTaskProjectionConflict,
@@ -534,16 +539,26 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             try:
                 cancellation = await request_task_cancellation(task, active_run)
                 if cancellation.get("runtime_confirmation") == "terminal":
-                    from app.services.agent_runtime_reconciliation import reconcile_run_by_id
+                    runtime_status = str(cancellation.get("runtime_status") or "")
+                    if should_finalize_cancel_on_terminal_runtime_ack(task, active_run) and runtime_status in {
+                        "completed",
+                        "failed",
+                    }:
+                        await abandon_pending_cancellation(task, active_run)
+                    else:
+                        from app.services.agent_runtime_reconciliation import reconcile_run_by_id
 
-                    await reconcile_run_by_id(str(active_run.id))
+                        await reconcile_run_by_id(str(active_run.id))
             except AgentRuntimeError as exc:
-                logger.warning(
-                    "Runtime cancellation remains pending after worker recovery | task_id=%s run_id=%s code=%s",
-                    task_id,
-                    active_run.id,
-                    exc.code,
-                )
+                if should_abandon_runtime_cancellation(task, active_run, error=exc):
+                    await abandon_pending_cancellation(task, active_run, reason=exc.code)
+                else:
+                    logger.warning(
+                        "Runtime cancellation remains pending after worker recovery | task_id=%s run_id=%s code=%s",
+                        task_id,
+                        active_run.id,
+                        exc.code,
+                    )
         elif active_run is None:
             await tasks.complete_task(
                 task_id,
@@ -552,11 +567,21 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             )
         refreshed = await tasks.get_task(task_id)
         if refreshed is not None and refreshed.status == AgentTaskStatus.CANCELLING.value:
-            await tasks.defer_task_lease(
-                task_id,
-                worker_id,
-                retry_seconds=cancellation_retry_seconds(),
-            )
+            if should_abandon_runtime_cancellation(refreshed, active_run):
+                if active_run is not None:
+                    await abandon_pending_cancellation(refreshed, active_run)
+                else:
+                    await tasks.complete_task(
+                        task_id,
+                        status=AgentTaskStatus.CANCELLED.value,
+                        reason="cancelled_by_user",
+                    )
+            else:
+                await tasks.defer_task_lease(
+                    task_id,
+                    worker_id,
+                    retry_seconds=cancellation_retry_seconds(),
+                )
         else:
             await tasks.release_task_lease(task_id, worker_id, lease_seconds=task_lease_seconds())
         return

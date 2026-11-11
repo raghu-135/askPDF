@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Mapping
 
+from app.db.enums import AgentRunStatus
+from app.models.deep_research import AgentTaskStatus
+from app.product_orchestration.interrupts import product_owned_review_pending
 from app.runtime.capability_resolver import require_capability
+from app.time_utils import utc_now
 from app.runtime.catalog import continuation_from_run, definition_from_run
 from runtime_protocol.contracts import AgentRuntimeRequest, RuntimeOperationId
 from runtime_protocol.errors import RuntimeError
@@ -23,6 +28,64 @@ def _request(task: Any, run: Any) -> AgentRuntimeRequest:
         builder_id=definition.builder_id,
         task_id=str(task.id),
         continuation=continuation_from_run(run),
+    )
+
+
+CANCEL_ABANDON_ERROR_CODES = frozenset({
+    "runtime_run_not_found",
+    "runtime_binding_missing",
+    "runtime_binding_unavailable",
+})
+
+
+def cancel_confirm_timeout_seconds() -> float:
+    return float(os.environ["AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS"])
+
+
+def cancellation_confirm_deadline_elapsed(task: Any, run: Any | None) -> bool:
+    updated_at = getattr(task, "updated_at", None)
+    if updated_at is None:
+        return False
+    if updated_at.tzinfo is None:
+        from app.time_utils import parse_datetime_utc
+
+        updated_at = parse_datetime_utc(str(updated_at))
+    return (utc_now() - updated_at).total_seconds() >= cancel_confirm_timeout_seconds()
+
+
+def should_finalize_cancel_on_terminal_runtime_ack(task: Any, run: Any) -> bool:
+    if str(getattr(task, "status", "")) != AgentTaskStatus.CANCELLING.value:
+        return False
+    if not product_owned_review_pending(run):
+        return False
+    metadata = dict(getattr(run, "run_metadata_json", None) or {})
+    projection = dict(metadata.get("projection") or {})
+    return projection.get("status") == "applied" or str(getattr(run, "status", "")) == AgentRunStatus.AWAITING_HUMAN.value
+
+
+def should_abandon_runtime_cancellation(task: Any, run: Any, *, error: RuntimeError | None = None) -> bool:
+    if run is None:
+        return True
+    metadata = dict(getattr(run, "run_metadata_json", None) or {})
+    if metadata.get("runtime_started") is False:
+        return True
+    if error is not None and error.code in CANCEL_ABANDON_ERROR_CODES:
+        return True
+    return cancellation_confirm_deadline_elapsed(task, run)
+
+
+async def abandon_pending_cancellation(task: Any, run: Any, *, reason: str = "cancelled_by_user") -> Any:
+    """Finalize a cancelling task when the runtime cannot confirm cancellation."""
+
+    from app.services import agent_task_repository as tasks
+
+    if product_owned_review_pending(run):
+        await tasks.clear_product_review_interrupt(str(run.id))
+    return await confirm_task_cancellation(
+        task,
+        run,
+        result={"status": "cancelled", "runtime_status": "cancelled", "reason": reason},
+        terminal_event_id=f"{run.id}:cancelled",
     )
 
 
@@ -93,6 +156,8 @@ async def confirm_task_cancellation(
 
     status = str((result or {}).get("runtime_status") or (result or {}).get("status") or "")
     if status in {"completed", "failed"}:
+        if should_finalize_cancel_on_terminal_runtime_ack(task, run):
+            return await abandon_pending_cancellation(task, run, reason="cancelled_by_user")
         # An acknowledgement of an already terminal execution is not evidence
         # of cancellation. Fetch/project its real output, including task deltas.
         return await reconcile_run_by_id(str(run.id))

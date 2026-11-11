@@ -34,6 +34,7 @@ import {
   interruptAgentRunWithInput,
   steerAgentRunLive,
   type AgentTaskRun,
+  type AgentTaskStatus,
   type AgentTaskResearchCanvasRef,
   type AgentTaskSummary,
   type AgentTaskTimelineItem,
@@ -105,6 +106,23 @@ import { DeepResearchBudgetChips } from './conversation/DeepResearchBudgetChips'
 import { formatAgentTaskStatus, formatTimelineItemStatus } from '../lib/deep-research-task-status';
 import { WorkbenchSelect } from './workbench/WorkbenchToolbar';
 
+const TERMINAL_AGENT_TASK_STATUSES = new Set<AgentTaskStatus>([
+  'completed',
+  'failed',
+  'expired',
+  'cancelled',
+  'recovery_required',
+]);
+/** Matches backend `AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS` default in CI. */
+const CANCELLATION_CONFIRM_TIMEOUT_MS = 120_000;
+
+function agentTaskDeletionAllowed(task: AgentTaskSummary): boolean {
+  if (TERMINAL_AGENT_TASK_STATUSES.has(task.status)) return true;
+  if (task.status !== 'cancelling') return false;
+  const updatedAt = Date.parse(task.updated_at);
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt >= CANCELLATION_CONFIRM_TIMEOUT_MS;
+}
+
 export function DeepResearchTaskPicker({
   threadId,
   selectedTaskId,
@@ -169,7 +187,7 @@ export function DeepResearchTaskPicker({
           secondary={taskPickerSecondary(task)}
           slotProps={{ primary: { noWrap: true }, secondary: { noWrap: true } }}
         />
-        {['completed', 'failed', 'expired', 'cancelled', 'recovery_required'].includes(task.status) && <IconButton size="small" color="error" disabled={busy} onClick={(event) => void remove(event, task)} aria-label="Delete task">
+        {agentTaskDeletionAllowed(task) && <IconButton size="small" color="error" disabled={busy} onClick={(event) => void remove(event, task)} aria-label="Delete task">
           <DeleteIcon fontSize="small" />
         </IconButton>}
       </MenuItem>)}
@@ -757,7 +775,10 @@ export default function DeepResearchTaskPanel({
     && effectiveWebMode === 'off'
     && effectiveObjectiveRequestsLiveWeb(task.objective, reviewGuidanceTexts),
   );
-  const pendingInterrupt = selectedRun?.pending_interrupt?.status === 'pending' ? selectedRun.pending_interrupt : null;
+  const taskIsTerminal = Boolean(task && TERMINAL_AGENT_TASK_STATUSES.has(task.status));
+  const pendingInterrupt = !taskIsTerminal && selectedRun?.pending_interrupt?.status === 'pending'
+    ? selectedRun.pending_interrupt
+    : null;
   const liveBudgetSnapshot = useMemo(
     () => budgetUsageFromInterrupt(pendingInterrupt, task) ?? budgetUsageFromTask(task),
     [pendingInterrupt, task],
@@ -812,7 +833,13 @@ export default function DeepResearchTaskPanel({
   );
   const hasCourseCorrectionHistory = Boolean(task?.course_corrections?.length);
   const invalidInterruptContract = Boolean(pendingInterrupt && !responseOperation && !isResultReview && !isBudgetReview);
-  const reviewPanelOpen = Boolean(pendingInterrupt && decisionVisible && (isResultReview || isBudgetReview));
+  const reviewPanelOpen = Boolean(
+    !taskIsTerminal
+    && pendingInterrupt
+    && decisionVisible
+    && (isResultReview || isBudgetReview),
+  );
+  const cancelControl = taskControls.find((control) => control.action === 'cancel');
   const timelineCitationSources = useMemo(
     () => citationSourcesFromTimelineItems(items),
     [items],
@@ -1043,6 +1070,18 @@ export default function DeepResearchTaskPanel({
           <Button size="small" variant="contained" disabled={Boolean(decisionSubmitting) || !pendingInterrupt.provisional_answer || !budgetReviewAvailability.enabled} onClick={() => void respondToBudgetReview('accept_partial')}>Finish with partial answer</Button>
           <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !budgetReviewAvailability.enabled} title="Uses another research tranche" onClick={() => void respondToBudgetReview('continue')}>Continue research (more budget)</Button>
           <Button size="small" variant="outlined" disabled={Boolean(decisionSubmitting) || !reviewGuidance.trim() || !budgetReviewAvailability.enabled} title="Uses another research tranche" onClick={() => void respondToBudgetReview('steer')}>Apply guidance and continue</Button>
+          {cancelControl?.availability.visible ? (
+            <Button
+              size="small"
+              color="error"
+              variant="text"
+              disabled={busy || Boolean(decisionSubmitting) || !cancelControl.availability.enabled}
+              title={cancelControl.availability.disabledReason}
+              onClick={() => void command('cancel')}
+            >
+              Cancel task
+            </Button>
+          ) : null}
         </Box>
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
@@ -1095,6 +1134,18 @@ export default function DeepResearchTaskPanel({
           >
             {resultReviewContinueLabel(reviewIssueCounts.limitationCount)}
           </Button>
+          {cancelControl?.availability.visible ? (
+            <Button
+              size="small"
+              color="error"
+              variant="text"
+              disabled={busy || Boolean(decisionSubmitting) || !cancelControl.availability.enabled}
+              title={cancelControl.availability.disabledReason}
+              onClick={() => void command('cancel')}
+            >
+              Cancel task
+            </Button>
+          ) : null}
         </Box>
         {decisionError ? <Alert severity="error">{decisionError}</Alert> : null}
       </DeepResearchDecisionStickyFooter>}
