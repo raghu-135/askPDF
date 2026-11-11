@@ -345,6 +345,7 @@ def get_http_app(*, allowed_tools: frozenset[str] | None = None, require_executi
                     "rag-service",
                     "rag-service:8000",
                     "host.docker.internal",
+                    "host.docker.internal:8000",
                 ],
             ),
         )
