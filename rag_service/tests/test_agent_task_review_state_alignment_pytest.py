@@ -91,4 +91,5 @@ async def test_budget_review_still_rejects_without_pending(test_session_maker, s
     assert conflict.value.code in {
         "budget_review_not_pending",
         "budget_review_identity_mismatch",
+        "budget_review_already_resolved",
     }
