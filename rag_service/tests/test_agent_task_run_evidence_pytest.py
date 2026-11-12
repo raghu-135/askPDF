@@ -31,6 +31,42 @@ def test_resolve_run_evidence_manifest_prefers_runtime_projection():
     assert gaps == ["missing_section"]
 
 
+def test_resolve_run_evidence_manifest_falls_back_to_persisted_artifacts():
+    run = SimpleNamespace(id="run-1", run_metadata_json={})
+    artifacts = [
+        SimpleNamespace(
+            id="artifact-1",
+            agent_run_id="run-1",
+            kind="tool_output",
+            validity="valid",
+            sha256="abc",
+            byte_size=12,
+            todo_id="todo-1",
+            media_type="text/plain",
+            provenance_json={"plan_revision": 1},
+            source_refs_json={"tools": []},
+        ),
+        SimpleNamespace(
+            id="artifact-2",
+            agent_run_id="other-run",
+            kind="tool_output",
+            validity="valid",
+            sha256="def",
+            byte_size=8,
+            todo_id=None,
+            media_type="text/plain",
+            provenance_json={},
+            source_refs_json={},
+        ),
+    ]
+
+    manifest, gaps = resolve_run_evidence_manifest(run, artifacts)
+
+    assert len(manifest) == 1
+    assert manifest[0]["id"] == "artifact-1"
+    assert gaps == []
+
+
 def test_resolve_run_evidence_manifest_falls_back_to_final_report_provenance():
     run = SimpleNamespace(id="run-1", run_metadata_json={})
     artifacts = [

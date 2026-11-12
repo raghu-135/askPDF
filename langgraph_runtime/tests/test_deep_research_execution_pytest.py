@@ -448,6 +448,35 @@ async def test_compiled_deep_coordinator_keeps_retry_attempts_distinct(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_deep_coordinator_synthesizes_when_replan_budget_exhausted_with_partial_work(monkeypatch):
+    services_by_state = {}
+
+    def services_factory(_config, state):
+        return services_by_state.setdefault(id(state), _CoordinatorServices(state))
+
+    monkeypatch.setattr(deep_research_nodes, "services_from_config", services_factory)
+
+    result = await deep_research_nodes.deep_coordinator(
+        {
+            "task_todos": [
+                {"id": "todo-done", "status": "completed", "required": True, "dependency_ids": []},
+                {"id": "todo-fail", "status": "failed", "required": True, "dependency_ids": []},
+            ],
+            "task_work_items": [],
+            "task_result_packets": [],
+            "task_result_warnings": [],
+            "task_result_gaps": [],
+            "task_limits": {"max_replans": 0},
+            "task_run_plan_count": 1,
+        },
+        {"configurable": {}},
+    )
+
+    assert result["task_controller_route"] == "synthesize"
+    assert result["task_controller_reason"] == "replan_budget_exhausted"
+
+
+@pytest.mark.asyncio
 async def test_compiled_packet_consumption_survives_checkpoint_continuation():
     class State(TypedDict, total=False):
         task_result_packets: Annotated[list[dict], merge_task_result_packets]

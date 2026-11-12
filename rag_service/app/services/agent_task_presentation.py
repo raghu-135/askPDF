@@ -258,6 +258,39 @@ def _gap_lines(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _manifest_from_run_artifacts(artifacts: list[Any], run_id: str) -> list[dict[str, Any]]:
+    """Build a display manifest from persisted product artifacts for one run."""
+
+    if not run_id:
+        return []
+    entries: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        if str(getattr(artifact, "agent_run_id", "")) != run_id:
+            continue
+        if str(getattr(artifact, "validity", "")) != "valid":
+            continue
+        kind = str(getattr(artifact, "kind", ""))
+        if kind not in {"tool_output", "intermediate_report", "context_summary"}:
+            continue
+        artifact_id = str(getattr(artifact, "id", "") or "")
+        if not artifact_id:
+            continue
+        provenance = dict(getattr(artifact, "provenance_json", None) or {})
+        source_refs = dict(getattr(artifact, "source_refs_json", None) or {})
+        entries.append({
+            "id": artifact_id,
+            "artifact_id": artifact_id,
+            "kind": kind,
+            "sha256": getattr(artifact, "sha256", None),
+            "byte_size": getattr(artifact, "byte_size", None),
+            "todo_id": getattr(artifact, "todo_id", None),
+            "media_type": getattr(artifact, "media_type", None),
+            **({"source_refs": source_refs} if source_refs else {}),
+            **({"provenance": provenance} if provenance else {}),
+        })
+    return entries
+
+
 def resolve_run_evidence_manifest(
     run: Any,
     artifacts: list[Any] | None = None,
@@ -281,6 +314,7 @@ def resolve_run_evidence_manifest(
         orchestration_result.get("task_evidence_manifest"),
         task_result.get("task_evidence_manifest"),
         task_result.get("evidence_manifest"),
+        task_result.get("artifacts"),
     ):
         for entry in _manifest_entries(source):
             entry_id = str(entry.get("id") or entry.get("artifact_id") or entry.get("source_id") or "")
@@ -290,9 +324,17 @@ def resolve_run_evidence_manifest(
             seen.add(dedupe_key)
             manifest.append(entry)
 
+    run_id = str(getattr(run, "id", "") or "")
+    if not manifest and artifacts:
+        for entry in _manifest_from_run_artifacts(artifacts, run_id):
+            entry_id = str(entry.get("id") or entry.get("artifact_id") or "")
+            if entry_id in seen:
+                continue
+            seen.add(entry_id)
+            manifest.append(entry)
+
     final_report = None
     if artifacts:
-        run_id = str(getattr(run, "id", "") or "")
         final_report = next(
             (
                 artifact
