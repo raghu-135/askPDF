@@ -244,3 +244,81 @@ async def timeline_report_markdown(
     if not chosen:
         return None
     return _honest_canvas_narration(chosen, has_valid_canvas=has_valid_canvas) or None
+
+
+def _manifest_entries(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _gap_lines(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def resolve_run_evidence_manifest(
+    run: Any,
+    artifacts: list[Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Resolve display evidence from runtime projection, metadata, or legacy artifacts."""
+
+    metadata = dict(getattr(run, "run_metadata_json", None) or {})
+    projection = dict(metadata.get("projection") or {})
+    runtime_result = dict(projection.get("runtime_result") or {})
+    orchestration_result = dict(metadata.get("orchestration_result") or {})
+    task_result = dict(orchestration_result.get("task_result") or runtime_result.get("runtime_task_result") or {})
+
+    manifest: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in (
+        metadata.get("task_evidence_manifest"),
+        metadata.get("evidence_manifest"),
+        runtime_result.get("task_evidence_manifest"),
+        runtime_result.get("evidence_manifest"),
+        runtime_result.get("task_artifact_manifest"),
+        orchestration_result.get("task_evidence_manifest"),
+        task_result.get("task_evidence_manifest"),
+        task_result.get("evidence_manifest"),
+    ):
+        for entry in _manifest_entries(source):
+            entry_id = str(entry.get("id") or entry.get("artifact_id") or entry.get("source_id") or "")
+            dedupe_key = entry_id or str(hashlib.sha256(repr(sorted(entry.items())).encode()).hexdigest())
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            manifest.append(entry)
+
+    final_report = None
+    if artifacts:
+        run_id = str(getattr(run, "id", "") or "")
+        final_report = next(
+            (
+                artifact
+                for artifact in artifacts
+                if str(getattr(artifact, "agent_run_id", "")) == run_id
+                and str(getattr(artifact, "kind", "")) == "final_report"
+                and str(getattr(artifact, "validity", "")) == "valid"
+            ),
+            None,
+        )
+    if final_report is not None:
+        provenance = dict(getattr(final_report, "provenance_json", None) or {})
+        for entry in _manifest_entries(provenance.get("evidence_manifest")):
+            entry_id = str(entry.get("id") or entry.get("artifact_id") or "")
+            dedupe_key = entry_id or str(hashlib.sha256(repr(sorted(entry.items())).encode()).hexdigest())
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            manifest.append(entry)
+
+    gaps = list(dict.fromkeys(
+        _gap_lines(metadata.get("evidence_gaps"))
+        + _gap_lines(metadata.get("task_evidence_gaps"))
+        + _gap_lines(runtime_result.get("task_evidence_gaps"))
+        + _gap_lines(runtime_result.get("task_incomplete_reasons"))
+        + _gap_lines(task_result.get("gaps"))
+        + _gap_lines((dict(getattr(final_report, "provenance_json", None) or {})).get("evidence_gaps"))
+    ))
+    return manifest, gaps

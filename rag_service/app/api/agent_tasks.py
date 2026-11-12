@@ -34,6 +34,7 @@ from app.services.agent_run_cancellation import (
 from app.services.agent_run_pause import request_task_pause
 from app.services.content_store import get_content_store
 from app.services.agent_task_presentation import (
+    resolve_run_evidence_manifest,
     followup_guidance_entries,
     plan_diff,
     timeline_report_markdown,
@@ -571,6 +572,8 @@ async def respond_to_agent_task_result_review(
     if run is None or run.task_id != task.id:
         raise HTTPException(status_code=404, detail={"code": "task_run_missing"})
     try:
+        task = await repository.align_product_owned_review_state(task_id, req.run_id)
+        run = await AgentWorkflowRepository().get_run(req.run_id) or run
         await require_capability(
             definition_from_run(run),
             RuntimeOperationId.TASK_RESULT_REVIEW_RESPOND,
@@ -623,6 +626,8 @@ async def respond_to_agent_task_budget_review(
     if run is None or run.id != req.run_id:
         raise HTTPException(status_code=404, detail={"code": "task_run_missing"})
     try:
+        task = await repository.align_product_owned_review_state(task_id, req.run_id)
+        run = await repository.get_task_run(task.id) or run
         await require_capability(definition_from_run(run), RuntimeOperationId.TASK_BUDGET_REVIEW_RESPOND, registry=get_runtime_registry(), run=run, task=task)
         task, duplicate, linked = await repository.respond_to_budget_review(
             task_id, run_id=req.run_id, interrupt_id=req.interrupt_id,
@@ -1115,12 +1120,13 @@ async def get_agent_task_run_evidence(task_id: str, run_id: str, thread_id: str 
     if run is None:
         raise HTTPException(status_code=404, detail={"code": "agent_task_run_not_found"})
     artifacts = await repository.list_artifacts(task_id)
+    manifest, evidence_gaps = resolve_run_evidence_manifest(run, artifacts)
     return {
         "task_id": task_id,
         "run_id": run_id,
         "attempt": run.task_attempt,
-        "manifest": [],
-        "evidence_gaps": [],
+        "manifest": manifest,
+        "evidence_gaps": evidence_gaps,
     }
 
 

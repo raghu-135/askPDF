@@ -40,6 +40,8 @@ UNIT_TEST_FILES = [
     "test_agent_task_budget_steer_delivery_pytest.py",
     "test_agent_task_timeline_presentation_pytest.py",
     "test_agent_task_timeline_api_pytest.py",
+    "test_agent_task_run_evidence_pytest.py",
+    "test_agent_task_review_state_alignment_pytest.py",
     "test_agent_task_events_pytest.py",
     "test_agent_task_routes_pytest.py",
     "test_agent_task_pause_command_pytest.py",
