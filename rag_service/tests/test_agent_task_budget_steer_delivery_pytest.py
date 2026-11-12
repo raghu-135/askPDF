@@ -69,6 +69,9 @@ async def test_budget_steer_delivers_durable_command_before_releasing_resume(mon
     async def require_capability(*_args, **_kwargs):
         return None
 
+    async def align_product_owned_review_state(*_args, **_kwargs):
+        return task
+
     async def respond_to_budget_review(*_args, **_kwargs):
         return task, False, False
 
@@ -100,6 +103,7 @@ async def test_budget_steer_delivers_durable_command_before_releasing_resume(mon
     )
     monkeypatch.setattr(agent_tasks, "_owned_task", owned_task)
     monkeypatch.setattr(agent_tasks.repository, "get_task_run", get_task_run)
+    monkeypatch.setattr(agent_tasks.repository, "align_product_owned_review_state", align_product_owned_review_state)
     monkeypatch.setattr(agent_tasks, "require_capability", require_capability)
     monkeypatch.setattr(agent_tasks, "get_runtime_registry", lambda: None)
     monkeypatch.setattr(agent_tasks.repository, "respond_to_budget_review", respond_to_budget_review)

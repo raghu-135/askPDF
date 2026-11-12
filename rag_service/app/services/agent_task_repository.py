@@ -27,7 +27,10 @@ from app.db.models_sqlmodel import (
 )
 from app.models.deep_research import AgentTaskStatus, DeepResearchPlanProposal
 from app.time_utils import parse_datetime_utc, utc_now
-from app.product_orchestration.interrupts import product_owned_review_pending
+from app.product_orchestration.interrupts import (
+    PRODUCT_OWNED_REVIEW_RESPONSE_OPERATIONS,
+    product_owned_review_pending,
+)
 from app.product_orchestration.trace_details import sanitize_trace_detail
 from app.product_orchestration.trace_payloads import append_runtime_event_to_debug_payload
 from runtime_protocol.contracts import TERMINAL_RUNTIME_EVENT_KINDS
@@ -2195,6 +2198,41 @@ async def finalize_reconciled_runtime_task(
                     session, task, "task.runtime_projection_reconciled", agent_run_id=run_id,
                     payload={"delta_event_id": delta_event_id},
                 )
+        await session.refresh(task)
+        return task
+
+
+async def align_product_owned_review_state(task_id: str, run_id: str) -> AgentTask:
+    """Repair task/run status when a product-owned review interrupt is pending."""
+
+    async with async_session_maker() as session:
+        async with session.begin():
+            task = (await session.execute(select(AgentTask).where(
+                AgentTask.id == task_id,
+            ).with_for_update())).scalar_one_or_none()
+            run = (await session.execute(select(AgentRun).where(
+                AgentRun.id == run_id, AgentRun.task_id == task_id,
+            ).with_for_update())).scalar_one_or_none()
+            if task is None or run is None:
+                raise AgentTaskConflict("task_run_missing", "Agent task run not found")
+            pending = dict(run.pending_interrupt_json or {})
+            if (
+                pending.get("status") != "pending"
+                or str(pending.get("response_operation") or "") not in PRODUCT_OWNED_REVIEW_RESPONSE_OPERATIONS
+            ):
+                return task
+            changed = False
+            if run.status != AgentRunStatus.AWAITING_HUMAN.value:
+                run.status = AgentRunStatus.AWAITING_HUMAN.value
+                changed = True
+            if task.status != AgentTaskStatus.AWAITING_APPROVAL.value or task.active_run_id != run.id:
+                task.status = AgentTaskStatus.AWAITING_APPROVAL.value
+                task.active_run_id = run.id
+                task.lease_owner = None
+                task.lease_expires_at = None
+                task.current_phase = task.current_phase or "checkpointed_interrupt"
+                task.version += 1
+                changed = True
         await session.refresh(task)
         return task
 

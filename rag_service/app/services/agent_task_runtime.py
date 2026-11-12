@@ -926,6 +926,17 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
             })
         result = result_to_product_payload(runtime_result)
+        evidence_fields: dict[str, Any] = {}
+        manifest = result.get("task_evidence_manifest")
+        if isinstance(manifest, list) and manifest:
+            evidence_fields["task_evidence_manifest"] = [
+                dict(value) for value in manifest if isinstance(value, Mapping)
+            ]
+        gaps = result.get("task_incomplete_reasons") or result.get("task_evidence_gaps")
+        if isinstance(gaps, list) and gaps:
+            evidence_fields["task_evidence_gaps"] = [str(value) for value in gaps if str(value).strip()]
+        if evidence_fields:
+            await repository.update_run_metadata_fields(run.id, evidence_fields)
         canonical_task_result = dict(result.get("runtime_task_result") or {})
         # Some adapters expose usage on the neutral result envelope while
         # older/native bridges only put it on task_result.  Product budget
@@ -1162,6 +1173,7 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 # The projector already committed the run/task interrupt state and
                 # matching product event atomically.  Trace/metric persistence is
                 # deliberately independent and must not repeat those mutations.
+                task = await tasks.align_product_owned_review_state(task.id, run.id)
                 await repository.update_run_observability(
                     run.id,
                     metrics_json=metrics,
