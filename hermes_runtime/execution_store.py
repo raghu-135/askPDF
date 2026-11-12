@@ -86,6 +86,7 @@ class HermesExecutionStore:
         "terminal_event_id",
         "terminal_result",
         "continuation",
+        "cancel_requested",
     })
 
     def __init__(self, path: str | None = None) -> None:
@@ -117,10 +118,15 @@ class HermesExecutionStore:
             if not isinstance(run_id, str) or not isinstance(raw_record, Mapping):
                 raise HermesStoreLoadError("Hermes execution journal contains an invalid record")
             record = dict(raw_record)
+            HermesExecutionStore._normalize_record(record)
             self._validate_record(run_id, record)
             loaded[run_id] = record
 
         self.records = loaded
+
+    @classmethod
+    def _normalize_record(cls, record: dict[str, Any]) -> None:
+        record.setdefault("cancel_requested", False)
 
     @classmethod
     def _validate_record(cls, run_id: str, record: Mapping[str, Any]) -> None:
@@ -192,6 +198,7 @@ class HermesExecutionStore:
         record = {
             "run_id": run_id,
             "status": "queued",
+            "cancel_requested": False,
             "events": [],
             # Execution grants are short-lived bearer capabilities.  They are
             # intentionally excluded from the durable journal; recovery must
@@ -272,12 +279,28 @@ class HermesExecutionStore:
         snapshot = copy.deepcopy(record)
         appended = self._append_frame(run_id, frame)
         record["status"] = status
+        record["cancel_requested"] = False
         try:
             self._save()
         except Exception:
             self.records[run_id] = snapshot
             raise
         return appended
+
+    def request_cancel(self, run_id: str) -> dict[str, Any]:
+        record = self.records.get(run_id)
+        if record is None:
+            return {"status": "unknown", "run_id": run_id}
+        status = str(record.get("status") or "")
+        if status in {"completed", "failed", "cancelled"} or record.get("terminal_event_id"):
+            return {"status": status or "unknown", "run_id": run_id, "terminal": True}
+        record["cancel_requested"] = True
+        self._save()
+        return {"status": status or "running", "run_id": run_id, "terminal": False}
+
+    def is_cancel_requested(self, run_id: str) -> bool:
+        record = self.records.get(run_id)
+        return bool(record and record.get("cancel_requested") is True)
 
     def fail_in_memory(self, run_id: str, frame: str) -> None:
         """Terminate live subscribers when durable storage is unavailable."""

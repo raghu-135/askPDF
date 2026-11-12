@@ -233,3 +233,20 @@ def test_hermes_store_failed_finalize_rolls_back_to_nonterminal_record(tmp_path:
         store.finalize("run-write-failure", frame, status="failed")
     assert store.records["run-write-failure"]["status"] == "running"
     assert store.records["run-write-failure"].get("terminal_event_id") is None
+
+
+def test_hermes_store_tracks_cancel_requests(tmp_path: Path) -> None:
+    store = HermesExecutionStore(str(tmp_path / "lifecycle.json"))
+    store.create("run-controls", {"request": {"run_id": "run-controls"}})
+    store.update("run-controls", status="running")
+
+    cancel = store.request_cancel("run-controls")
+    assert cancel["terminal"] is False
+    assert store.is_cancel_requested("run-controls") is True
+
+    store.finalize(
+        "run-controls",
+        _gateway_frame("run-controls", 1, "run.cancelled", terminal=True, result={"status": "cancelled"}),
+        status="cancelled",
+    )
+    assert store.records["run-controls"]["cancel_requested"] is False

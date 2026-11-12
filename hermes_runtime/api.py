@@ -316,6 +316,36 @@ def _failed_runtime_result(
     return result
 
 
+def _cancelled_runtime_result(
+    continuation: Mapping[str, Any] | None,
+    *,
+    boundary_delta: Mapping[str, Any] | None = None,
+    reason: str = "cancelled_by_user",
+) -> dict[str, Any]:
+    delta = dict(boundary_delta or {})
+    error = {
+        "code": "run_cancelled",
+        "message": "Hermes run cancelled",
+        "retryable": False,
+        "details": {"reason": reason},
+    }
+    result: dict[str, Any] = {
+        "status": "cancelled",
+        "error": error,
+        "orchestration_delta": {
+            **delta,
+            "budget_usage": {},
+            "artifacts": [],
+            "pending_interrupt": {"operation": "clear"},
+            "result": {"status": "cancelled", "error": error},
+            "correction_outcomes": [],
+        },
+    }
+    if continuation is not None:
+        result["continuation"] = continuation
+    return result
+
+
 def _recovery_payload(record: Mapping[str, Any]) -> dict[str, Any]:
     """Copy a durable record and restore its upstream binding into the request."""
     payload = copy.deepcopy(dict(record.get("payload") or {}))
@@ -939,6 +969,23 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
             if item.get("source_event_id")
         }
 
+        def lifecycle_preempt_frames() -> tuple[list[str], str | None]:
+            nonlocal sequence, terminal_seen
+            if state["store"].is_cancel_requested(run_id):
+                sequence = state["store"].next_sequence(run_id)
+                event = _neutral_event(
+                    run_id,
+                    sequence,
+                    "run.cancelled",
+                    {"reason": "cancelled_by_user"},
+                    terminal=True,
+                    continuation=continuation,
+                )
+                result = _cancelled_runtime_result(continuation, boundary_delta=boundary_delta)
+                terminal_seen = True
+                return [_sse(event, result)], "cancelled"
+            return [], None
+
         def process_frame(frame_event_name: str, frame_data: list[str], *, output_seen: bool) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
             nonlocal sequence, terminal_seen, session_id, active_approval_id
             try:
@@ -1414,6 +1461,11 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     data: list[str] = []
                     output_seen = False
                     async for line in events_response.aiter_lines():
+                        preempt_frames, preempt_kind = lifecycle_preempt_frames()
+                        if preempt_kind:
+                            for frame in preempt_frames:
+                                yield frame
+                            return
                         if not neutral_request.get("task_id") and time.monotonic() >= deadline:
                             raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes execution exceeded the configured duration"))
                         if line == "":
@@ -1801,6 +1853,41 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                 yield frame
         return StreamingResponse(continued(), media_type="text/event-stream")
 
+    async def _materialize_gateway_cancellation(run_id: str, *, reason: str = "cancelled_by_user") -> bool:
+        record = state["store"].records.get(run_id)
+        if record is None or record.get("terminal_event_id"):
+            return False
+        continuation = record.get("continuation") if isinstance(record.get("continuation"), Mapping) else None
+        sequence = state["store"].next_sequence(run_id)
+        event = _neutral_event(
+            run_id,
+            sequence,
+            "run.cancelled",
+            {"reason": reason},
+            terminal=True,
+            continuation=continuation,
+        )
+        boundary_delta = {
+            "event_id": f"{run_id}:{sequence}",
+            "attempt_id": f"{run_id}:attempt:1",
+            "operation_id": "hermes_session",
+            "idempotency_key": f"task-delta:{run_id}:cancelled",
+            "observed_task_version": 0,
+            "observed_plan_revision": 0,
+            "plan_changes": [],
+            "todo_changes": [],
+            "subagent_changes": [],
+        }
+        frame = _sse(event, _cancelled_runtime_result(continuation, boundary_delta=boundary_delta, reason=reason))
+        task = state["active"].get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        if not state["store"].finalize(run_id, frame, status="cancelled"):
+            return False
+        return True
+
     @app.post("/v1/runs/{run_id}/cancel")
     async def cancel(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
         retirement_held = False
@@ -1818,6 +1905,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     },
                 )
             payload = payload or {}
+            state["store"].request_cancel(run_id)
             upstream_run_id = _upstream_run_id(run_id, payload)
             binding = _binding(payload)
             session_id = ((binding or {}).get("payload") or {}).get("session_id")
@@ -1849,6 +1937,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     ),
                     request_id=request.headers.get("x-request-id"),
                 )
+            materialized = await _materialize_gateway_cancellation(run_id)
             profile_manager.retire(str(runtime_profile or ""))
             return _envelope(
                 status="ok",
@@ -1856,7 +1945,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                 result={
                     "run_id": run_id,
                     "upstream_run_id": upstream_run_id,
-                    "status": "cancelled" if stop_result["status"] == "cancelled" else "already_terminal",
+                    "status": "cancelled" if materialized or stop_result["status"] == "cancelled" else "already_terminal",
                     "upstream_status": stop_result["status"],
                 },
             )
