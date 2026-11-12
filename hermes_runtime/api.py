@@ -16,7 +16,6 @@ import math
 import os
 import re
 import time
-import uuid
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
@@ -339,44 +338,6 @@ def _cancelled_runtime_result(
             "artifacts": [],
             "pending_interrupt": {"operation": "clear"},
             "result": {"status": "cancelled", "error": error},
-            "correction_outcomes": [],
-        },
-    }
-    if continuation is not None:
-        result["continuation"] = continuation
-    return result
-
-
-def _task_pause_runtime_result(
-    continuation: Mapping[str, Any] | None,
-    *,
-    boundary_delta: Mapping[str, Any] | None = None,
-    interrupt_id: str,
-    pause_request_id: str | None,
-) -> dict[str, Any]:
-    delta = dict(boundary_delta or {})
-    interruption = {
-        "interrupt_id": interrupt_id,
-        "type": "task_pause",
-        "kind": "pause",
-        "response_operation": "run.resume",
-        "allowed_actions": ["approve", "resume"],
-        "default_action": "approve",
-        "checkpoint_resume": True,
-        "title": "Task paused",
-        "description": "Resume to continue deep research.",
-        "pause_request_id": pause_request_id,
-    }
-    result: dict[str, Any] = {
-        "status": "awaiting_human",
-        "interruption": interruption,
-        "checkpoint_boundary_available": True,
-        "orchestration_delta": {
-            **delta,
-            "budget_usage": {},
-            "artifacts": [],
-            "pending_interrupt": {"operation": "set", "value": interruption},
-            "result": {"status": "awaiting_human"},
             "correction_outcomes": [],
         },
     }
@@ -825,13 +786,6 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         "confirmation": "bounded",
                         "terminal_states": ["cancelled"],
                     },
-                    "task.pause": {
-                        "support": "native", "owner": "runtime", "enabled": True,
-                        "requires_runtime_binding": True,
-                        "modes": ["cooperative"],
-                        "confirmation": "bounded",
-                        "terminal_states": ["interrupted"],
-                    },
                     "run.cleanup": {
                         "support": "unsupported", "owner": "runtime", "enabled": False,
                         "disabled_reason": "runtime_capability_unsupported",
@@ -841,9 +795,8 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         "requires_runtime_binding": True,
                     },
                     "run.resume": {
-                        "support": "native", "owner": "runtime", "enabled": True,
-                        "requires_runtime_binding": True,
-                        "requires_checkpoint_boundary": True,
+                        "support": "unsupported", "owner": "runtime", "enabled": False,
+                        "disabled_reason": "runtime_capability_unsupported",
                     },
                     "run.start": {
                         "support": "native", "owner": "runtime", "enabled": True,
@@ -872,7 +825,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     "artifact_inheritance": "valid_artifacts",
                     "supports_orchestration_delta": True,
                     "required_input_fields": ["task_context", "resolved_spec"],
-                    "supports_pause_resume": True,
+                    "supports_pause_resume": False,
                     "supports_course_correction": False,
                     "budget_boundary_owner": "product",
                     "grounding_owner": "product",
@@ -1031,33 +984,6 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                 result = _cancelled_runtime_result(continuation, boundary_delta=boundary_delta)
                 terminal_seen = True
                 return [_sse(event, result)], "cancelled"
-            if state["store"].is_pause_requested(run_id):
-                token = state["store"].pause_request_token(run_id)
-                interrupt_id = f"{run_id}:pause:{uuid.uuid4().hex}"
-                pause_event = _neutral_event(
-                    run_id,
-                    sequence,
-                    "run.paused",
-                    {"status": "awaiting_human", "type": "task_pause"},
-                    continuation=continuation,
-                )
-                sequence += 1
-                pause_result = _task_pause_runtime_result(
-                    continuation,
-                    boundary_delta=boundary_delta,
-                    interrupt_id=interrupt_id,
-                    pause_request_id=token,
-                )
-                checkpoint = _neutral_event(
-                    run_id,
-                    sequence,
-                    "interrupt.requested",
-                    {"interrupt_id": interrupt_id, "type": "task_pause"},
-                    continuation=continuation,
-                )
-                sequence += 1
-                state["store"].consume_pause_request(run_id, token)
-                return [_sse(pause_event), _sse(checkpoint, pause_result)], "paused"
             return [], None
 
         def process_frame(frame_event_name: str, frame_data: list[str], *, output_seen: bool) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
@@ -1301,7 +1227,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                             "artifact_inheritance": "valid_artifacts",
                             "supports_orchestration_delta": True,
                             "required_input_fields": ["task_context", "resolved_spec"],
-                            "supports_pause_resume": True,
+                            "supports_pause_resume": False,
                             "supports_course_correction": False,
                             "budget_boundary_owner": "product",
                             "grounding_owner": "product",
@@ -2028,19 +1954,6 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
         finally:
             if retirement_held:
                 state["profile_retirement_holds"].discard(run_id)
-
-    @app.post("/v1/runs/{run_id}/pause")
-    async def pause(run_id: str, payload: Mapping[str, Any], request: Request) -> dict[str, Any]:
-        request_payload = payload.get("request") or {}
-        if str(request_payload.get("run_id") or run_id) != run_id:
-            raise HTTPException(status_code=400, detail="run_id does not match request path")
-        outcome = state["store"].request_pause(run_id)
-        if outcome.get("status") == "unknown":
-            raise HTTPException(
-                status_code=404,
-                detail=_error("runtime_run_not_found", "Runtime run not found", retryable=False),
-            )
-        return _envelope(status="ok", request_id=request.headers.get("x-request-id"), result=outcome)
 
     @app.post("/v1/runs/{run_id}/inspect")
     async def inspect(run_id: str, request: Request, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:

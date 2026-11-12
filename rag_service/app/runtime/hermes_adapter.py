@@ -41,8 +41,6 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         RuntimeOperationId.RUN_CANCEL,
         RuntimeOperationId.RUN_APPROVAL_RESPOND,
         RuntimeOperationId.RUN_INSPECT_STATE,
-        RuntimeOperationId.TASK_PAUSE,
-        RuntimeOperationId.RUN_RESUME,
     })
 
     async def prepare_request(
@@ -243,10 +241,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
         return validation_from_dict(value["validation"])
 
     async def resume(self, request: AgentRuntimeRequest, *, interrupt: Mapping[str, Any], context: Any, event_sink: Any = None) -> AgentRuntimeResult:
-        result = await self.continue_run(request, context=context, event_sink=event_sink)
-        if result is None:
-            raise RuntimeError("runtime_continuation_missing", "Hermes resume did not return a continuation result")
-        return result
+        self._unsupported("run.resume", "Hermes resume is not supported by the pinned runs API")
 
     async def continue_run(self, request: AgentRuntimeRequest, *, context: Any, event_sink: Any = None) -> AgentRuntimeResult | None:
         self._ensure_enabled()
@@ -273,18 +268,6 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 raise RuntimeError("runtime_response_invalid", "Hermes returned an invalid terminal cancellation status")
             result["status"] = status
         return result
-
-    async def pause(self, request: AgentRuntimeRequest) -> Mapping[str, Any]:
-        self._ensure_enabled()
-        if request.continuation is None or not request.continuation.payload.get("upstream_run_id"):
-            raise RuntimeError("runtime_binding_missing", "Hermes pause requires an upstream run binding")
-        value = await self.transport._json(
-            "POST",
-            f"/v1/runs/{request.run_id}/pause",
-            request=request,
-            json=json_payload({"request": request.to_dict(), "continuation": request.continuation.to_dict()}),
-        )
-        return dict(value or {})
 
     async def respond_to_approval(self, request: AgentRuntimeRequest, response: RuntimeApprovalResponse) -> Mapping[str, Any]:
         self._ensure_enabled()

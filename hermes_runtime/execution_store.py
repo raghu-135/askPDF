@@ -14,7 +14,6 @@ import copy
 import hashlib
 import json
 import os
-import uuid
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
@@ -88,9 +87,6 @@ class HermesExecutionStore:
         "terminal_result",
         "continuation",
         "cancel_requested",
-        "pause_requested",
-        "pause_request_id",
-        "pause_request_handled_id",
     })
 
     def __init__(self, path: str | None = None) -> None:
@@ -131,9 +127,6 @@ class HermesExecutionStore:
     @classmethod
     def _normalize_record(cls, record: dict[str, Any]) -> None:
         record.setdefault("cancel_requested", False)
-        record.setdefault("pause_requested", False)
-        record.setdefault("pause_request_id", None)
-        record.setdefault("pause_request_handled_id", None)
 
     @classmethod
     def _validate_record(cls, run_id: str, record: Mapping[str, Any]) -> None:
@@ -206,9 +199,6 @@ class HermesExecutionStore:
             "run_id": run_id,
             "status": "queued",
             "cancel_requested": False,
-            "pause_requested": False,
-            "pause_request_id": None,
-            "pause_request_handled_id": None,
             "events": [],
             # Execution grants are short-lived bearer capabilities.  They are
             # intentionally excluded from the durable journal; recovery must
@@ -290,8 +280,6 @@ class HermesExecutionStore:
         appended = self._append_frame(run_id, frame)
         record["status"] = status
         record["cancel_requested"] = False
-        record["pause_requested"] = False
-        record["pause_request_id"] = None
         try:
             self._save()
         except Exception:
@@ -307,54 +295,12 @@ class HermesExecutionStore:
         if status in {"completed", "failed", "cancelled"} or record.get("terminal_event_id"):
             return {"status": status or "unknown", "run_id": run_id, "terminal": True}
         record["cancel_requested"] = True
-        record["pause_requested"] = False
-        record["pause_request_id"] = None
         self._save()
         return {"status": status or "running", "run_id": run_id, "terminal": False}
-
-    def request_pause(self, run_id: str) -> dict[str, Any]:
-        record = self.records.get(run_id)
-        if record is None:
-            return {"status": "unknown", "run_id": run_id}
-        status = str(record.get("status") or "")
-        if status in {"completed", "failed", "cancelled", "awaiting_human"} or record.get("terminal_event_id"):
-            return {"status": status or "unknown", "run_id": run_id, "no_op": True}
-        if record.get("pause_requested") is True:
-            return {"status": "pause_requested", "run_id": run_id, "run_status": status}
-        record["pause_requested"] = True
-        record["pause_request_id"] = uuid.uuid4().hex
-        self._save()
-        return {"status": "pause_requested", "run_id": run_id, "run_status": status}
 
     def is_cancel_requested(self, run_id: str) -> bool:
         record = self.records.get(run_id)
         return bool(record and record.get("cancel_requested") is True)
-
-    def is_pause_requested(self, run_id: str) -> bool:
-        record = self.records.get(run_id)
-        return bool(record and record.get("pause_requested") is True)
-
-    def pause_request_token(self, run_id: str) -> str | None:
-        record = self.records.get(run_id)
-        if not record or record.get("pause_requested") is not True:
-            return None
-        token = record.get("pause_request_id")
-        return str(token) if token else None
-
-    def consume_pause_request(self, run_id: str, token: str | None) -> bool:
-        record = self.records.get(run_id)
-        if not record:
-            return False
-        if record.get("pause_requested") is not True:
-            return False
-        expected = record.get("pause_request_id")
-        if token is None or expected != token:
-            return False
-        record["pause_requested"] = False
-        record["pause_request_id"] = None
-        record["pause_request_handled_id"] = token
-        self._save()
-        return True
 
     def fail_in_memory(self, run_id: str, frame: str) -> None:
         """Terminate live subscribers when durable storage is unavailable."""
