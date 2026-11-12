@@ -330,6 +330,18 @@ def test_resume_recovers_open_tool_and_approval_identities():
     assert hermes_api._event_correlations(events) == ({"search_documents": "tool-1"}, "approval-1")
 
 
+def test_runtime_usage_snapshot_counts_tokens_and_model_calls():
+    snapshot = hermes_api._runtime_usage_snapshot(
+        {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "cost": 0.0007},
+        operation_id="hermes-operation",
+        started_tool_calls=set(),
+        active_runtime_ms=100,
+    )
+    assert snapshot["model_tokens"] == 15
+    assert snapshot["model_calls"] == 1
+    assert snapshot["provider_cost_usd"] == pytest.approx(0.0007)
+
+
 def test_checked_in_event_fixtures_are_data_only_and_match_the_pin():
     fixture = json.loads((Path(__file__).parent / "fixtures" / "hermes" / "run_events.json").read_text())
     assert fixture["hermes_revision"] == HERMES_REVISION

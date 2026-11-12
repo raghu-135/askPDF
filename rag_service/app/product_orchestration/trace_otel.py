@@ -390,8 +390,21 @@ def _first_number(*values: Any) -> int:
     return 0
 
 
-def _llm_usage_metrics(spans: List[Dict[str, Any]]) -> Dict[str, int]:
-    metrics = {
+def _first_float(*values: Any) -> float | None:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if number >= 0:
+            return number
+    return None
+
+
+def _llm_usage_metrics(spans: List[Dict[str, Any]]) -> Dict[str, int | float]:
+    metrics: Dict[str, int | float] = {
         "llm_span_count": 0,
         "llm_token_count_prompt": 0,
         "llm_token_count_completion": 0,
@@ -399,6 +412,7 @@ def _llm_usage_metrics(spans: List[Dict[str, Any]]) -> Dict[str, int]:
         "llm_token_count_reasoning": 0,
         "llm_token_count_cached": 0,
         "llm_retry_count": 0,
+        "llm_provider_cost_usd": 0.0,
     }
     for span in spans:
         if span.get("kind") != OpenInferenceSpanKindValues.LLM.value:
@@ -411,4 +425,9 @@ def _llm_usage_metrics(spans: List[Dict[str, Any]]) -> Dict[str, int]:
         metrics["llm_token_count_total"] += _first_number(attributes.get(SpanAttributes.LLM_TOKEN_COUNT_TOTAL))
         metrics["llm_token_count_reasoning"] += _first_number(attributes.get("llm.token_count.reasoning"))
         metrics["llm_token_count_cached"] += _first_number(attributes.get("llm.token_count.cached"))
+        provider_cost = _first_float(attributes.get("llm.provider_cost_usd"))
+        if provider_cost is not None:
+            metrics["llm_provider_cost_usd"] += provider_cost
+    if not metrics["llm_provider_cost_usd"]:
+        metrics.pop("llm_provider_cost_usd", None)
     return {key: value for key, value in metrics.items() if value}

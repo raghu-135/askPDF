@@ -28,7 +28,7 @@ from app.services.agent_task_budgets import exhausted_dimensions, normalize_budg
 from app.runtime.behavior import continuation_is_linked
 from app.services.content_store import get_content_store, task_artifact_content_key
 from app.time_utils import utc_now
-from runtime_protocol.contracts import TaskOrchestrationDelta
+from runtime_protocol.contracts import RuntimeUsageSnapshot, TaskOrchestrationDelta
 from runtime_protocol.research_gaps import (
     dedupe_critic_issues,
     filter_stale_index_readiness_gaps,
@@ -170,14 +170,51 @@ def _merge_budget(
             "tool_calls": "tool_calls",
             "active_runtime_ms": "elapsed_active_ms",
         }
-        for source_key in incoming.get("measured_dimensions") or ():
-            target_key = dimension_map.get(str(source_key))
-            value = incoming.get(source_key)
-            if target_key is None or value is None:
+        measured = [
+            str(item)
+            for item in (incoming.get("measured_dimensions") or ())
+            if str(item) in dimension_map
+        ]
+        if not measured:
+            measured = [
+                source_key
+                for source_key in dimension_map
+                if incoming.get(source_key) is not None
+                or (
+                    source_key == "model_tokens"
+                    and any(incoming.get(key) is not None for key in ("total_tokens", "input_tokens", "output_tokens"))
+                )
+            ]
+        raw_tokens = incoming.get("model_tokens", incoming.get("total_tokens"))
+        if raw_tokens is None and any(incoming.get(key) is not None for key in ("input_tokens", "output_tokens")):
+            raw_tokens = int(incoming.get("input_tokens") or 0) + int(incoming.get("output_tokens") or 0)
+        for source_key in measured:
+            target_key = dimension_map[str(source_key)]
+            if source_key == "model_tokens" and incoming.get("model_tokens") is None and raw_tokens is not None:
+                value = raw_tokens
+            else:
+                value = incoming.get(source_key)
+            if value is None:
                 continue
             amount = max(0, int(value or 0))
-            existing["tranche_usage"][target_key] = int(existing["tranche_usage"].get(target_key) or 0) + amount
-            existing["lifetime_usage"][target_key] = int(existing["lifetime_usage"].get(target_key) or 0) + amount
+            # Hermes emits one cumulative operation snapshot per delta, not
+            # LangGraph-style additive tranche increments.
+            existing["tranche_usage"][target_key] = max(
+                int(existing["tranche_usage"].get(target_key) or 0),
+                amount,
+            )
+            existing["lifetime_usage"][target_key] = max(
+                int(existing["lifetime_usage"].get(target_key) or 0),
+                amount,
+            )
+        token_usage = int(existing["tranche_usage"].get("model_tokens") or 0)
+        if token_usage > 0 and int(existing["tranche_usage"].get("model_calls") or 0) <= 0:
+            inferred_calls = max(1, int(incoming.get("model_calls") or 0))
+            existing["tranche_usage"]["model_calls"] = inferred_calls
+            existing["lifetime_usage"]["model_calls"] = max(
+                int(existing["lifetime_usage"].get("model_calls") or 0),
+                inferred_calls,
+            )
         existing["boundary"] = None
         return existing
     candidate = normalize_budget_state(incoming, limits)
@@ -382,15 +419,7 @@ async def apply_neutral_task_completion(
     """Atomically project a non-delta runtime's usage and product disposition."""
 
     usage = dict(task_result.get("usage") or {})
-    canonical_usage = {
-        "operation_id": str(usage.get("operation_id") or operation_id),
-        "model_tokens": max(0, int(usage.get("model_tokens") or 0)),
-        "model_calls": max(0, int(usage.get("model_calls") or 0)) if usage.get("model_calls") is not None else None,
-        "tool_calls": max(0, int(usage.get("tool_calls") or 0)) if usage.get("tool_calls") is not None else None,
-        "active_runtime_ms": max(0, int(usage.get("active_runtime_ms") or 0)) if usage.get("active_runtime_ms") is not None else None,
-        "measured_dimensions": sorted(set(str(value) for value in usage.get("measured_dimensions") or [])),
-        "cumulative": True,
-    }
+    canonical_usage = RuntimeUsageSnapshot.from_mapping(usage, operation_id=operation_id).to_dict()
     if canonical_usage["operation_id"] != operation_id:
         raise RuntimeTaskProjectionConflict("runtime usage targets a different operation")
     fingerprint = hashlib.sha256(json.dumps(
@@ -430,18 +459,7 @@ async def apply_neutral_task_completion(
                 raise RuntimeTaskProjectionConflict("runtime completion identity was replayed with different content")
 
             limits = dict((task.config_json or {}).get("limits") or {})
-            budget = normalize_budget_state(task.budgets_json, limits)
-            dimension_map = {
-                "model_tokens": "model_tokens", "model_calls": "model_calls",
-                "tool_calls": "tool_calls", "active_runtime_ms": "elapsed_active_ms",
-            }
-            for source_key in canonical_usage["measured_dimensions"]:
-                target_key = dimension_map.get(source_key)
-                value = canonical_usage.get(source_key)
-                if target_key is None or value is None:
-                    continue
-                budget["tranche_usage"][target_key] = int(budget["tranche_usage"].get(target_key) or 0) + int(value)
-                budget["lifetime_usage"][target_key] = int(budget["lifetime_usage"].get(target_key) or 0) + int(value)
+            budget = _merge_budget(task.budgets_json, canonical_usage, limits)
 
             final_artifact_id: str | None = None
             provisional_answer = str(task_result.get("text") or "").strip()

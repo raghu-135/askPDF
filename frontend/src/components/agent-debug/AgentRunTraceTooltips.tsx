@@ -142,6 +142,7 @@ export const TraceLlmUsageTooltip = ({ metrics }: { metrics: Record<string, any>
     ['Cached tokens', metrics.llm_token_count_cached],
     ['Total tokens', metrics.llm_token_count_total],
     ['Retries', metrics.llm_retry_count],
+    ['Provider cost (USD)', metrics.llm_provider_cost_usd],
   ].filter(([, value]) => Number.isFinite(Number(value)) && Number(value) > 0);
 
   return (

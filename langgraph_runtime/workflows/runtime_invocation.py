@@ -18,6 +18,8 @@ from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW
 from langgraph_runtime.workflows.events import append_node_event, append_tool_event
 from langgraph_runtime.workflows.evidence import state_evidence_refs
 from langgraph_runtime.workflows.node_catalog import node_type_capabilities
+from runtime_protocol.provider_usage import usage_with_provider_cost
+
 from langgraph_runtime.workflows.state import (
     RouterRagState,
     runtime_node_capabilities,
@@ -68,14 +70,14 @@ def _progress_context(config: RunnableConfig, *, state: Mapping[str, Any], node:
     }
 
 
-def _usage_summary(response: Any) -> Dict[str, int]:
+def _usage_summary(response: Any) -> Dict[str, Any]:
     if isinstance(response, Mapping) and response.get("raw") is not None:
         response = response.get("raw")
     candidates = [getattr(response, "usage_metadata", None)]
     metadata = getattr(response, "response_metadata", None)
     if isinstance(metadata, dict):
         candidates.extend([metadata.get("token_usage"), metadata.get("usage")])
-    usage: Dict[str, int] = {}
+    usage: Dict[str, Any] = {}
     key_map = {
         "input_tokens": "prompt_tokens",
         "prompt_tokens": "prompt_tokens",
@@ -96,6 +98,8 @@ def _usage_summary(response: Any) -> Dict[str, int]:
             value = getattr(candidate, source, None)
             if isinstance(value, (int, float)) and target not in usage:
                 usage[target] = int(value)
+    if isinstance(metadata, dict):
+        usage = usage_with_provider_cost(usage, response_metadata=metadata)
     return usage
 
 
@@ -516,6 +520,7 @@ def llm_result_metadata(
         ),
     }
     token_counts = {key: value for key, value in token_counts.items() if value is not None}
+    provider_cost = usage_with_provider_cost(token_usage, response_metadata=response_metadata).get("cost")
 
     finish_reason = response_metadata.get("finish_reason") or token_usage.get("finish_reason")
     if finish_reason is None:
@@ -534,6 +539,7 @@ def llm_result_metadata(
         "reasoning_preview": compact_preview(reasoning, limit=1800) if reasoning else None,
         "finish_reason": finish_reason,
         "output_truncated": True if output_was_truncated(finish_reason) else None,
+        "provider_cost_usd": float(provider_cost) if provider_cost is not None else None,
     }
     return {key: value for key, value in summary.items() if value not in (None, "", {}, [])}
 

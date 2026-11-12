@@ -18,7 +18,8 @@ import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from './a
 import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
 import AgentExecutionStatusIcon from './AgentExecutionStatusIcon';
 import { formatDurationMs } from '../../lib/formatDuration';
-import { TraceOperationsTooltip } from '../agent-debug/AgentRunTraceTooltips';
+import { aggregateProviderCostUsd, formatRunProviderCost } from '../../lib/run-provider-cost';
+import { TraceLlmUsageTooltip, TraceOperationsTooltip } from '../agent-debug/AgentRunTraceTooltips';
 import GenericTraceTimeline from '../agent-debug/GenericTraceTimeline';
 import TraceDiagnosticsPanel from '../agent-debug/TraceDiagnosticsPanel';
 import TraceVisualizationSlot from '../agent-debug/TraceVisualizationSlot';
@@ -229,6 +230,8 @@ function AgentExecutionView({
   const finalOutput = traceView.finalOutput;
   const memoryDebug = traceView.memory;
   const runDuration = formatDurationMs(Number(traceView.metrics.duration_ms));
+  const providerCostUsd = aggregateProviderCostUsd(traceView.metrics, traceView.models);
+  const providerCostLabel = providerCostUsd === null ? null : formatRunProviderCost(providerCostUsd);
   const operationLabels = useMemo(
     () => Object.fromEntries(traceView.operations.map((operation) => [operation.id, operation.label])),
     [traceView.operations],
@@ -278,6 +281,13 @@ function AgentExecutionView({
                 <Chip size="small" variant="outlined" label={traceView.route} aria-label={`Route: ${traceView.route}`} sx={{ height: 22 }} />
               )}
               {runDuration && <Chip size="small" variant="outlined" icon={<TimerOutlinedIcon />} label={runDuration} sx={{ height: 22 }} />}
+              {providerCostLabel ? (
+                <Tooltip title={<TraceLlmUsageTooltip metrics={traceView.metrics} />} arrow>
+                  <Chip size="small" variant="outlined" label={`Cost ${providerCostLabel}`} sx={{ height: 22 }} />
+                </Tooltip>
+              ) : !running ? (
+                <Chip size="small" variant="outlined" label="Cost unknown" sx={{ height: 22 }} />
+              ) : null}
               <Tooltip title={<TraceOperationsTooltip operations={traceView.operations} usedCount={traceView.usedOperationCount} availableCount={traceView.availableOperationCount} />} arrow>
                 <Chip aria-label={`${traceView.usedOperationCount} operations, ${traceView.operations.length} visits`} size="small" variant="outlined" icon={<AccountTreeOutlinedIcon />} label={`${traceView.usedOperationCount}o${traceView.operations.length !== traceView.usedOperationCount ? ` · ${traceView.operations.length}v` : ''}`} sx={{ height: 22 }} />
               </Tooltip>

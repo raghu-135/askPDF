@@ -49,9 +49,23 @@ from runtime_protocol import (
 from runtime_protocol.configuration import validate_runtime_environment
 from runtime_protocol.auth import PUBLIC_OPERATIONAL_PATHS, valid_bearer_token
 from runtime_protocol.contracts import RuntimeUsageSnapshot
+from runtime_protocol.provider_usage import provider_cost_usd
 
 
 logger = logging.getLogger(__name__)
+
+
+def _accumulate_native_usage(target: dict[str, Any], incoming: Mapping[str, Any] | None) -> None:
+    if not isinstance(incoming, Mapping):
+        return
+    for key in ("input_tokens", "output_tokens", "total_tokens", "model_tokens", "model_calls"):
+        raw = incoming.get(key)
+        if raw is None:
+            continue
+        target[key] = max(int(target.get(key) or 0), int(raw))
+    cost = provider_cost_usd(incoming)
+    if cost is not None:
+        target["provider_cost_usd"] = round(float(target.get("provider_cost_usd") or 0) + cost, 8)
 
 
 def _runtime_usage_snapshot(
@@ -79,7 +93,11 @@ def _runtime_usage_snapshot(
     if usage.get("model_calls") is not None:
         measured.append("model_calls")
     usage["measured_dimensions"] = measured
-    return RuntimeUsageSnapshot.from_mapping(usage, operation_id=operation_id).to_dict()
+    snapshot = RuntimeUsageSnapshot.from_mapping(usage, operation_id=operation_id).to_dict()
+    provider_cost = provider_cost_usd(usage)
+    if provider_cost is not None:
+        snapshot["provider_cost_usd"] = provider_cost
+    return snapshot
 
 def _document_tool_discovery_directive(mcp_server_name: str) -> str:
     return f"""Hermes bridge requirement for this document task:
@@ -909,6 +927,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
             "last_tool_call_id": None,
         }
         started_tool_calls: set[str] = set()
+        cumulative_native_usage: dict[str, Any] = {}
         active_tool_calls, active_approval_id = _event_correlations(store.records[run_id]["events"])
         consumed_upstream_events = {
             str(item.get("source_event_id"))
@@ -993,6 +1012,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     raise ValueError("Hermes approval response has no matching request")
                 event_payload = {**event_payload, "approval_id": active_approval_id}
                 active_approval_id = None
+            _accumulate_native_usage(cumulative_native_usage, event_payload.get("usage"))
             event_budget.observe(kind, output_delta)
             event = _neutral_event(
                 run_id,
@@ -1034,8 +1054,10 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         "response_operation": "run.approval.respond",
                         "runtime_approval_choices": ["once", "deny"],
                     }
+                approval_usage = dict(cumulative_native_usage)
+                _accumulate_native_usage(approval_usage, event_payload.get("usage"))
                 usage = _runtime_usage_snapshot(
-                    event_payload.get("usage"),
+                    approval_usage,
                     operation_id=operation_id,
                     started_tool_calls=started_tool_calls,
                     active_runtime_ms=int(round((time.monotonic() - operation_started_at) * 1000)),
@@ -1096,8 +1118,11 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         warnings.append({"code": "course_correction_unresolved", "details": {"correction_id": correction_id}})
                         gaps.append(f"course_correction:{correction_id}")
                 result_outcome = "completed_with_warnings" if status == "completed" and (warnings or gaps) else status
+                terminal_usage = dict(cumulative_native_usage)
+                _accumulate_native_usage(terminal_usage, output_mapping.get("usage"))
+                _accumulate_native_usage(terminal_usage, event_payload.get("usage"))
                 usage = _runtime_usage_snapshot(
-                    output_mapping.get("usage") or event_payload.get("usage"),
+                    terminal_usage,
                     operation_id=operation_id,
                     started_tool_calls=started_tool_calls,
                     active_runtime_ms=int(round((time.monotonic() - operation_started_at) * 1000)),

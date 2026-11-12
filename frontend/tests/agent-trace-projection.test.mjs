@@ -651,6 +651,14 @@ test('live parallel snapshots tolerate references outside the current event wind
   assert.equal(view.parallelGroups[0].members[0].status, 'completed');
 });
 
+test('live trace projection aggregates provider cost from llm.completed usage', () => {
+  const view = buildLiveTraceView([
+    { id: 1, event: 'llm.completed', data: { invocation_id: 'llm-1', operation_id: 'translate', visit_index: 1, status: 'completed', usage: { total_tokens: 20, cost: 0.0011 } } },
+    { id: 2, event: 'llm.completed', data: { invocation_id: 'llm-2', operation_id: 'translate', visit_index: 2, status: 'completed', usage: { total_tokens: 15, cost: 0.0009 } } },
+  ]);
+  assert.equal(view.metrics.llm_provider_cost_usd, 0.002);
+});
+
 test('live trace projection correlates model and tool lifecycle activity without sensitive payloads', () => {
   const view = buildLiveTraceView([
     { id: 1, event: 'operation.started', data: { operation_id: 'deep_task_planner', operation_type: 'deep_task_planner', visit_index: 1 } },
