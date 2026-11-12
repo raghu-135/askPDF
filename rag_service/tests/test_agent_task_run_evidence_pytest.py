@@ -31,6 +31,70 @@ def test_resolve_run_evidence_manifest_prefers_runtime_projection():
     assert gaps == ["missing_section"]
 
 
+def test_resolve_run_evidence_manifest_falls_back_to_persisted_artifacts():
+    run = SimpleNamespace(id="run-1", run_metadata_json={})
+    artifacts = [
+        SimpleNamespace(
+            id="artifact-1",
+            agent_run_id="run-1",
+            kind="tool_output",
+            validity="valid",
+            sha256="abc",
+            byte_size=12,
+            todo_id="todo-1",
+            media_type="text/plain",
+            provenance_json={"plan_revision": 1},
+            source_refs_json={"tools": []},
+        ),
+        SimpleNamespace(
+            id="artifact-2",
+            agent_run_id="other-run",
+            kind="tool_output",
+            validity="valid",
+            sha256="def",
+            byte_size=8,
+            todo_id=None,
+            media_type="text/plain",
+            provenance_json={},
+            source_refs_json={},
+        ),
+    ]
+
+    manifest, gaps = resolve_run_evidence_manifest(run, artifacts)
+
+    assert len(manifest) == 1
+    assert manifest[0]["id"] == "artifact-1"
+    assert gaps == []
+
+
+def test_resolve_run_evidence_manifest_falls_back_to_retrieval_sources():
+    run = SimpleNamespace(
+        id="run-1",
+        run_metadata_json={
+            "projection": {
+                "runtime_result": {
+                    "task_evidence_manifest": [],
+                    "document_sources": [
+                        {
+                            "source_id": "src_doc_chunk",
+                            "file_name": "sample.pdf",
+                            "file_hash": "abc123",
+                            "pages": [1],
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    manifest, gaps = resolve_run_evidence_manifest(run, artifacts=[])
+
+    assert len(manifest) == 1
+    assert manifest[0]["id"] == "src_doc_chunk"
+    assert manifest[0]["kind"] == "retrieval_source"
+    assert gaps == []
+
+
 def test_resolve_run_evidence_manifest_falls_back_to_final_report_provenance():
     run = SimpleNamespace(id="run-1", run_metadata_json={})
     artifacts = [
@@ -69,6 +133,11 @@ async def test_run_evidence_api_returns_projection_manifest(monkeypatch):
     monkeypatch.setattr(
         agent_tasks_api.repository,
         "list_artifacts",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        agent_tasks_api.AgentWorkflowRepository,
+        "list_run_events",
         AsyncMock(return_value=[]),
     )
 

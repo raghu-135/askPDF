@@ -258,9 +258,113 @@ def _gap_lines(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _manifest_from_retrieval_sources(runtime_result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Build display manifest entries from neutral runtime retrieval source lists."""
+
+    entries: list[dict[str, Any]] = []
+    for origin, key in (("document", "document_sources"), ("web", "web_sources")):
+        for source in runtime_result.get(key) or []:
+            if not isinstance(source, Mapping):
+                continue
+            source_id = str(
+                source.get("source_id")
+                or source.get("manifest_id")
+                or source.get("chunk_id")
+                or ""
+            ).strip()
+            if not source_id:
+                continue
+            entries.append({
+                "id": source_id,
+                "kind": "retrieval_source",
+                "source_id": source_id,
+                "file_hash": source.get("file_hash"),
+                "file_name": source.get("file_name") or source.get("title"),
+                "provenance": {"origin": origin, "pages": source.get("pages"), "score": source.get("score")},
+            })
+    return entries
+
+
+def _manifest_from_tool_events(
+    tool_events: list[Any] | None,
+    *,
+    run_events: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Synthesize manifest entries from persisted tool telemetry when artifacts were not staged."""
+
+    entries: list[dict[str, Any]] = []
+    candidates: list[Mapping[str, Any]] = []
+    for event in tool_events or []:
+        if isinstance(event, Mapping):
+            candidates.append(event)
+    for event in run_events or []:
+        if str(getattr(event, "kind", "") or "") != "tool.completed":
+            continue
+        payload = dict(getattr(event, "payload_json", None) or {})
+        if payload:
+            candidates.append(payload)
+    for payload in candidates:
+        tool_name = str(payload.get("tool_name") or "").strip()
+        if not tool_name:
+            continue
+        ok = payload.get("ok")
+        if ok is False:
+            continue
+        result_count = int(payload.get("result_count") or payload.get("source_count") or 0)
+        if ok is not True and result_count <= 0:
+            continue
+        entry_id = str(payload.get("tool_call_id") or payload.get("mcp_request_id") or "").strip()
+        if not entry_id:
+            continue
+        entries.append({
+            "id": entry_id,
+            "kind": "tool_output",
+            "tool_name": tool_name,
+            "result_count": result_count,
+            "evidence_type": payload.get("evidence_type"),
+            "provenance": {"origin": "tool_telemetry"},
+        })
+    return entries
+
+
+def _manifest_from_run_artifacts(artifacts: list[Any], run_id: str) -> list[dict[str, Any]]:
+    """Build a display manifest from persisted product artifacts for one run."""
+
+    if not run_id:
+        return []
+    entries: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        if str(getattr(artifact, "agent_run_id", "")) != run_id:
+            continue
+        if str(getattr(artifact, "validity", "")) != "valid":
+            continue
+        kind = str(getattr(artifact, "kind", ""))
+        if kind not in {"tool_output", "intermediate_report", "context_summary"}:
+            continue
+        artifact_id = str(getattr(artifact, "id", "") or "")
+        if not artifact_id:
+            continue
+        provenance = dict(getattr(artifact, "provenance_json", None) or {})
+        source_refs = dict(getattr(artifact, "source_refs_json", None) or {})
+        entries.append({
+            "id": artifact_id,
+            "artifact_id": artifact_id,
+            "kind": kind,
+            "sha256": getattr(artifact, "sha256", None),
+            "byte_size": getattr(artifact, "byte_size", None),
+            "todo_id": getattr(artifact, "todo_id", None),
+            "media_type": getattr(artifact, "media_type", None),
+            **({"source_refs": source_refs} if source_refs else {}),
+            **({"provenance": provenance} if provenance else {}),
+        })
+    return entries
+
+
 def resolve_run_evidence_manifest(
     run: Any,
     artifacts: list[Any] | None = None,
+    *,
+    run_events: list[Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Resolve display evidence from runtime projection, metadata, or legacy artifacts."""
 
@@ -281,6 +385,7 @@ def resolve_run_evidence_manifest(
         orchestration_result.get("task_evidence_manifest"),
         task_result.get("task_evidence_manifest"),
         task_result.get("evidence_manifest"),
+        task_result.get("artifacts"),
     ):
         for entry in _manifest_entries(source):
             entry_id = str(entry.get("id") or entry.get("artifact_id") or entry.get("source_id") or "")
@@ -290,9 +395,17 @@ def resolve_run_evidence_manifest(
             seen.add(dedupe_key)
             manifest.append(entry)
 
+    run_id = str(getattr(run, "id", "") or "")
+    if not manifest and artifacts:
+        for entry in _manifest_from_run_artifacts(artifacts, run_id):
+            entry_id = str(entry.get("id") or entry.get("artifact_id") or "")
+            if entry_id in seen:
+                continue
+            seen.add(entry_id)
+            manifest.append(entry)
+
     final_report = None
     if artifacts:
-        run_id = str(getattr(run, "id", "") or "")
         final_report = next(
             (
                 artifact
@@ -307,6 +420,18 @@ def resolve_run_evidence_manifest(
         provenance = dict(getattr(final_report, "provenance_json", None) or {})
         for entry in _manifest_entries(provenance.get("evidence_manifest")):
             entry_id = str(entry.get("id") or entry.get("artifact_id") or "")
+            dedupe_key = entry_id or str(hashlib.sha256(repr(sorted(entry.items())).encode()).hexdigest())
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            manifest.append(entry)
+
+    if not manifest:
+        for entry in (
+            *_manifest_from_retrieval_sources(runtime_result),
+            *_manifest_from_tool_events(runtime_result.get("tool_events"), run_events=run_events),
+        ):
+            entry_id = str(entry.get("id") or entry.get("artifact_id") or entry.get("source_id") or "")
             dedupe_key = entry_id or str(hashlib.sha256(repr(sorted(entry.items())).encode()).hexdigest())
             if dedupe_key in seen:
                 continue

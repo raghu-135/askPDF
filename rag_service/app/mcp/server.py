@@ -341,7 +341,9 @@ def get_http_app(*, allowed_tools: frozenset[str] | None = None, require_executi
             security_settings=TransportSecuritySettings(
                 allowed_hosts=[
                     "localhost",
+                    "localhost:8000",
                     "127.0.0.1",
+                    "127.0.0.1:8000",
                     "rag-service",
                     "rag-service:8000",
                     "host.docker.internal",

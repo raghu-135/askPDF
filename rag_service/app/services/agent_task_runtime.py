@@ -1120,6 +1120,13 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 ):
                     if key in result:
                         result[key] = replace_ids(result[key])
+            post_manifest = result.get("task_evidence_manifest")
+            if isinstance(post_manifest, list) and post_manifest:
+                await repository.update_run_metadata_fields(run.id, {
+                    "task_evidence_manifest": [
+                        dict(value) for value in post_manifest if isinstance(value, Mapping)
+                    ],
+                })
         status = str(result.get("status") or AgentRunStatus.COMPLETED.value)
         metrics = dict(run.metrics_json or {})
         metrics.update({"duration_ms": round((time.perf_counter() - started) * 1000, 2)})
@@ -1128,6 +1135,12 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             AgentRunStatus.FAILED.value,
             AgentRunStatus.CANCELLED.value,
         }:
+            terminal_event_id = str(runtime_result.orchestration_delta.event_id or "")
+            await record_terminal_result(
+                run,
+                result,
+                terminal_event_id=terminal_event_id or None,
+            )
             debug_payload = finalize_and_merge_debug_payload(
                 recorder=trace,
                 run=run,

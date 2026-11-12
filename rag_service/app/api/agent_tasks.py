@@ -1120,7 +1120,8 @@ async def get_agent_task_run_evidence(task_id: str, run_id: str, thread_id: str 
     if run is None:
         raise HTTPException(status_code=404, detail={"code": "agent_task_run_not_found"})
     artifacts = await repository.list_artifacts(task_id)
-    manifest, evidence_gaps = resolve_run_evidence_manifest(run, artifacts)
+    run_events = await AgentWorkflowRepository().list_run_events(run_id)
+    manifest, evidence_gaps = resolve_run_evidence_manifest(run, artifacts, run_events=run_events)
     return {
         "task_id": task_id,
         "run_id": run_id,

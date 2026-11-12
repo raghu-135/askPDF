@@ -1775,15 +1775,18 @@ async def deep_coordinator(state: Dict[str, Any], config: RunnableConfig) -> Dic
         required_complete = any(
             todo.get("required") and todo.get("status") == "completed" for todo in todos
         )
+        completed_any = any(todo.get("status") == "completed" for todo in todos)
         if revision <= max_replans:
             route = "replan"
             reason = "required_work_failed"
-        elif not required_complete:
-            route = "fail"
-            reason = "required_work_failed"
-        else:
+        elif completed_any or required_complete:
+            # When replan budget is exhausted, partial evidence is still
+            # reviewable through product result review instead of hard-failing.
             route = "synthesize"
             reason = "replan_budget_exhausted"
+        else:
+            route = "fail"
+            reason = "required_work_failed"
     elif todos:
         route = "synthesize"
         reason = "all_work_terminal"
