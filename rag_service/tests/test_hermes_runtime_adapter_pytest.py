@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.runtime.adapter import RuntimeInvocationContext
-from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput, RuntimeTaskContext
+from runtime_protocol.contracts import AgentDefinition, AgentRuntimeRequest, AgentRuntimeResult, ContinuationBinding, RuntimeApprovalResponse, RuntimeFeatureId, RuntimeOperationId, RuntimeSteeringInput, RuntimeTaskContext
 from app.runtime.hermes_adapter import HermesRuntimeAdapter
 from app.runtime.catalog import definition_from_workflow
 from app.product_orchestration.builtin_workflows import load_builtin_workflows
@@ -100,14 +100,16 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     adapter.transport._json = AsyncMock(return_value={
         "capabilities": json_payload({
-            "operations": {
-                "run.start": {"support": "native", "owner": "runtime", "enabled": True},
-            },
+                "operations": {
+                    "run.start": {"support": "native", "owner": "runtime", "enabled": True},
+                    "task.pause": {"support": "native", "owner": "runtime", "enabled": True},
+                    "run.resume": {"support": "native", "owner": "runtime", "enabled": True},
+                },
             "behavior": {
                 "continuation_semantics": "linked_run", "usage_accounting_owner": "runtime",
                 "preserves_run_id": False, "artifact_inheritance": "valid_artifacts",
                 "supports_orchestration_delta": True, "required_input_fields": [],
-                "supports_pause_resume": False, "supports_course_correction": False,
+                "supports_pause_resume": True, "supports_course_correction": False,
                 "budget_boundary_owner": "product", "grounding_owner": "product",
             },
         }),
@@ -132,10 +134,9 @@ async def test_hermes_definition_capabilities_apply_task_policy(monkeypatch):
     registry = RuntimeRegistry(adapters=[adapter])
     definition = await capabilities_for_definition(agent_definition, registry=registry)
 
-    assert "task.pause" not in deployment.operations
-    assert definition.operations["task.pause"].enabled is False
-    assert definition.operations["task.pause"].support.value == "unsupported"
-    assert definition.operations["task.pause"].disabled_reason == "adapter_operation_unimplemented"
+    assert "task.pause" in deployment.operations
+    assert definition.operations["task.pause"].enabled is True
+    assert definition.operations["run.resume"].enabled is True
     assert definition.operations["task.course_correction.submit"].enabled is False
     assert definition.operations["task.course_correction.submit"].support.value == "unsupported"
     assert definition.operations["task.course_correction.submit"].disabled_reason == "runtime_capability_unsupported"
@@ -174,13 +175,14 @@ async def test_hermes_capability_discovery_fails_closed_while_disabled(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_hermes_resume_is_explicitly_unsupported():
+async def test_hermes_resume_delegates_to_continue_run():
     adapter = HermesRuntimeAdapter(base_url="http://hermes.test")
     request = AgentRuntimeRequest("run-1", "thread-1", "hermes_rag_agent", "hermes", "hermes_agent")
-    with pytest.raises(RuntimeError) as error:
-        await adapter.resume(request, interrupt={}, context=None)
-    assert error.value.code == "runtime_capability_unsupported"
-    assert error.value.details["operation_id"] == "run.resume"
+    expected = AgentRuntimeResult(status="completed")
+    adapter.continue_run = AsyncMock(return_value=expected)
+    result = await adapter.resume(request, interrupt={"type": "task_pause"}, context=None)
+    assert result == expected
+    adapter.continue_run.assert_awaited_once()
 
 
 def test_hermes_capabilities_disable_live_steering_and_expose_no_steer_route(monkeypatch, tmp_path):

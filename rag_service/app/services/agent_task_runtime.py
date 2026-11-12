@@ -1146,6 +1146,24 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             await runtime_event_sink.finish_boundary()
             return
         if status == AgentRunStatus.AWAITING_HUMAN.value:
+            latest_task = await tasks.get_task(task.id)
+            if latest_task is not None and latest_task.status == AgentTaskStatus.CANCELLING.value:
+                try:
+                    await request_task_cancellation(latest_task, run, registry=get_runtime_registry())
+                except AgentRuntimeError:
+                    pass
+                refreshed = await tasks.get_task(task.id)
+                if refreshed is not None and refreshed.status == AgentTaskStatus.CANCELLED.value:
+                    await runtime_event_sink.finish_boundary()
+                    return
+                if refreshed is not None and refreshed.status == AgentTaskStatus.CANCELLING.value:
+                    await tasks.defer_task_lease(
+                        task.id,
+                        worker_id,
+                        retry_seconds=cancellation_retry_seconds(),
+                    )
+                    await runtime_event_sink.finish_boundary()
+                    return
             pending = dict(result.get("pending_interrupt") or {})
             trace.record_interrupted_snapshot(interrupt=pending, state=result)
             trace.record_runtime_event(
