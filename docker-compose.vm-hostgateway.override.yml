@@ -14,6 +14,9 @@ services:
       WEAVIATE_URL: http://host.docker.internal:8080
       LANGGRAPH_RUNTIME_URL: http://host.docker.internal:8100
       HERMES_RUNTIME_URL: http://host.docker.internal:8200
+      # Models are baked into the image during `cloud-agent-setup.sh install` (embeddings
+      # + sample PDF Docling parse). Offline mode avoids unreachable HF egress in VMs.
+      HF_HOME: /models/hf
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       <<: *llm-via-host-proxy

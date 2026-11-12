@@ -1,0 +1,43 @@
+# Cloud Agent overrides (enabled when ASKPDF_USE_CLOUD_TEST_OVERRIDE=1).
+# - Host-populated frontend node_modules (npm ci hang workaround)
+# - host.docker.internal DB/Weaviate when Compose bridge DNS is flaky
+services:
+  frontend-test-runner:
+    command: ["npm test"]
+    volumes:
+      - ./frontend/node_modules:/workspace/frontend/node_modules:ro
+
+  postgresql:
+    ports:
+      # Bind on all interfaces so containers reach the host via 172.17.0.1 (host-gateway).
+      - "5432:5432"
+
+  weaviate:
+    ports:
+      - "8080:8080"
+
+  fake-llm:
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile.fake-llm
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/v1/models"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  test-runner:
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/askpdf
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/test_askpdf
+      WEAVIATE_URL: http://host.docker.internal:8080
+      LLM_API_URL: http://fake-llm:9000/v1
+      OPENAI_API_KEY:
+      HF_HOME: /models/hf
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      fake-llm:
+        condition: service_healthy

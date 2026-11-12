@@ -1,0 +1,6 @@
+{
+  "name": "askPDF",
+  "user": "ubuntu",
+  "install": "bash scripts/cloud-agent-setup.sh install",
+  "start": "bash scripts/cloud-agent-setup.sh start"
+}
