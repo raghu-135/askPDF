@@ -65,6 +65,7 @@ UNIT_TEST_FILES = [
     "test_corrective_search_knowledge_evidence_pytest.py",
     "test_research_gaps_protocol_pytest.py",
     "test_runtime_protocol_package_pytest.py",
+    "test_runtime_provider_usage_budget_pytest.py",
     "test_highlight_retrieval_invariant_pytest.py",
     "test_table_row_highlight_boxes_pytest.py",
     "test_table_row_projection_pytest.py",

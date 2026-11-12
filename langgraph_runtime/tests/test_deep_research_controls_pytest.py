@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from langgraph_runtime.adapter import _result_from_graph
 from langgraph_runtime.models.deep_research import DeepResearchSubagentActionDecision
 from langgraph_runtime.mcp_client import coerce_tool_arguments
@@ -44,6 +46,21 @@ def test_read_context_expansion_synonyms_are_coerced():
         {"source_id": "src-1", "expansion": "long"},
     )
     assert payload["expansion"] == "section"
+
+
+def test_usage_summary_includes_provider_reported_cost():
+    class _Usage:
+        prompt_tokens = 12
+        completion_tokens = 8
+        total_tokens = 20
+
+    class _Raw:
+        response_metadata = {"token_usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20, "cost": 0.0011}}
+        usage_metadata = _Usage()
+
+    summary = _usage_summary(_Raw())
+    assert summary["total_tokens"] == 20
+    assert summary["cost"] == pytest.approx(0.0011)
 
 
 def test_usage_summary_unwraps_structured_output_raw():

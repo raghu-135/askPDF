@@ -457,7 +457,7 @@ const modelViewFromSummary = (row: Record<string, any>): TraceModelView => {
     duration_ms: asNumber(row.duration_ms ?? raw.duration_ms),
     retry_count: asNumber(row.retry_count ?? raw.retry_count),
     response_chars: asNumber(row.response_chars ?? raw.response_chars),
-    usage: asObject(row.usage || raw.usage) as Record<string, number>,
+    usage: asObject(row.usage || raw.usage) as Record<string, number | undefined>,
     error: row.error && typeof row.error === 'object' ? row.error : raw.error && typeof raw.error === 'object' ? raw.error : null,
     raw,
   };
@@ -740,6 +740,12 @@ export const buildLiveTraceView = (
     }
   });
 
+  const providerCostUsd = models.reduce((sum, model) => {
+    const usage = model.usage || {};
+    const value = Number(usage.cost ?? usage.provider_cost_usd);
+    if (!Number.isFinite(value) || value < 0) return sum;
+    return sum === null ? value : sum + value;
+  }, null as number | null);
   const diagnostics = buildDiagnosticsFromTimeline(timelineEvents);
   const visualizations: Record<string, AgentTraceVisualization> = {
     'generic.timeline': { id: 'generic.timeline' },
@@ -754,7 +760,7 @@ export const buildLiveTraceView = (
   return {
     route,
     routeReason,
-    metrics: {},
+    metrics: providerCostUsd === null ? {} : { llm_provider_cost_usd: providerCostUsd },
     events: timelineEvents,
     visualizations,
     operations,

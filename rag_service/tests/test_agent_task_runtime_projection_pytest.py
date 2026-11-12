@@ -507,7 +507,7 @@ async def test_hermes_usage_snapshot_is_applied_exactly_once(
     assert refreshed.budgets_json["lifetime_usage"]["model_tokens"] == 93_422
     assert refreshed.budgets_json["lifetime_usage"]["tool_calls"] == 4
     assert refreshed.budgets_json["lifetime_usage"]["elapsed_active_ms"] == 165_223
-    assert refreshed.budgets_json["lifetime_usage"]["model_calls"] == 0
+    assert refreshed.budgets_json["lifetime_usage"]["model_calls"] == 1
     async with test_session_maker() as session:
         records = list((await session.execute(select(AgentRuntimeOperation).where(
             AgentRuntimeOperation.run_id == run.id,

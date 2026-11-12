@@ -486,6 +486,7 @@ class AgentTraceRecorder:
                 "llm.token_count.reasoning": token_counts.get("reasoning"),
                 "llm.token_count.cached": token_counts.get("cached"),
                 "llm.retry_count": llm_summary.get("retry_count"),
+                "llm.provider_cost_usd": llm_summary.get("provider_cost_usd"),
             }
         )
         input_data = _clean_dict(
@@ -566,6 +567,7 @@ class AgentTraceRecorder:
                 "llm.reasoning_available": llm_summary.get("reasoning_available"),
                 "llm.reasoning_format": llm_summary.get("reasoning_format"),
                 "llm.reasoning_chars": llm_summary.get("reasoning_chars"),
+                "llm.provider_cost_usd": llm_summary.get("provider_cost_usd"),
                 "askpdf.node.id": node,
                 "askpdf.node.type": node_type,
                 "askpdf.node.visit_index": event.get("visit_index"),
