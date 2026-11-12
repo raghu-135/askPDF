@@ -54,7 +54,7 @@ jobs:
           docker build --build-arg DOWNLOAD_LOCAL_MODELS=false -f rag_service/Dockerfile -t askpdf-control-plane .
           docker build -f langgraph_runtime/Dockerfile -t askpdf-langgraph-runtime .
           docker build -f hermes_runtime/Dockerfile -t askpdf-hermes-runtime .
-          docker build --build-arg DOWNLOAD_LOCAL_MODELS=false -f rag_service/Dockerfile.test -t askpdf-control-plane-tests .
+          docker build --build-arg DOWNLOAD_LOCAL_MODELS=false --build-arg WARM_DOCLING_MODELS=false -f rag_service/Dockerfile.test -t askpdf-control-plane-tests .
           docker build -f langgraph_runtime/Dockerfile.test -t askpdf-langgraph-runtime-tests .
           docker run --rm askpdf-control-plane python -c 'import importlib.util; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("langgraph_runtime") is None'
           docker run --rm askpdf-langgraph-runtime python -c 'import importlib.util, langgraph, runtime_protocol, langgraph_runtime; assert importlib.util.find_spec("app") is None'
@@ -92,6 +92,14 @@ jobs:
             -f docker-compose.runtime-integration.yml \
             run --rm --no-deps --entrypoint pytest runtime-test-runner \
             --collect-only -q /app/langgraph_runtime/tests
+
+      - name: Reclaim disk before LangGraph runtime proof
+        run: |
+          docker compose -p askpdf-test -f docker-compose.test.yml down --volumes --remove-orphans || true
+          docker compose -p askpdf-runtime-collection -f docker-compose.runtime-integration.yml down --volumes --remove-orphans || true
+          docker builder prune -af || true
+          docker system prune -af --volumes || true
+          df -h
 
       - name: Run mandatory LangGraph runtime proof
         timeout-minutes: 15

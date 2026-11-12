@@ -26,7 +26,7 @@ COPY rag_service/app app
 COPY rag_service/tests tests
 COPY rag_service/alembic.ini rag_service/main.py ./
 COPY hermes_runtime /workspace/hermes_runtime
-ARG WARM_DOCLING_MODELS=true
+ARG WARM_DOCLING_MODELS=false
 RUN if [ "$WARM_DOCLING_MODELS" = "true" ]; then \
       python -c "from pathlib import Path; from app.services.parsing_service import parse_with_docling; sample=Path('/app/tests/01030000000000.pdf'); data=sample.read_bytes(); parse_with_docling(data, sample.name); print('Docling sample PDF cached in test image')"; \
     fi
