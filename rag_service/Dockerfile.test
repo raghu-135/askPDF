@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/workspace:/app ASKPDF_ENFORCE_DEPENDENCY_ISOLATION=1 ASKPDF_REPO_DIR=/workspace
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/workspace:/app ASKPDF_ENFORCE_DEPENDENCY_ISOLATION=1 ASKPDF_REPO_DIR=/workspace HF_HOME=/models/hf TRANSFORMERS_CACHE=/models/hf
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,6 +12,11 @@ COPY rag_service/requirements.txt requirements.txt
 COPY rag_service/requirements-dev.txt requirements-dev.txt
 RUN pip install -r requirements-dev.txt
 RUN python -m spacy download en_core_web_sm
+RUN mkdir -p /models/hf
+ARG DOWNLOAD_LOCAL_MODELS=true
+RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
+      python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); print('Downloaded local embedding + reranker models for tests')"; \
+    fi
 COPY runtime_protocol /tmp/runtime_protocol
 RUN pip install --no-deps /tmp/runtime_protocol
 
@@ -21,5 +26,9 @@ COPY rag_service/app app
 COPY rag_service/tests tests
 COPY rag_service/alembic.ini rag_service/main.py ./
 COPY hermes_runtime /workspace/hermes_runtime
+ARG WARM_DOCLING_MODELS=true
+RUN if [ "$WARM_DOCLING_MODELS" = "true" ]; then \
+      python -c "from pathlib import Path; from app.services.parsing_service import parse_with_docling; sample=Path('/app/tests/01030000000000.pdf'); data=sample.read_bytes(); parse_with_docling(data, sample.name); print('Docling sample PDF cached in test image')"; \
+    fi
 
 CMD ["python", "scripts/run_tests.py"]

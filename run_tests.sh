@@ -23,6 +23,13 @@
 
 set -e
 
+if [ -f .askpdf-cloud-agent.env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .askpdf-cloud-agent.env
+    set +a
+fi
+
 if ! command -v docker >/dev/null 2>&1; then
     echo "Error: docker is not installed or not on PATH"
     exit 1
@@ -39,6 +46,9 @@ fi
 
 TEST_PROJECT_NAME="${ASKPDF_TEST_PROJECT_NAME:-askpdf-test}"
 COMPOSE_ARGS=(-p "$TEST_PROJECT_NAME" -f docker-compose.test.yml)
+if [ -f docker-compose.cloud-agent.test.override.yml ] && [ "${ASKPDF_USE_CLOUD_TEST_OVERRIDE:-}" = "1" ]; then
+    COMPOSE_ARGS+=(-f docker-compose.cloud-agent.test.override.yml)
+fi
 EXTERNAL_RUNTIME_PROJECT_NAME="${ASKPDF_RUNTIME_TEST_PROJECT_NAME:-${ASKPDF_EXTERNAL_RUNTIME_PROJECT_NAME:-askpdf-runtime-integration-test-$$}}"
 EXTERNAL_RUNTIME_COMPOSE_ARGS=(-p "$EXTERNAL_RUNTIME_PROJECT_NAME" -f docker-compose.runtime-integration.yml)
 
