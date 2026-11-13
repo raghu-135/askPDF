@@ -67,6 +67,63 @@ def test_resolve_run_evidence_manifest_falls_back_to_persisted_artifacts():
     assert gaps == []
 
 
+def _run_with_tool_events(tool_events: list[dict]) -> SimpleNamespace:
+    return SimpleNamespace(
+        id="run-1",
+        run_metadata_json={
+            "projection": {
+                "runtime_result": {
+                    "task_evidence_manifest": [],
+                    "tool_events": tool_events,
+                },
+            },
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "result_count"),
+    [
+        ("get_thread_shape", 1),
+        ("publish_canvas", 1),
+        ("search_knowledge", 0),
+    ],
+)
+def test_resolve_run_evidence_manifest_omits_non_evidence_and_zero_result_tools(tool_name, result_count):
+    run = _run_with_tool_events(
+        [{"tool_name": tool_name, "tool_call_id": f"call-{tool_name}", "ok": True, "result_count": result_count}],
+    )
+
+    manifest, gaps = resolve_run_evidence_manifest(run, artifacts=[])
+
+    assert manifest == []
+    assert gaps == []
+
+
+def test_resolve_run_evidence_manifest_includes_successful_retrieval_tools():
+    run = _run_with_tool_events(
+        [
+            {"tool_name": "get_thread_shape", "tool_call_id": "call-shape", "ok": True, "result_count": 1},
+            {
+                "tool_name": "search_knowledge",
+                "tool_call_id": "call-search",
+                "ok": True,
+                "result_count": 4,
+                "evidence_type": "document",
+            },
+            {"tool_name": "search_knowledge", "tool_call_id": "call-empty", "ok": True, "result_count": 0},
+        ],
+    )
+
+    manifest, gaps = resolve_run_evidence_manifest(run, artifacts=[])
+
+    assert len(manifest) == 1
+    assert manifest[0]["id"] == "call-search"
+    assert manifest[0]["tool_name"] == "search_knowledge"
+    assert manifest[0]["result_count"] == 4
+    assert gaps == []
+
+
 def test_resolve_run_evidence_manifest_falls_back_to_retrieval_sources():
     run = SimpleNamespace(
         id="run-1",
