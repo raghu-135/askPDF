@@ -390,6 +390,49 @@ def _enrich_result_gaps(
     return list(dict.fromkeys(merged))
 
 
+def _product_cancellation_overrides_result(task: AgentTask, run: AgentRun) -> bool:
+    """Honor in-flight product cancel over late runtime completion projections."""
+
+    if task.status == AgentTaskStatus.CANCELLING.value:
+        return True
+    metadata = dict(run.run_metadata_json or {})
+    if metadata.get("cancel_requested") is True:
+        return True
+    request = dict(metadata.get("cancellation_request") or {})
+    return request.get("runtime_confirmation") in {"pending", "scheduled"} and bool(request.get("reason"))
+
+
+async def _project_cancelled_runtime_completion(
+    *,
+    session,
+    task: AgentTask,
+    run: AgentRun,
+    agent_run_id: str,
+    now,
+    operation_id: str,
+    final_artifact_id: str | None,
+    delta_event_id: str | None = None,
+) -> None:
+    replace_jsonb_field(run, "pending_interrupt_json", {})
+    run.status = AgentRunStatus.CANCELLED.value
+    run.completed_at = now
+    task.status = AgentTaskStatus.CANCELLED.value
+    task.current_phase = task.status
+    task.terminal_reason = cancellation_reason(task, run)
+    task.completed_at = now
+    task.expires_at = None
+    task.lease_owner = None
+    task.lease_expires_at = None
+    payload = {"reason": task.terminal_reason, "operation_id": operation_id}
+    if delta_event_id:
+        payload["runtime_event_id"] = delta_event_id
+    await tasks._append_event(
+        session, task, f"task.{task.status}", agent_run_id=agent_run_id,
+        artifact_id=final_artifact_id,
+        payload=payload,
+    )
+
+
 def _incomplete_disposition(run: AgentRun, task_result: Mapping[str, Any]) -> tuple[str, int, int]:
     orchestration = dict(
         (dict((run.resolved_spec_json or {}).get("config") or {}).get("task_policy") or {}).get("orchestration")
@@ -604,6 +647,10 @@ async def apply_neutral_task_completion(
                     phase = "awaiting_result_review"
                 elif needs_review and policy == "fail":
                     disposition = "failed"
+
+            if pending is not None and _product_cancellation_overrides_result(task, run):
+                pending = None
+                runtime_status = "cancelled"
 
             if pending is not None:
                 replace_jsonb_field(run, "pending_interrupt_json", pending)
@@ -1049,7 +1096,19 @@ async def apply_runtime_task_delta(
                     warnings = _scrub_review_warnings(warnings, gaps)
                     policy, max_rounds, review_round = _incomplete_disposition(run, task_result)
                     needs_review = bool(warnings or gaps or task_result.get("status") == "completed_with_warnings")
-                    if needs_review and policy == "review" and review_round <= max_rounds:
+                    if needs_review and policy == "review" and review_round <= max_rounds and _product_cancellation_overrides_result(task, run):
+                        now = utc_now()
+                        await _project_cancelled_runtime_completion(
+                            session=session,
+                            task=task,
+                            run=run,
+                            agent_run_id=agent_run_id,
+                            now=now,
+                            operation_id=delta.operation_id,
+                            final_artifact_id=final_artifact_id,
+                            delta_event_id=delta.event_id,
+                        )
+                    elif needs_review and policy == "review" and review_round <= max_rounds:
                         review_budget = task.budgets_json if isinstance(task.budgets_json, Mapping) else {}
                         pending = {
                             "interrupt_id": f"result-review:{run.id}:{delta.operation_id}",
