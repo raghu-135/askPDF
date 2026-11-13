@@ -13,6 +13,11 @@ from langgraph_runtime.workflows.evidence import (
     evidence_packets,
     instruction_injection_reason_codes,
 )
+from langgraph_runtime.workflows.document_scope import (
+    DOCUMENT_SCOPE_DECLINE_ANSWER,
+    attachment_retrieval_scope_decline,
+    thread_has_attached_documents,
+)
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.enums import CorrectiveRetrievalRoute, GroundedAnswerRoute
 
@@ -186,10 +191,6 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
     }
 
 
-DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this question."
-ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE = 0.42
-
-
 def _document_evidence_packets(state: Mapping[str, Any]) -> list[Dict[str, Any]]:
     return [
         packet
@@ -204,12 +205,6 @@ def _non_document_evidence_packets(state: Mapping[str, Any]) -> list[Dict[str, A
         for packet in evidence_packets(dict(state))
         if not any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
     ]
-
-
-def _thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
-    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
-    documents = bundle.get("documents")
-    return isinstance(documents, list) and bool(documents)
 
 
 def _decline_when_document_assessments_are_irrelevant(
@@ -230,18 +225,14 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
 
     if state.get("workflow_id") != PARALLEL_REFERENCE_WORKFLOW_ID:
         return None
-    if not _thread_has_attached_documents(state):
+    if not thread_has_attached_documents(state):
         return None
     if _non_document_evidence_packets(state):
         return None
+    score_decline = attachment_retrieval_scope_decline(state)
+    if score_decline:
+        return score_decline
     doc_packets = _document_evidence_packets(state)
-    scores = [
-        float(packet.get("raw_retriever_score"))
-        for packet in doc_packets
-        if isinstance(packet.get("raw_retriever_score"), (int, float))
-    ]
-    if scores and max(scores) < ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE:
-        return DOCUMENT_SCOPE_DECLINE_ANSWER
     assessments = {
         str(item.get("packet_id")): item
         for item in state.get("evidence_assessments") or []

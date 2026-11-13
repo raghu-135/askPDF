@@ -14,9 +14,13 @@ def test_router_scope_decline_on_clarify_without_prefetch_evidence():
     assert router_attachment_scope_decline(state, RouterRoute.CLARIFY.value) == DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
-def test_router_scope_decline_skips_when_prefetch_has_document_evidence():
+def test_router_scope_decline_skips_when_prefetch_has_high_scoring_document_evidence():
     state = {
-        "document_sources": [{"file_hash": "a" * 32}],
-        "pre_fetch_bundle": {"document_evidence_text": "Tokyo has 14 million residents in the metro area."},
+        "document_sources": [{"file_hash": "a" * 32, "score": 0.88}],
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_evidence_text": "Tokyo has 14 million residents in the metro area.",
+            "document_sources": [{"file_hash": "a" * 32, "score": 0.88}],
+        },
     }
     assert router_attachment_scope_decline(state, RouterRoute.CLARIFY.value) is None
