@@ -19,6 +19,7 @@ RESEARCH_EVIDENCE_TOOLS = frozenset({
     "stack_exchange",
     "yahoo_finance_news",
 })
+MANIFEST_EVIDENCE_TOOLS = DOCUMENT_EVIDENCE_TOOLS | RESEARCH_EVIDENCE_TOOLS
 
 
 def _event_payload(event: Any) -> Mapping[str, Any]:

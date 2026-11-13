@@ -5,6 +5,8 @@ import re
 from typing import Any, Mapping, Optional
 from urllib.parse import urlparse
 
+from app.services.agent_grounding_evaluator import MANIFEST_EVIDENCE_TOOLS
+
 _RUNTIME_REPORT_SECTION_PATTERN = re.compile(r"\n##\s+Unresolved required work[\s\S]*$", re.IGNORECASE)
 _CANVAS_PUBLICATION_CLAIM_PATTERN = re.compile(
     r"(?im)^.*\b("
@@ -305,13 +307,12 @@ def _manifest_from_tool_events(
             candidates.append(payload)
     for payload in candidates:
         tool_name = str(payload.get("tool_name") or "").strip()
-        if not tool_name:
+        if not tool_name or tool_name not in MANIFEST_EVIDENCE_TOOLS:
             continue
-        ok = payload.get("ok")
-        if ok is False:
+        if payload.get("ok") is not True:
             continue
         result_count = int(payload.get("result_count") or payload.get("source_count") or 0)
-        if ok is not True and result_count <= 0:
+        if result_count <= 0:
             continue
         entry_id = str(payload.get("tool_call_id") or payload.get("mcp_request_id") or "").strip()
         if not entry_id:
