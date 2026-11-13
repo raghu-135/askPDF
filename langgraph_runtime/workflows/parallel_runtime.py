@@ -399,7 +399,7 @@ def dispatch_sends(state: Mapping[str, Any]) -> List[Send]:
             timeout=TimeoutPolicy(
                 run_timeout=parallel_timeout_watchdog_seconds(
                     int(item.get("timeout_ms") or policy["default_worker_timeout_ms"]),
-                    policy["max_attempts"],
+                    max(1, int(item.get("max_attempts") or policy["max_attempts"])),
                 )
             ),
         )
@@ -434,7 +434,7 @@ def serial_dispatch_next(state: Mapping[str, Any]) -> Send | str:
         timeout=TimeoutPolicy(
             run_timeout=parallel_timeout_watchdog_seconds(
                 int(item.get("timeout_ms") or policy["default_worker_timeout_ms"]),
-                policy["max_attempts"],
+                max(1, int(item.get("max_attempts") or policy["max_attempts"])),
             )
         ),
     )

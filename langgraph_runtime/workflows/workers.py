@@ -8,6 +8,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph_runtime.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from langgraph_runtime.workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
+from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.evidence import append_corrective_evidence_packets
 from langgraph_runtime.workflows.state import runtime_node_id
 from langgraph_runtime.workflows.trace import refs_from_timeline
@@ -191,7 +192,7 @@ async def run_tool_worker(
             config,
             segments=artifacts.get("evidence_segments"),
         )
-        if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID
+        if state.get("workflow_id") in {CORRECTIVE_WORKFLOW_ID, PARALLEL_REFERENCE_WORKFLOW_ID}
         else append_evidence_packet(
             state,
             config,

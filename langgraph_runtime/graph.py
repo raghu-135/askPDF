@@ -51,6 +51,7 @@ from langgraph_runtime.workflows.evidence import (
 from langgraph_runtime.workflows.enums import AnswerQualityRoute, EvaluatorRoute, NodeEventStatus, RouterRoute, ROUTER_ROUTES, ToolName, WorkflowNodeType
 from langgraph_runtime.workflows.corrective_nodes import (
     corrective_route_for_report,
+    document_scope_decline,
     grounded_answer_contract_errors,
     grounded_route_for_report,
     normalize_grounding_report,
@@ -1478,6 +1479,27 @@ class NodeRegistry:
         )
 
         revision_count = max(0, int(state.get("answer_revision_count") or 0))
+        scope_decline = document_scope_decline(state)
+        if state.get("document_scope_declined") and scope_decline and str(state.get("final_answer") or "") == scope_decline:
+            report = {
+                "passed": True,
+                "reason": "document_scope_declined",
+                "issues": [],
+                "revision_count": revision_count,
+                "contract_repair": False,
+            }
+            data = {
+                "status": NodeEventStatus.COMPLETED.value,
+                "answer_quality_route": AnswerQualityRoute.PASS.value,
+                "answer_quality_report": report,
+                "event_name": "document_scope_declined",
+            }
+            _log_node_end(state, WorkflowNodeType.ANSWER_EVALUATOR.value, started, data)
+            return {
+                "answer_quality_route": AnswerQualityRoute.PASS.value,
+                "answer_quality_report": report,
+                "node_events": _append_event(state, WorkflowNodeType.ANSWER_EVALUATOR.value, data, started=started, config=config),
+            }
         canvas_context = ""
         if canvas_absence_limitations_suppressed(state):
             draft = state.get("task_canvas_draft")

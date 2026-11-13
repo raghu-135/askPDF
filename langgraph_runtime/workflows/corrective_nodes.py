@@ -13,6 +13,7 @@ from langgraph_runtime.workflows.evidence import (
     evidence_packets,
     instruction_injection_reason_codes,
 )
+from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.enums import CorrectiveRetrievalRoute, GroundedAnswerRoute
 
 
@@ -186,6 +187,73 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
 
 
 DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this question."
+ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE = 0.42
+
+
+def _document_evidence_packets(state: Mapping[str, Any]) -> list[Dict[str, Any]]:
+    return [
+        packet
+        for packet in evidence_packets(dict(state))
+        if any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
+    ]
+
+
+def _non_document_evidence_packets(state: Mapping[str, Any]) -> list[Dict[str, Any]]:
+    return [
+        packet
+        for packet in evidence_packets(dict(state))
+        if not any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
+    ]
+
+
+def _thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    documents = bundle.get("documents")
+    return isinstance(documents, list) and bool(documents)
+
+
+def _decline_when_document_assessments_are_irrelevant(
+    doc_packets: list[Dict[str, Any]],
+    assessments: Mapping[str, Mapping[str, Any]],
+) -> str | None:
+    if not assessments:
+        return None
+    for packet in doc_packets:
+        assessment = assessments.get(str(packet.get("id") or ""))
+        if not assessment or assessment.get("relevant") is True:
+            return None
+    return DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
+    """Decline when attached PDFs were searched but none plausibly support the question."""
+
+    if state.get("workflow_id") != PARALLEL_REFERENCE_WORKFLOW_ID:
+        return None
+    if not _thread_has_attached_documents(state):
+        return None
+    if _non_document_evidence_packets(state):
+        return None
+    doc_packets = _document_evidence_packets(state)
+    scores = [
+        float(packet.get("raw_retriever_score"))
+        for packet in doc_packets
+        if isinstance(packet.get("raw_retriever_score"), (int, float))
+    ]
+    if scores and max(scores) < ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE:
+        return DOCUMENT_SCOPE_DECLINE_ANSWER
+    assessments = {
+        str(item.get("packet_id")): item
+        for item in state.get("evidence_assessments") or []
+        if isinstance(item, dict) and item.get("packet_id")
+    }
+    if doc_packets and assessments:
+        return _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
+    if not doc_packets:
+        for error in state.get("errors") or []:
+            if isinstance(error, dict) and str(error.get("code") or "") == "document_scope_forbidden":
+                return DOCUMENT_SCOPE_DECLINE_ANSWER
+    return None
 
 
 def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
@@ -195,12 +263,7 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         return None
     if corrective_evidence_packets(dict(state)):
         return None
-    packets = evidence_packets(dict(state))
-    doc_packets = [
-        packet
-        for packet in packets
-        if any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
-    ]
+    doc_packets = _document_evidence_packets(state)
     if not doc_packets:
         return None
     assessments = {
@@ -208,13 +271,18 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         for item in state.get("evidence_assessments") or []
         if isinstance(item, dict) and item.get("packet_id")
     }
-    if not assessments:
-        return None
-    for packet in doc_packets:
-        assessment = assessments.get(str(packet.get("id") or ""))
-        if not assessment or assessment.get("relevant") is True:
-            return None
-    return DOCUMENT_SCOPE_DECLINE_ANSWER
+    return _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
+
+
+def document_scope_decline(state: Mapping[str, Any]) -> str | None:
+    """Shared decline helper for parallel orchestrator and corrective workflows."""
+
+    workflow_id = state.get("workflow_id")
+    if workflow_id == CORRECTIVE_WORKFLOW_ID:
+        return corrective_document_scope_decline(state)
+    if workflow_id == PARALLEL_REFERENCE_WORKFLOW_ID:
+        return orchestrator_document_scope_decline(state)
+    return None
 
 
 def corrective_route_for_report(report: Mapping[str, Any], state: Mapping[str, Any]) -> tuple[str, str]:

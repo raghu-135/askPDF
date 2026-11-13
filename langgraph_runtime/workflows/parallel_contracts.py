@@ -219,11 +219,13 @@ async def await_worker_with_progress_extension(
 
 
 def parallel_timeout_watchdog_seconds(worker_timeout_ms: int, max_attempts: int) -> float:
-    """Return a final watchdog long enough for all runtime-owned attempts."""
+    """Return a LangGraph watchdog that covers runtime-owned attempts and one progress extension."""
+
     attempts = max(1, int(max_attempts))
+    per_attempt_seconds = max(1, int(worker_timeout_ms)) / 1000
+    per_attempt_seconds += PARALLEL_WORKER_PROGRESS_MAX_EXTENSIONS * PARALLEL_WORKER_PROGRESS_EXTENSION_SECONDS
     retry_budget_seconds = PARALLEL_RETRY_MAX_INTERVAL_SECONDS * max(0, attempts - 1)
     return max(
         0.001,
-        (max(1, int(worker_timeout_ms)) * attempts + PARALLEL_TIMEOUT_WATCHDOG_GRACE_MS) / 1000
-        + retry_budget_seconds,
+        per_attempt_seconds * attempts + PARALLEL_TIMEOUT_WATCHDOG_GRACE_MS / 1000 + retry_budget_seconds,
     )
