@@ -515,7 +515,23 @@ async def capture_page():
         
         tab_url = active_tab.get('url', '')
         tab_title = active_tab.get('title', '')
-        
+        if tab_url.casefold().startswith("about:"):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "browser_capture_blank_page",
+                    "message": "Browser capture cannot index a blank or internal about: page. Open a web page first.",
+                },
+            )
+        if not tab_url.startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "browser_capture_invalid_url",
+                    "message": "Browser capture did not return a capturable http(s) page. Open a web page before capturing.",
+                },
+            )
+
         # Generate PDF using CDP - use numeric values (inches)
         pdf_options = {
             "landscape": False,
@@ -572,6 +588,8 @@ async def capture_page():
             size=len(pdf_data)
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Capture failed: {e}")
         raise HTTPException(status_code=500, detail=f"Capture failed: {str(e)}")

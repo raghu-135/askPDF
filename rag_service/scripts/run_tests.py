@@ -122,6 +122,7 @@ HERMES_TEST_FILES = [
     "test_hermes_gateway_control_pytest.py",
     "test_hermes_grounding_policy_pytest.py",
     "test_hermes_mcp_execution_context_pytest.py",
+    "test_hermes_openrouter_provider_usage_pytest.py",
     "test_hermes_pinned_patch_import_contract_pytest.py",
     "test_hermes_gateway_pinned_patch_active_pytest.py",
     "test_hermes_profile_manager_pytest.py",
@@ -165,6 +166,7 @@ DB_TEST_FILES = [
 API_TEST_FILES = [
     "test_api_endpoints_pytest.py",
     "test_api_integration_pytest.py",
+    "test_browser_capture_validation_pytest.py",
     "test_file_chunks_api_pytest.py",
     "test_embedding_projection_api_pytest.py",
     "test_project_lifecycle_api_pytest.py",

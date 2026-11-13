@@ -74,6 +74,7 @@ services:
     ports:
       - "8642:8642"
     environment:
+      ASKPDF_OPENROUTER_USAGE_ACCOUNTING: "1"
       <<: *llm-via-host-proxy
     extra_hosts:
       - "host.docker.internal:host-gateway"

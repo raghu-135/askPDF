@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 
 PINNED_REVISION = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
@@ -81,12 +81,30 @@ def _install() -> None:
     from tools.approval import request_tool_approval
     from approval_bridge import wrap_mcp_handler
     from agent import chat_completion_helpers
+    from agent import turn_usage
+    from gateway.platforms import api_server_runs
+    from gateway.run_turn_runner import _settle_api_runtime_lock
+    from openrouter_provider_usage import (
+        accumulate_agent_provider_cost,
+        enrich_terminal_usage,
+        merge_openrouter_usage_request,
+    )
 
     original_toolsets = APIServerAdapter._handle_toolsets
     original_sweep = APIServerAdapter._sweep_orphaned_runs_once
     original_create_agent = APIServerAdapter._create_agent
     original_build_api_kwargs = chat_completion_helpers.build_api_kwargs
+    original_record_response_usage = turn_usage.record_response_usage
+    original_run_usage = api_server_runs._run_usage
+    original_settle_api_runtime_lock = _settle_api_runtime_lock
     original_make_tool_handler = mcp_tool_handlers._make_tool_handler
+
+    def settle_api_runtime_lock(agent: Any, result: Any, captured: dict[str, Any]) -> None:
+        outcome = original_settle_api_runtime_lock(agent, result, captured)
+        usage = captured.get("usage")
+        if isinstance(usage, Mapping):
+            captured["usage"] = enrich_terminal_usage(dict(usage), agent)
+        return outcome
 
     def make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False):
         handler = original_make_tool_handler(
@@ -119,7 +137,30 @@ def _install() -> None:
         kwargs = _apply_initial_tool_requirement(agent, kwargs)
         if kwargs.get("tools"):
             kwargs["tools"] = provider_compatible_function_tools(kwargs["tools"])
-        return kwargs
+        return merge_openrouter_usage_request(
+            kwargs,
+            base_url=str(getattr(agent, "base_url", "") or ""),
+            model=str(getattr(agent, "model", "") or ""),
+            provider=str(getattr(agent, "provider", "") or ""),
+        )
+
+    def record_response_usage(agent: Any, response: Any, *args: Any, **kwargs: Any) -> Any:
+        outcome = original_record_response_usage(agent, response, *args, **kwargs)
+        accumulate_agent_provider_cost(agent, response)
+        return outcome
+
+    def run_usage(agent: Any) -> dict[str, Any]:
+        usage = enrich_terminal_usage(original_run_usage(agent), agent)
+        return usage
+
+    # ``turn_response_check`` binds ``record_response_usage`` at import time; rebind after
+    # we replace ``turn_usage.record_response_usage`` so streaming turns accumulate cost.
+    try:
+        import agent.turn_response_check as turn_response_check
+
+        turn_response_check.record_response_usage = record_response_usage
+    except Exception:
+        logger.debug("Could not rebind turn_response_check.record_response_usage", exc_info=True)
 
     async def handle_toolsets(self: Any, request: Any) -> Any:
         config = load_config()
@@ -182,12 +223,16 @@ def _install() -> None:
     APIServerAdapter._sweep_orphaned_runs_once = sweep_orphaned_runs
     APIServerAdapter._create_agent = create_agent
     chat_completion_helpers.build_api_kwargs = build_api_kwargs
+    turn_usage.record_response_usage = record_response_usage
+    api_server_runs._run_usage = run_usage
+    import gateway.run_turn_runner as run_turn_runner
+
+    run_turn_runner._settle_api_runtime_lock = settle_api_runtime_lock
     logger.info("Installed askPDF pinned Hermes patch for %s", PINNED_REVISION)
 
 
 if (
     os.getenv("ASKPDF_HERMES_COMPAT_ENABLED") == "1"
     and os.getenv("HERMES_UPSTREAM_REVISION", PINNED_REVISION) == PINNED_REVISION
-    and "gateway" in sys.argv
 ):
     _install()
