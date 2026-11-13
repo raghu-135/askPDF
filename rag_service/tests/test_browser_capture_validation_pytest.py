@@ -35,6 +35,25 @@ def test_raise_browser_capture_service_error_maps_upstream_422():
     assert exc.value.detail["code"] == "browser_capture_blank_page"
 
 
+def test_raise_browser_capture_service_error_passes_through_no_http_tab_422():
+    request = httpx.Request("POST", "http://browser-capture:8080/capture")
+    response = httpx.Response(
+        422,
+        request=request,
+        json={
+            "detail": {
+                "code": "browser_capture_no_http_tab",
+                "message": "Browser capture did not find a capturable http(s) page.",
+            }
+        },
+    )
+    error = httpx.HTTPStatusError("rejected", request=request, response=response)
+    with pytest.raises(HTTPException) as exc:
+        files_api._raise_browser_capture_service_error(error)
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "browser_capture_no_http_tab"
+
+
 def test_raise_browser_capture_service_error_hides_upstream_503_detail():
     request = httpx.Request("POST", "http://browser-capture:8080/capture")
     response = httpx.Response(503, request=request, text="upstream raw failure body")
