@@ -375,7 +375,8 @@ class WorkflowCompiler(WorkflowMaterializer):
                 add_options["destinations"] = dynamic_targets[node["id"]]
             if node["id"] in parallel_worker_ids and node["type"] in PARALLEL_RETRIEVAL_WORKER_TYPES:
                 add_options["retry_policy"] = RetryPolicy(
-                    max_attempts=parallel_policy["max_attempts"],
+                    # Worker nodes enforce parallel_policy.max_attempts internally; a graph retry would double timeouts.
+                    max_attempts=1,
                     initial_interval=PARALLEL_RETRY_INITIAL_INTERVAL_SECONDS,
                     backoff_factor=PARALLEL_RETRY_BACKOFF_FACTOR,
                     max_interval=PARALLEL_RETRY_MAX_INTERVAL_SECONDS,

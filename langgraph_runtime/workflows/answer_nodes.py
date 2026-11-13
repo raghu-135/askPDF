@@ -19,7 +19,7 @@ from langgraph_runtime.workflows.evidence import (
 from langgraph_runtime.workflows.enums import NodeEventStatus, WorkflowNodeType
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
-from langgraph_runtime.workflows.corrective_nodes import corrective_document_scope_decline
+from langgraph_runtime.workflows.corrective_nodes import corrective_document_scope_decline, document_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
 from langgraph_runtime.workflows.canvas_publish import (
     publish_deep_research_canvas_draft,
@@ -51,6 +51,23 @@ async def synthesizer_node(state: RouterRagState, config: RunnableConfig) -> Dic
 
 async def answer_from_context_node(state: RouterRagState, config: RunnableConfig, *, node_name: str) -> Dict[str, Any]:
     started = time.perf_counter()
+    scoped_decline = document_scope_decline(state)
+    if scoped_decline and node_name in {WorkflowNodeType.SYNTHESIZER.value, WorkflowNodeType.DIRECT_ANSWER.value}:
+        data = {
+            "status": NodeEventStatus.COMPLETED.value,
+            "event_name": "document_scope_declined",
+            "answer_chars": len(scoped_decline),
+            "output_preview": {"answer": compact_preview(scoped_decline)},
+        }
+        log_node_end(state, node_name, started, data)
+        return {
+            "final_answer": scoped_decline,
+            "document_scope_declined": True,
+            "reasoning": "",
+            "reasoning_available": False,
+            "reasoning_format": "none",
+            "node_events": append_event(state, node_name, data, started=started, config=config),
+        }
     llm = _get_llm(state["llm_model"], config)
     context, context_source = final_context_from_state(state)
     if state.get("evaluator_report"):
