@@ -169,6 +169,51 @@ def test_model_lifecycle_projection_is_correlated_and_summary_only() -> None:
     assert "response" not in str(projection["models"])
 
 
+def test_trace_recorder_aggregates_hermes_model_provider_cost_into_metrics() -> None:
+    run = SimpleNamespace(
+        id="run-hermes",
+        status="completed",
+        framework="hermes",
+        thread_id="thread-1",
+        workflow_id="workflow-1",
+        started_at=None,
+        completed_at=None,
+        resolved_spec_json={"workflow_id": "workflow-1"},
+        run_metadata_json={},
+    )
+    recorder = AgentTraceRecorder(run)
+    recorder.record_agent_runtime_event(_event(1, "llm.completed", {
+        "invocation_id": "run-hermes:hermes-session",
+        "operation_id": "hermes_session",
+        "visit_index": 1,
+        "model_name": "openai/gpt-4.1-nano",
+        "status": "completed",
+        "usage": {"total_tokens": 20, "cost": 0.0008},
+    }, "hermes"))
+    payload = recorder.finalize(run=run, chat_turn_id=None, metrics={"duration_ms": 1})
+    assert payload["trace"]["metrics"]["llm_provider_cost_usd"] == pytest.approx(0.0008)
+
+
+def test_hermes_llm_completed_contributes_models_with_provider_cost() -> None:
+    projection = build_canonical_trace_projection(
+        events=[
+            _event(1, "llm.completed", {
+                "invocation_id": "run-1:hermes-session",
+                "operation_id": "hermes_session",
+                "visit_index": 1,
+                "model_name": "openai/gpt-4.1-nano",
+                "status": "completed",
+                "usage": {"total_tokens": 20, "cost": 0.0008},
+            }, "hermes"),
+        ],
+        resolved_spec={},
+        framework="hermes",
+    )
+
+    assert len(projection["models"]) == 1
+    assert projection["models"][0]["payload"]["usage"]["cost"] == pytest.approx(0.0008)
+
+
 def test_hermes_projection_keeps_generic_events_and_session_visualization() -> None:
     events = [
         _event(1, "operation.started", {"operation_id": "hermes_session", "operation_type": "agent_session", "operation_label": "Hermes Agent", "session_id": "session-1"}, "hermes"),

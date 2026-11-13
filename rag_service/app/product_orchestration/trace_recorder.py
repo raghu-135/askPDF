@@ -10,6 +10,8 @@ from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttribu
 from app.product_orchestration.enums import NodeEventStatus, TraceStatus
 from app.product_orchestration.parallel_projection_contracts import PARALLEL_EVENT_NAMES, PARALLEL_TERMINAL_WORKER_STATUSES, ParallelEventName
 from app.product_orchestration.parallel_observability import parallel_span_refs
+from runtime_protocol.provider_usage import provider_cost_usd
+
 from app.product_orchestration.trace_otel import (
     _BufferedSpanExporter,
     _artifacts_from_refs,
@@ -837,8 +839,6 @@ class AgentTraceRecorder:
                 self._root_span.set_status(_otel_status(root_sidecar["status"]))
             self._root_span.end(end_time=_parse_time_ns(getattr(run, "completed_at", None)))
             self._finalized = True
-        trace = self._build_trace(run=run, chat_turn_id=chat_turn_id, metrics=metrics)
-        summary = self._build_summary(trace)
         framework = str(getattr(run, "framework", None) or "")
         canonical = build_canonical_trace_projection(
             events=self._runtime_events,
@@ -846,6 +846,23 @@ class AgentTraceRecorder:
             framework=framework,
             cancellation_request=(getattr(run, "run_metadata_json", None) or {}).get("cancellation_request"),
         )
+        provider_total = 0.0
+        provider_known = False
+        for row in canonical["models"]:
+            payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else row
+            if not isinstance(payload, Mapping):
+                continue
+            usage = payload.get("usage")
+            if not isinstance(usage, Mapping):
+                continue
+            cost = provider_cost_usd(usage)
+            if cost is not None:
+                provider_total += cost
+                provider_known = True
+        if provider_known:
+            metrics = {**metrics, "llm_provider_cost_usd": round(provider_total, 8)}
+        trace = self._build_trace(run=run, chat_turn_id=chat_turn_id, metrics=metrics)
+        summary = self._build_summary(trace)
         summary = {
             **summary,
             "operations": canonical["operations"],

@@ -330,6 +330,19 @@ def test_resume_recovers_open_tool_and_approval_identities():
     assert hermes_api._event_correlations(events) == ({"search_documents": "tool-1"}, "approval-1")
 
 
+def test_hermes_llm_completed_event_includes_provider_cost():
+    event = hermes_api._hermes_llm_completed_event(
+        "run-1",
+        9,
+        usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "cost": 0.0012},
+        model_name="openai/gpt-4.1-nano",
+        continuation=None,
+    )
+    assert event is not None
+    assert event["kind"] == "llm.completed"
+    assert event["payload"]["usage"]["cost"] == pytest.approx(0.0012)
+
+
 def test_runtime_usage_snapshot_counts_tokens_and_model_calls():
     snapshot = hermes_api._runtime_usage_snapshot(
         {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15, "cost": 0.0007},

@@ -415,6 +415,60 @@ async def test_warning_result_enters_review_in_the_delta_transaction(
 
 
 @pytest.mark.asyncio
+async def test_warning_result_honors_product_cancel_over_result_review(
+    test_session_maker, sample_thread,
+):
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    async with test_session_maker() as session:
+        async with session.begin():
+            stored_task = await session.get(AgentTask, task.id)
+            stored_run = await session.get(AgentRun, run.id)
+            stored_task.status = "cancelling"
+            stored_task.current_phase = "cancelling"
+            stored_run.run_metadata_json = {
+                **(stored_run.run_metadata_json or {}),
+                "cancel_requested": True,
+                "cancellation_request": {
+                    "reason": "cancelled_by_user",
+                    "runtime_confirmation": "pending",
+                },
+            }
+    delta = _delta(
+        run_id=run.id,
+        operation_id="warning-result-cancel",
+        event_id=f"{run.id}:attempt:1:operation:warning-result-cancel:result",
+        task_version=task.version,
+        plan_revision=0,
+        plan=_plan("evidence-a"),
+        todos=({"id": "evidence-a", "status": "completed", "progress": 100},),
+        budget_calls=1,
+        interrupt={"operation": "clear"},
+    )
+    delta = replace(delta, result={
+        "status": "completed",
+        "result_outcome": "completed_with_warnings",
+        "warnings": [{"code": "evidence_critic_issues"}],
+        "incomplete_reasons": ["A source remains unverified."],
+        "task_result": {
+            "status": "completed_with_warnings",
+            "text": "A useful provisional report.",
+            "warnings": [{"code": "evidence_critic_issues"}],
+            "gaps": ["A source remains unverified."],
+            "usage": {},
+        },
+    })
+
+    await apply_runtime_task_delta(task_id=task.id, agent_run_id=run.id, delta=delta)
+
+    refreshed = await repository.get_task(task.id)
+    stored_run = await repository.get_task_run(task.id)
+    assert refreshed is not None and refreshed.status == "cancelled"
+    assert refreshed.terminal_reason == "cancelled_by_user"
+    assert stored_run is not None and stored_run.status == "cancelled"
+    assert stored_run.pending_interrupt_json == {}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("dimension,usage_key", [("elapsed_active_ms", "active_runtime_ms"), ("model_tokens", "model_tokens")])
 @pytest.mark.parametrize("decision", ["continue", "accept_partial", "steer"])
 async def test_hermes_time_and_token_exhaustion_share_review_and_linked_continuation(

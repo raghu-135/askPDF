@@ -321,6 +321,8 @@ def _cancelled_runtime_result(
     *,
     boundary_delta: Mapping[str, Any] | None = None,
     reason: str = "cancelled_by_user",
+    budget_usage: Mapping[str, Any] | None = None,
+    task_result: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     delta = dict(boundary_delta or {})
     error = {
@@ -334,16 +336,68 @@ def _cancelled_runtime_result(
         "error": error,
         "orchestration_delta": {
             **delta,
-            "budget_usage": {},
-            "artifacts": [],
+            "budget_usage": dict(budget_usage or {}),
+            "artifacts": list((task_result or {}).get("artifacts") or []) if isinstance(task_result, Mapping) else [],
             "pending_interrupt": {"operation": "clear"},
-            "result": {"status": "cancelled", "error": error},
-            "correction_outcomes": [],
+            "result": {
+                "status": "cancelled",
+                "error": error,
+                **({"task_result": dict(task_result)} if isinstance(task_result, Mapping) else {}),
+            },
+            "correction_outcomes": list((task_result or {}).get("correction_outcomes") or []) if isinstance(task_result, Mapping) else [],
         },
     }
+    if isinstance(task_result, Mapping):
+        result["task_result"] = dict(task_result)
+        result["usage"] = dict(task_result.get("usage") or {})
     if continuation is not None:
         result["continuation"] = continuation
     return result
+
+
+def _hermes_llm_completed_event(
+    run_id: str,
+    sequence: int,
+    *,
+    usage: Mapping[str, Any],
+    model_name: str | None,
+    continuation: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    token_total = int(usage.get("model_tokens") or usage.get("total_tokens") or 0)
+    if token_total <= 0:
+        token_total = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+    provider_cost = provider_cost_usd(usage)
+    if token_total <= 0 and provider_cost is None:
+        return None
+    llm_usage: dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("input_tokens", usage.get("input_tokens")),
+            ("output_tokens", usage.get("output_tokens")),
+            ("total_tokens", usage.get("total_tokens") or token_total),
+            ("model_tokens", usage.get("model_tokens") or token_total),
+        )
+        if value is not None
+    }
+    if provider_cost is not None:
+        llm_usage["cost"] = provider_cost
+        llm_usage["provider_cost_usd"] = provider_cost
+    return _neutral_event(
+        run_id,
+        sequence,
+        "llm.completed",
+        {
+            "invocation_id": f"{run_id}:hermes-session",
+            "operation_id": "hermes_session",
+            "operation_type": "agent_session",
+            "operation_label": "Hermes Agent",
+            "visit_index": 1,
+            "model_name": model_name,
+            "status": "completed",
+            "usage": llm_usage,
+        },
+        continuation=continuation,
+    )
 
 
 def _recovery_payload(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -986,7 +1040,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                 return [_sse(event, result)], "cancelled"
             return [], None
 
-        def process_frame(frame_event_name: str, frame_data: list[str], *, output_seen: bool) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+        def process_frame(frame_event_name: str, frame_data: list[str], *, output_seen: bool) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
             nonlocal sequence, terminal_seen, session_id, active_approval_id
             try:
                 raw = json.loads("\n".join(frame_data))
@@ -1059,6 +1113,12 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     raise ValueError("Hermes approval response has no matching request")
                 event_payload = {**event_payload, "approval_id": active_approval_id}
                 active_approval_id = None
+            if (
+                kind in HERMES_TERMINAL_EVENTS
+                and kind == "run.completed"
+                and state["store"].is_cancel_requested(run_id)
+            ):
+                kind = "run.cancelled"
             _accumulate_native_usage(cumulative_native_usage, event_payload.get("usage"))
             event_budget.observe(kind, output_delta)
             event = _neutral_event(
@@ -1165,6 +1225,8 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         warnings.append({"code": "course_correction_unresolved", "details": {"correction_id": correction_id}})
                         gaps.append(f"course_correction:{correction_id}")
                 result_outcome = "completed_with_warnings" if status == "completed" and (warnings or gaps) else status
+                if status == "cancelled":
+                    result_outcome = "cancelled"
                 terminal_usage = dict(cumulative_native_usage)
                 _accumulate_native_usage(terminal_usage, output_mapping.get("usage"))
                 _accumulate_native_usage(terminal_usage, event_payload.get("usage"))
@@ -1175,6 +1237,13 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     active_runtime_ms=int(round((time.monotonic() - operation_started_at) * 1000)),
                 )
                 terminal_error = _terminal_error(event_payload.get("error"))
+                if status == "cancelled":
+                    terminal_error = {
+                        "code": "run_cancelled",
+                        "message": "Hermes run cancelled",
+                        "retryable": False,
+                        "details": {"reason": str(event_payload.get("reason") or "cancelled_by_user")},
+                    }
                 neutral_task_result = {
                     "status": result_outcome,
                     "text": text_output,
@@ -1239,6 +1308,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
             sequence += 1
             operation_event = None
             output_complete_event = None
+            llm_complete_event = None
             if terminal:
                 operation_event = _neutral_event(
                     run_id,
@@ -1272,10 +1342,19 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         continuation=continuation,
                     )
                     sequence += 1
+                llm_complete_event = _hermes_llm_completed_event(
+                    run_id,
+                    sequence,
+                    usage=neutral_task_result["usage"],
+                    model_name=str(upstream_payload.get("model") or "") or None,
+                    continuation=continuation,
+                )
+                if llm_complete_event is not None:
+                    sequence += 1
                 event["sequence"] = sequence
                 event["event_id"] = f"{run_id}:{sequence}"
                 sequence += 1
-            return event, result, operation_event, output_complete_event
+            return event, result, operation_event, output_complete_event, llm_complete_event
 
         binding_payload = ((neutral_request.get("continuation") or {}).get("payload") or {})
         execution_profile = str(binding_payload.get("runtime_profile") or "")
@@ -1483,7 +1562,7 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                                     data = []
                                     event_name = ""
                                     continue
-                                event, result, operation_event, output_complete_event = process_frame(event_name, data, output_seen=output_seen)
+                                event, result, operation_event, output_complete_event, llm_complete_event = process_frame(event_name, data, output_seen=output_seen)
                                 if event.get("source_event_id"):
                                     consumed_upstream_events.add(str(event["source_event_id"]))
                                 if operation_event is not None:
@@ -1492,6 +1571,8 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                                     output_seen = True
                                 if output_complete_event is not None:
                                     yield _sse(output_complete_event)
+                                if llm_complete_event is not None:
+                                    yield _sse(llm_complete_event)
                                 yield _sse(event, result)
                                 if terminal_seen:
                                     return
@@ -1504,11 +1585,13 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         elif line.startswith("data:"):
                             data.append(line[5:].lstrip())
                     if data and not terminal_seen:
-                        event, result, operation_event, output_complete_event = process_frame(event_name, data, output_seen=output_seen)
+                        event, result, operation_event, output_complete_event, llm_complete_event = process_frame(event_name, data, output_seen=output_seen)
                         if operation_event is not None:
                             yield _sse(operation_event)
                         if output_complete_event is not None:
                             yield _sse(output_complete_event)
+                        if llm_complete_event is not None:
+                            yield _sse(llm_complete_event)
                         yield _sse(event, result)
                         if terminal_seen:
                             return
