@@ -122,6 +122,7 @@ HERMES_TEST_FILES = [
     "test_hermes_gateway_control_pytest.py",
     "test_hermes_grounding_policy_pytest.py",
     "test_hermes_mcp_execution_context_pytest.py",
+    "test_hermes_openrouter_provider_usage_pytest.py",
     "test_hermes_pinned_patch_import_contract_pytest.py",
     "test_hermes_gateway_pinned_patch_active_pytest.py",
     "test_hermes_profile_manager_pytest.py",
