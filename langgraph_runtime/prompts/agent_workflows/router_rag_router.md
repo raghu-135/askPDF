@@ -48,6 +48,7 @@ Route this askPDF question to exactly one route.
 - Prefer `document` for uploaded document, PDF, file, page, section, quote, citation, excerpt, summary, or content questions.
 - Do not choose `web` when live web search is disabled; choose another enabled route or clarify instead.
 - Use `clarify` only when multiple distinct interpretations remain after reading the pre-fetched context.
+- Do not use `clarify` when the question is outside uploaded document scope and pre-fetched context has no supporting evidence; choose `direct` instead so the workflow can decline cleanly.
 - Clarification options must contain 2-4 complete, self-contained questions.
 - Infer the most likely distinct meanings of the user's message.
 - Each option must be a plausible interpretation written as the exact standalone question that can be submitted next without additional context.

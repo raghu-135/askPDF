@@ -1928,7 +1928,20 @@ class WeaviateAdapter:
         _validate_not_empty(thread_id, "thread_id")
         
         logger.debug(f"Getting thread stats for thread '{thread_id}'")
-        
+
+        if file_hashes is not None and not file_hashes:
+            stats = {
+                "exists": False,
+                "knowledge_sources": 0,
+                "pdf_chunks": 0,
+                "webpage_chunks": 0,
+                "chat_memories": 0,
+                "web_search_chunks": 0,
+                "total_points": 0,
+            }
+            logger.debug(f"Thread stats for '{thread_id}' (no files): {stats}")
+            return stats
+
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
 
         # Use model-aware collections if embedding_model is provided
