@@ -237,10 +237,34 @@ def _validate_browser_capture_url(capture_url: str) -> None:
         )
 
 
+def _raise_browser_capture_service_error(exc: httpx.HTTPError) -> None:
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        status_code = exc.response.status_code
+        if 400 <= status_code < 500:
+            try:
+                payload = exc.response.json()
+            except ValueError:
+                payload = {"message": exc.response.text.strip() or "Browser capture request was rejected."}
+            detail = payload.get("detail") if isinstance(payload, dict) else payload
+            if detail is None:
+                detail = payload
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "browser_capture_unavailable",
+            "message": "Browser capture service is temporarily unavailable. Try again shortly.",
+        },
+    ) from exc
+
+
 async def _capture_current_page() -> Dict[str, Any]:
     async with httpx.AsyncClient() as client:
-        response = await client.post(f"{CAPTURE_SERVICE_URL}/capture", timeout=60.0)
-        response.raise_for_status()
+        try:
+            response = await client.post(f"{CAPTURE_SERVICE_URL}/capture", timeout=60.0)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            _raise_browser_capture_service_error(exc)
         capture = response.json()
     capture_path = f"/captures/{capture['file_hash']}.pdf"
     store = get_content_store()
@@ -824,11 +848,6 @@ async def capture_browser_page_endpoint(
             "ready": False,
         }
         
-    except httpx.HTTPError as e:
-        raise HTTPException(
-            status_code=503, 
-            detail=f"Browser capture service unavailable: {e}"
-        )
     except HTTPException:
         raise
     except Exception as e:
@@ -1104,4 +1123,4 @@ async def capture_project_browser_page_endpoint(project_id: str, background_task
             "ready": True,
         }
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail=f"Browser capture service unavailable: {exc}") from exc
+        _raise_browser_capture_service_error(exc)

@@ -16,10 +16,11 @@ from langgraph_runtime.workflows.evidence import (
     prefetch_refs,
     state_evidence_refs,
 )
-from langgraph_runtime.workflows.enums import NodeEventStatus, WorkflowNodeType
+from langgraph_runtime.workflows.enums import NodeEventStatus, RouterRoute, WorkflowNodeType
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
 from langgraph_runtime.workflows.corrective_nodes import corrective_document_scope_decline
+from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
 from langgraph_runtime.workflows.canvas_publish import (
     publish_deep_research_canvas_draft,
@@ -51,6 +52,23 @@ async def synthesizer_node(state: RouterRagState, config: RunnableConfig) -> Dic
 
 async def answer_from_context_node(state: RouterRagState, config: RunnableConfig, *, node_name: str) -> Dict[str, Any]:
     started = time.perf_counter()
+    decline = state.get("attachment_scope_decline") or router_attachment_scope_decline(
+        state, str(state.get("route") or "")
+    )
+    if decline:
+        data = {
+            "status": NodeEventStatus.COMPLETED.value,
+            "answer_chars": len(decline),
+            "output_preview": {"answer": compact_preview(decline)},
+        }
+        log_node_end(state, node_name, started, data)
+        return {
+            "final_answer": decline,
+            "reasoning": "",
+            "reasoning_available": False,
+            "reasoning_format": "none",
+            "node_events": append_event(state, node_name, data, started=started, config=config),
+        }
     llm = _get_llm(state["llm_model"], config)
     context, context_source = final_context_from_state(state)
     if state.get("evaluator_report"):
@@ -246,6 +264,21 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
         }
     if state.get("clarification_options") and not state.get("final_answer"):
+        decline = router_attachment_scope_decline(state, RouterRoute.CLARIFY.value)
+        if decline:
+            data = {
+                "status": NodeEventStatus.COMPLETED.value,
+                "answer_chars": len(decline),
+                "output_preview": {"answer": compact_preview(decline)},
+            }
+            log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
+            return {
+                "final_answer": decline,
+                "reasoning": "",
+                "reasoning_available": False,
+                "reasoning_format": "none",
+                "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
+            }
         answer = "I need a bit more clarification. Did you mean:\n" + "\n".join(
             f"- {option}" for option in state["clarification_options"]
         )

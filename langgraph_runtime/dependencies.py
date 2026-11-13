@@ -111,7 +111,13 @@ class DependencyMonitor:
         for name, value in self._snapshots.items():
             item = dict(value)
             last_success_epoch = item.pop("_last_success_epoch", None)
-            if item["state"] == "available" and last_success_epoch and current - last_success_epoch > self.stale_after:
+            last_checked_epoch = item.pop("_last_checked_epoch", None)
+            if (
+                item["state"] == "available"
+                and last_success_epoch
+                and current - last_success_epoch > self.stale_after
+                and (not last_checked_epoch or current - last_checked_epoch > self.stale_after)
+            ):
                 item["state"] = "degraded"
                 item["reason"] = "stale"
             result[name] = item
@@ -136,6 +142,7 @@ class DependencyMonitor:
                     "capability_ids": list(value.get("capability_ids") or []),
                     "latency_ms": round((time.monotonic() - started) * 1000, 1),
                     "_last_success_epoch": now,
+                    "_last_checked_epoch": now,
                 }
                 if value.get("protocol"):
                     updated["protocol"] = value["protocol"]
@@ -143,11 +150,12 @@ class DependencyMonitor:
                 self.counters["failures"] += 1
                 updated = dict(previous)
                 updated["checked_at"] = _timestamp(now)
+                updated["_last_checked_epoch"] = now
                 updated["reason"] = str(value.get("reason") or "probe_failed")
                 updated["latency_ms"] = round((time.monotonic() - started) * 1000, 1)
                 if not previous.get("_last_success_epoch"):
                     updated["state"] = "unavailable"
-                elif now - float(previous["_last_success_epoch"]) > self.stale_after:
+                else:
                     updated["state"] = "degraded"
             if previous.get("state") != updated.get("state"):
                 self.counters["transitions"] += 1
@@ -182,15 +190,15 @@ class DependencyMonitor:
     def unavailable_configured(self) -> dict[str, Any] | None:
         """Return the first configured dependency that cannot accept work."""
 
-        snapshots = self.snapshot()
         for dependency, url in self._configured.items():
             if not url:
                 continue
-            value = snapshots.get(dependency) or {}
-            if value.get("state") != "available":
+            value = self._snapshots.get(dependency) or {}
+            state = value.get("state")
+            if state in {"unavailable", "degraded"}:
                 return {
                     "dependency": dependency,
-                    "reason": value.get("reason") or "unavailable",
+                    "reason": value.get("reason") or state,
                 }
         return None
 

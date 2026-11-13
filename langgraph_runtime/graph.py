@@ -57,6 +57,7 @@ from langgraph_runtime.workflows.corrective_nodes import (
     normalize_retrieval_quality_report,
     retrieval_quality_contract_errors,
 )
+from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.corrective_contracts import (
     CORRECTIVE_BUDGET_REASONS,
     CORRECTIVE_WORKFLOW_ID,
@@ -858,6 +859,10 @@ class NodeRegistry:
                     "The router returned insufficient clarification choices",
                     retryable=True,
                 )
+        attachment_scope_decline = router_attachment_scope_decline(state, route)
+        if attachment_scope_decline:
+            route = RouterRoute.DIRECT.value
+            clarification_options = None
         route_reason = str(parsed.get("reason") or "")
         if requested_route != route:
             route_reason = (
@@ -894,6 +899,7 @@ class NodeRegistry:
             "route_reason": route_reason,
             "selected_tool_name": parsed.get("tool_name") if route == RouterRoute.WEB.value else None,
             "clarification_options": clarification_options if route == RouterRoute.CLARIFY.value else None,
+            "attachment_scope_decline": attachment_scope_decline,
             "execution_plan": self._router_execution_plan(route, state),
             "work_item_proposals": self._router_work_item_proposals(route, parsed, state),
             "node_events": _append_event(state, WorkflowNodeType.ROUTER.value, data, started=started, config=config),

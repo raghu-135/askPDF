@@ -56,6 +56,29 @@ async def test_get_document_chunks_for_file_returns_sorted_page():
 
 
 @pytest.mark.asyncio
+async def test_get_thread_stats_with_empty_file_hashes_returns_zeroed_stats():
+    adapter = WeaviateAdapter.__new__(WeaviateAdapter)
+    adapter.client = MagicMock()
+
+    stats = await adapter.get_thread_stats(
+        thread_id="thread-empty",
+        file_hashes=[],
+        embedding_model="BAAI/bge-m3",
+    )
+
+    assert stats == {
+        "exists": False,
+        "knowledge_sources": 0,
+        "pdf_chunks": 0,
+        "webpage_chunks": 0,
+        "chat_memories": 0,
+        "web_search_chunks": 0,
+        "total_points": 0,
+    }
+    adapter.client.collections.use.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_thread_vector_points_includes_vectors():
     adapter = WeaviateAdapter.__new__(WeaviateAdapter)
     adapter.collection_manager = SimpleNamespace(
