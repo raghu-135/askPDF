@@ -155,7 +155,7 @@ class DependencyMonitor:
                 updated["latency_ms"] = round((time.monotonic() - started) * 1000, 1)
                 if not previous.get("_last_success_epoch"):
                     updated["state"] = "unavailable"
-                elif now - float(previous["_last_success_epoch"]) > self.stale_after:
+                else:
                     updated["state"] = "degraded"
             if previous.get("state") != updated.get("state"):
                 self.counters["transitions"] += 1
@@ -195,15 +195,10 @@ class DependencyMonitor:
                 continue
             value = self._snapshots.get(dependency) or {}
             state = value.get("state")
-            if state == "unavailable":
+            if state in {"unavailable", "degraded"}:
                 return {
                     "dependency": dependency,
-                    "reason": value.get("reason") or "unavailable",
-                }
-            if state == "degraded" and not value.get("capability_ids"):
-                return {
-                    "dependency": dependency,
-                    "reason": value.get("reason") or "degraded",
+                    "reason": value.get("reason") or state,
                 }
         return None
 
