@@ -85,17 +85,42 @@ wait_task_terminal() {
   return 1
 }
 
+accept_incomplete_result_if_needed() {
+  local thread_id="$1"
+  local task_id="$2"
+  local body
+  body=$(curl -sf "${API_URL}/api/agent-tasks/${task_id}?thread_id=${thread_id}" \
+    -H "Authorization: Bearer ${ADMIN}")
+  local st ver run_id interrupt_id
+  st=$(python3 -c "import json,sys; print(json.load(sys.stdin)['task']['status'])" <<<"$body")
+  if [[ "$st" != "awaiting_approval" ]]; then
+    return 0
+  fi
+  read -r ver run_id interrupt_id < <(python3 -c "import json,sys; t=json.load(sys.stdin)['task']; i=(t.get('active_run') or {}).get('pending_interrupt') or {}; print(t['version'], (t.get('active_run') or {}).get('id',''), i.get('interrupt_id',''))" <<<"$body")
+  curl -sf "${API_URL}/api/agent-tasks/${task_id}/result-review/responses?thread_id=${thread_id}" \
+    -H "Authorization: Bearer ${ADMIN}" -H "Content-Type: application/json" \
+    -H "Idempotency-Key: hermes-cost-accept-${UNIQ}" \
+    -d "{\"run_id\":\"${run_id}\",\"interrupt_id\":\"${interrupt_id}\",\"decision\":\"accept\",\"expected_version\": ${ver}}" \
+    -X POST >/dev/null
+  wait_task_terminal "$thread_id" "$task_id" "$ART_DIR/hermes-cost-task.json" >/dev/null
+}
+
 echo "[e2e] Hermes short task for provider cost trace..."
 thread_id=$(create_thread "hermes-cost-${UNIQ}")
 cost_task_id=$(create_and_start_hermes_task "$thread_id" "Reply with exactly PROOF." "hermes-cost-${UNIQ}")
 read -r cost_status _ cost_run_id < <(wait_task_terminal "$thread_id" "$cost_task_id" "$ART_DIR/hermes-cost-task.json")
+accept_incomplete_result_if_needed "$thread_id" "$cost_task_id"
+if [[ -z "$cost_run_id" ]]; then
+  cost_run_id=$(python3 -c "import json; t=json.load(open('${ART_DIR}/hermes-cost-task.json')); print((t.get('task') or {}).get('primary_run_id') or (t.get('task') or {}).get('active_run_id') or '')")
+fi
 
 if [[ -n "$cost_run_id" ]]; then
-  payload=$(curl -sf "${API_URL}/api/agent-runs/${cost_run_id}" -H "Authorization: Bearer ${ADMIN}")
+  payload=$(curl -sf "${API_URL}/api/agent-runs/${cost_run_id}?thread_id=${thread_id}" -H "Authorization: Bearer ${ADMIN}")
   python3 - "$payload" "$ART_DIR/hermes-cost-trace.json" <<'PY'
 import json, sys
 data = json.loads(sys.argv[1])
-debug = data.get("debug") or {}
+run = data.get("agent_run") if isinstance(data.get("agent_run"), dict) else data
+debug = run.get("debug") or {}
 trace = debug.get("trace") or {}
 metrics = trace.get("metrics") or {}
 models = debug.get("models") or trace.get("models") or []
@@ -107,8 +132,8 @@ for row in models:
             model_costs.append(float(usage[key]))
             break
 out = {
-    "run_id": data.get("id"),
-    "status": data.get("status"),
+    "run_id": run.get("id"),
+    "status": run.get("status"),
     "llm_provider_cost_usd": metrics.get("llm_provider_cost_usd"),
     "model_costs": model_costs,
     "model_count": len(models),
@@ -117,6 +142,7 @@ print(json.dumps(out, indent=2))
 with open(sys.argv[2], "w", encoding="utf-8") as fh:
     json.dump(out, fh, indent=2)
 PY
+  playwright_screenshot "hermes-debug-trace-provider-cost.png" "/threads/${thread_id}/runs/${cost_run_id}/debug"
 fi
 
 echo "[e2e] cancel during hermes run..."
