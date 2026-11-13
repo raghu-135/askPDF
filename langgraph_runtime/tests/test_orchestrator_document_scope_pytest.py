@@ -47,6 +47,25 @@ def test_orchestrator_declines_when_document_chunks_score_below_threshold():
     assert orchestrator_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
+def test_orchestrator_declines_on_low_score_even_when_assessment_marks_relevant():
+    state = {
+        "workflow_id": PARALLEL_REFERENCE_WORKFLOW_ID,
+        "pre_fetch_bundle": {"documents": [{"file_hash": "abc" * 8}]},
+        "evidence_packets": [
+            {
+                "id": "retrieval_worker:1",
+                "source_ids": ["doc:" + "ab" * 16 + ":c1"],
+                "content": "Attention is all you need.",
+                "raw_retriever_score": 0.21,
+            }
+        ],
+        "evidence_assessments": [
+            {"packet_id": "retrieval_worker:1", "relevant": True},
+        ],
+    }
+    assert orchestrator_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
 def test_orchestrator_keeps_in_scope_when_a_chunk_scores_above_threshold():
     state = {
         "workflow_id": PARALLEL_REFERENCE_WORKFLOW_ID,

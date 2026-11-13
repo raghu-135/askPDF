@@ -235,6 +235,13 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
     if _non_document_evidence_packets(state):
         return None
     doc_packets = _document_evidence_packets(state)
+    scores = [
+        float(packet.get("raw_retriever_score"))
+        for packet in doc_packets
+        if isinstance(packet.get("raw_retriever_score"), (int, float))
+    ]
+    if scores and max(scores) < ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE:
+        return DOCUMENT_SCOPE_DECLINE_ANSWER
     assessments = {
         str(item.get("packet_id")): item
         for item in state.get("evidence_assessments") or []
@@ -242,14 +249,6 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
     }
     if doc_packets and assessments:
         return _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
-    if doc_packets:
-        scores = [
-            float(packet.get("raw_retriever_score"))
-            for packet in doc_packets
-            if isinstance(packet.get("raw_retriever_score"), (int, float))
-        ]
-        if scores and max(scores) < ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE:
-            return DOCUMENT_SCOPE_DECLINE_ANSWER
     if not doc_packets:
         for error in state.get("errors") or []:
             if isinstance(error, dict) and str(error.get("code") or "") == "document_scope_forbidden":
