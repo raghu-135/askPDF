@@ -106,6 +106,19 @@ def test_orchestrator_workflow_compiles_after_scope_changes():
     import json
     from pathlib import Path
 
-    spec_path = Path("rag_service/app/workflow_catalog/builtins/orchestrator_worker_rag_agent.json")
+    rel = Path("rag_service/app/workflow_catalog/builtins/orchestrator_worker_rag_agent.json")
+    spec_path = next(
+        (
+            candidate
+            for candidate in (
+                rel,
+                Path(__file__).resolve().parents[2] / rel,
+            )
+            if candidate.is_file()
+        ),
+        None,
+    )
+    if spec_path is None:
+        pytest.skip("orchestrator workflow catalog is not bundled in the langgraph-runtime image")
     spec = json.loads(spec_path.read_text(encoding="utf-8"))
     assert WorkflowCompiler().compile(spec) is not None
