@@ -251,13 +251,29 @@ async def run_tool_worker(
             segments=segments,
         )
     else:
+        packet_refs = refs_from_artifacts(artifacts)
+        sources = artifacts.get("document_sources") if isinstance(artifacts, dict) else []
+        if isinstance(sources, list) and sources and isinstance(sources[0], dict):
+            packet_refs = {**packet_refs, "source": sources[0]}
         evidence_packets = append_evidence_packet(
             state,
             config,
             kind=spec.evidence_kind,
             content=payload.get("content", ""),
-            refs=refs_from_artifacts(artifacts),
+            refs=packet_refs,
         )
+        if evidence_packets and isinstance(sources, list):
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                raw_score = _retrieval_score_from_source(source)
+                if raw_score is None:
+                    continue
+                tail = dict(evidence_packets[-1])
+                if tail.get("raw_retriever_score") is None:
+                    tail["raw_retriever_score"] = raw_score
+                    evidence_packets = [*evidence_packets[:-1], tail]
+                break
 
     update = spec.state_update(state, payload, artifacts, evidence, evidence_packets) if spec.state_update else {}
     output_state = {**state, **update, "evidence": evidence, "evidence_packets": evidence_packets}

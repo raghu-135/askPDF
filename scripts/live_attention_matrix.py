@@ -17,7 +17,10 @@ ART = Path(os.environ.get("ASKPDF_E2E_ARTIFACTS", "/opt/cursor/artifacts"))
 ART.mkdir(parents=True, exist_ok=True)
 API = os.environ.get("ASKPDF_E2E_API_URL", "http://127.0.0.1:8000")
 DEFAULT_MODEL = os.environ.get("ASKPDF_E2E_LLM_MODEL", "openai/gpt-4.1-mini")
-DEFAULT_MODELS = f"{DEFAULT_MODEL},nvidia/nemotron-3.5-super"
+DEFAULT_MODELS = os.environ.get(
+    "ASKPDF_E2E_LLM_MODELS",
+    "google/gemini-2.5-flash,nvidia/nemotron-3.5-super",
+)
 MODELS = [
     item.strip()
     for item in os.environ.get("ASKPDF_E2E_LLM_MODELS", DEFAULT_MODELS).split(",")
@@ -205,9 +208,11 @@ def export_trace_scores(thread_id: str, run_id: str) -> list[dict]:
     ops = trace.get("operations") if isinstance(trace.get("operations"), list) else []
     scores: list[dict] = []
     for op in ops:
-        output = op.get("output") if isinstance(op.get("output"), dict) else {}
-        if output.get("evidence_packet_scores"):
-            scores.extend(output["evidence_packet_scores"])
+        for block_key in ("output", "output_summary"):
+            block = op.get(block_key) if isinstance(op.get(block_key), dict) else {}
+            packet_scores = block.get("evidence_packet_scores")
+            if isinstance(packet_scores, list):
+                scores.extend(packet_scores)
     return scores
 
 

@@ -121,7 +121,11 @@ def combine_evidence(existing: Any, addition: Any, *, label: str, limit: Optiona
     labeled = f"[{label}]\n{addition_text}"
     combined = "\n\n".join(part for part in (existing_text, labeled) if part).strip()
     if isinstance(limit, int) and limit > 0 and len(combined) > limit:
-        return combined[-limit:].lstrip()
+        return compact_context_text(
+            combined,
+            limit=limit,
+            mode=EvidenceCompressionMode.COMPACT.value,
+        )
     return combined
 
 
@@ -428,18 +432,27 @@ def final_context_from_state(state: Dict[str, Any]) -> tuple[str, str]:
     policy = context_policy(state)
     if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and state.get("retrieval_quality_report"):
         return corrective_evidence_context(state), "corrective_eligible_evidence"
-    if policy.get("final_prompt_assembly") == "evidence_packets":
-        packet_context = evidence_context_from_packets(state)
-        if packet_context:
-            return packet_context, "evidence_packets"
-    if state.get("evidence"):
+    packet_context = evidence_context_from_packets(state)
+    if policy.get("final_prompt_assembly") == "evidence_packets" and packet_context:
+        return packet_context, "evidence_packets"
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    document_prefetch = str(bundle.get("document_evidence_text") or "").strip()
+    worker_evidence = str(state.get("evidence") or "").strip()
+    merged_parts: List[str] = []
+    if document_prefetch:
+        merged_parts.append("Document evidence:\n" + document_prefetch)
+    if packet_context:
+        merged_parts.append("Retrieved evidence packets:\n" + packet_context)
+    elif worker_evidence:
+        merged_parts.append("Worker evidence:\n" + worker_evidence)
+    if merged_parts:
         return compact_context_text(
-            str(state.get("evidence") or ""),
+            "\n\n".join(merged_parts),
             limit=final_context_char_limit(state),
             mode=evidence_compression_mode(state),
-        ), "worker_evidence"
+        ), "merged_document_context"
     return compact_context_text(
-        format_prefetch_summary(state.get("pre_fetch_bundle") or {}),
+        format_prefetch_summary(bundle),
         limit=final_context_char_limit(state),
         mode=evidence_compression_mode(state),
     ), "prefetch"
@@ -464,6 +477,13 @@ def append_evidence_packet(
     existing_packets = evidence_packets(state)
     if evidence_dedupe_enabled(state):
         existing_packets = [packet for packet in existing_packets if packet.get("fingerprint") != fingerprint]
+    source = refs.get("source") if isinstance(refs.get("source"), dict) else {}
+    raw_score = None
+    for key in ("raw_retriever_score", "raw_score", "score", "rerank_score"):
+        value = source.get(key)
+        if isinstance(value, (int, float)):
+            raw_score = float(value)
+            break
     packet = {
         "id": f"{node_id}:visit:{visit_index}:{kind}:{len(existing_packets) + 1}",
         "producer_node_id": node_id,
@@ -477,6 +497,8 @@ def append_evidence_packet(
         "source_ids": packet_source_ids({"refs": refs}),
         "created_at": iso_utc_z(utc_now()),
     }
+    if raw_score is not None:
+        packet["raw_retriever_score"] = raw_score
     return [*existing_packets, packet][-evidence_packet_limit(state):]
 
 

@@ -12,6 +12,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph_runtime.workflows.evidence import (
     combine_evidence,
     corrective_evidence_packets,
+    evidence_packets,
     evidence_text_limit,
     final_context_from_state,
     prefetch_refs,
@@ -25,9 +26,9 @@ from langgraph_runtime.workflows.corrective_nodes import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     corrective_document_scope_decline,
     document_scope_decline,
-    explicit_corrective_document_fact_fallback,
     synthesized_answer_grounded_in_corrective_evidence,
 )
+from langgraph_runtime.workflows.workers import _evidence_packet_scores_for_trace
 from langgraph_runtime.workflows.document_scope import postprocess_grounded_document_answer
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
@@ -139,6 +140,7 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
             "question": compact_preview(state.get("question")),
             "context_source": context_source,
             "context": compact_preview(context),
+            "context_has_table2": "table 2" in str(context or "").casefold(),
         },
         "prompt_summary": prompt_details,
     }
@@ -180,6 +182,9 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         "output_refs": state_evidence_refs(state) or prefetch_refs(state.get("pre_fetch_bundle") or {}),
         "output_preview": {"answer": compact_preview(published["answer"])},
         "canvas_published": published["published"],
+        "evidence_packet_scores": _evidence_packet_scores_for_trace(evidence_packets(state), {}),
+        "synthesizer_context_source": context_source,
+        "synthesizer_context_chars": len(str(context or "")),
     }
     log_node_end(state, node_name, started, data)
     from runtime_protocol.research_gaps import finalize_canvas_answer_prose
@@ -208,23 +213,6 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
 
 async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
-    if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and (
-        fact := explicit_corrective_document_fact_fallback(state)
-    ):
-        data = {
-            "status": NodeEventStatus.COMPLETED.value,
-            "event_name": "corrective.document_fact_answer",
-            "answer_chars": len(fact),
-            "output_preview": {"answer": compact_preview(fact)},
-        }
-        log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
-        return {
-            "final_answer": fact,
-            "reasoning": "",
-            "reasoning_available": False,
-            "reasoning_format": "none",
-            "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
-        }
     if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and (
         state.get("grounded_answer_route") == "finalize_cautious"
         or state.get("corrective_retrieval_route") == "insufficient"
@@ -304,9 +292,6 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
                 answer = "Verified findings:\n" + "\n".join(lines)
         elif prose_grounded:
             answer = prose_answer
-            gaps = []
-        elif (fact := explicit_corrective_document_fact_fallback(state)):
-            answer = fact
             gaps = []
         else:
             answer = (

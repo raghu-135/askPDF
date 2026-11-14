@@ -17,12 +17,9 @@ from langgraph_runtime.workflows.evidence import (
 from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     attached_document_evidence_haystack,
-    explicit_document_fact_fallback,
     lexical_attachment_scope_decline,
     thread_has_attached_documents,
 )
-
-explicit_corrective_document_fact_fallback = explicit_document_fact_fallback
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.enums import CorrectiveRetrievalRoute, GroundedAnswerRoute
 
@@ -260,9 +257,6 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
     doc_packets = _document_evidence_packets(state)
     if not doc_packets:
         return None
-    if any(str(packet.get("content") or "").strip() for packet in doc_packets):
-        if explicit_corrective_document_fact_fallback(state) is not None:
-            return None
     assessments = {
         str(item.get("packet_id")): item
         for item in state.get("evidence_assessments") or []
@@ -442,8 +436,6 @@ def grounded_route_for_report(report: Mapping[str, Any], state: Mapping[str, Any
     if report.get("verified_claims") and revision_count < policy["max_answer_revisions"]:
         return GroundedAnswerRoute.REVISE.value, ""
     if synthesized_answer_grounded_in_corrective_evidence(state, str(state.get("final_answer") or "")):
-        return GroundedAnswerRoute.PASS.value, ""
-    if explicit_corrective_document_fact_fallback(state):
         return GroundedAnswerRoute.PASS.value, ""
     correction_route, reason = corrective_route_for_report({"verdict": "ambiguous"}, state)
     if correction_route == CorrectiveRetrievalRoute.CORRECT.value and (report.get("unresolved_gaps") or not report.get("verified_claims")):
