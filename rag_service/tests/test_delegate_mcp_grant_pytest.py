@@ -1,4 +1,4 @@
-"""MCP execution grants for Auto parent runs and delegated children."""
+"""MCP execution grants for Auto parent runs and delegated children (control-plane)."""
 
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ from app.mcp.execution_context_token import decode_execution_context_grant
 from app.product_orchestration.builtin_workflows import load_builtin_workflows
 from app.runtime.adapter import RuntimeInvocationContext
 from app.runtime.http_adapter import HttpLangGraphRuntimeAdapter
-from langgraph_runtime.compiler import WorkflowCompiler
-from langgraph_runtime.workflows.graph_validation import WorkflowGraphValidator
 from runtime_protocol.contracts import AgentRuntimeRequest
 
 
@@ -61,32 +59,6 @@ async def test_child_delegation_prepare_ignores_parent_token_in_options(monkeypa
     assert child_ctx.run_id == "child-run-99"
     assert "search_knowledge" in child_allowed
     assert "search_knowledge" in prepared.input["mcp_allowed_tool_ids"]
-
-
-def test_execution_context_prefers_input_mcp_token_over_options():
-    from langgraph_runtime.api import _context
-
-    request = AgentRuntimeRequest(
-        run_id="child-run",
-        thread_id="thread-1",
-        definition_id="router_rag_agent",
-        framework="langgraph",
-        builder_id="langgraph_graph",
-        input={"mcp_execution_context_token": "child-grant"},
-        options={"mcp_execution_context_token": "parent-grant", "llm_model": "openai/gpt-4.1-mini"},
-    )
-    ctx = _context({"context": {"embedding_model": "embed", "resolved_spec": {"config": {}}}}, request)
-    assert getattr(ctx.request, "mcp_execution_context_token") == "child-grant"
-    assert ctx.agent_run_context.get("mcp_execution_context_token") == "child-grant"
-
-
-def test_auto_builtin_allows_context_loader_prefetch_tools():
-    auto_spec = next(item["spec_json"] for item in load_builtin_workflows() if item["builtin_key"] == "auto_rag_agent")
-    errors = WorkflowGraphValidator().validate(auto_spec)
-    assert errors == []
-    WorkflowCompiler().compile(auto_spec, checkpointer=None)
-    allowed = set(auto_spec["config"]["allowed_tool_ids"])
-    assert "document_search_knowledge" in allowed
 
 
 @pytest.mark.asyncio
