@@ -45,6 +45,7 @@ env/
 .env
 .env.local
 .askpdf-cloud-agent.env
+.askpdf-hf-cache/
 
 # Node.js / Next.js
 node_modules/
