@@ -157,13 +157,7 @@ function isRedundantFinding(text: string, gapKeys: Set<string>, gapTopics: Set<s
     return true;
   }
   if (!issueKey) return true;
-  for (const gapKey of gapKeys) {
-    if (!gapKey) continue;
-    if (issueKey === gapKey) return true;
-    if (issueKey.length >= 8 && gapKey.includes(issueKey)) return true;
-    if (gapKey.length >= 8 && issueKey.includes(gapKey)) return true;
-  }
-  return false;
+  return gapKeys.has(issueKey);
 }
 
 export function normalizeReviewGapText(
