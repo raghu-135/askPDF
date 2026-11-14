@@ -135,6 +135,20 @@ def _salient_proper_nouns(question: str) -> list[str]:
     ]
 
 
+def _document_attachment_evidence_text(state: Mapping[str, Any]) -> str:
+    """Document-sourced text only, excluding conversation history and synthetic context."""
+
+    parts: list[str] = []
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    if str(bundle.get("document_evidence_text") or "").strip():
+        parts.append(str(bundle["document_evidence_text"]))
+    for packet in document_evidence_packets(state):
+        content = str(packet.get("content") or "").strip()
+        if content:
+            parts.append(content)
+    return "\n".join(parts).lower()
+
+
 def _combined_document_evidence_text(state: Mapping[str, Any]) -> str:
     parts: list[str] = []
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
@@ -155,7 +169,7 @@ def lexical_attachment_scope_decline(state: Mapping[str, Any]) -> str | None:
     proper_nouns = _salient_proper_nouns(str(state.get("question") or ""))
     if not proper_nouns:
         return None
-    haystack = _combined_document_evidence_text(state)
+    haystack = _document_attachment_evidence_text(state)
     if not haystack.strip():
         return DOCUMENT_SCOPE_DECLINE_ANSWER
     if any(term not in haystack for term in proper_nouns):
