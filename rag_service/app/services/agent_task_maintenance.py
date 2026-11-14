@@ -9,6 +9,7 @@ from app.services import agent_task_repository as tasks
 from app.services.content_store import get_content_store
 from app.services.task_artifact_service import cleanup_deleted_task
 from app.time_utils import utc_now
+from app.services.agent_run_cancellation import run_stale_cancellation_reconciliation
 from app.services.agent_runtime_reconciliation import run_runtime_reconciliation
 
 
@@ -80,6 +81,7 @@ async def run_task_maintenance(*, batch_size: int | None = None) -> dict[str, in
             result.run_id for result in cleanup_results if result.cleaned
         )
         deleted_checkpoints = sum(1 for result in cleanup_results if result.cleaned)
+        stale_cancellation = await run_stale_cancellation_reconciliation(batch_size=bounded)
         runtime_reconciliation = await run_runtime_reconciliation(batch_size=bounded)
         return {
             "expired_tasks": expired_tasks,
@@ -89,5 +91,6 @@ async def run_task_maintenance(*, batch_size: int | None = None) -> dict[str, in
             "missing_artifacts": missing_artifacts,
             "orphaned_content": orphaned_content,
             "deleted_checkpoints": deleted_checkpoints,
+            **{f"stale_cancel_{key}": value for key, value in stale_cancellation.items()},
             **{f"runtime_{key}": value for key, value in runtime_reconciliation.items()},
         }

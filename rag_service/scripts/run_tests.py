@@ -159,6 +159,7 @@ DB_TEST_FILES = [
     "test_stats_repository_pytest.py",
     "test_repository_transactions_pytest.py",
     "test_agent_task_runtime_projection_pytest.py",
+    "test_agent_stale_cancellation_reconcile_pytest.py",
     "test_agent_task_cancel_recovery_pytest.py",
     "test_agent_task_cancel_paths_pytest.py",
     "test_agent_task_research_canvases_pytest.py",
