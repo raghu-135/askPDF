@@ -533,6 +533,15 @@ def _operations(events: Sequence[AgentRuntimeEvent], framework: str) -> list[dic
             if row["duration_ms"] is None:
                 row["duration_ms"] = _duration_ms(row.get("started_at"), row.get("completed_at"))
             row["output"] = _bounded_value(payload.get("result_summary") or payload.get("output") or payload.get("output_summary") or payload.get("detail") or {})
+            if payload.get("evidence_packet_scores") is not None:
+                output = row["output"] if isinstance(row["output"], dict) else {}
+                row["output"] = {
+                    **output,
+                    "evidence_packet_scores": _bounded_value(payload.get("evidence_packet_scores")),
+                }
+            if payload.get("evidence_packet_count") is not None:
+                output = row["output"] if isinstance(row["output"], dict) else {}
+                row["output"] = {**output, "evidence_packet_count": payload.get("evidence_packet_count")}
             row["error"] = _bounded_value(payload.get("error"))
     return sorted(rows.values(), key=lambda row: (int(row.get("sequence") or 0), str(row["operation_id"]), int(row["visit_index"])))
 

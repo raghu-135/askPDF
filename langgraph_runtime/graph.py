@@ -445,6 +445,8 @@ class NodeRegistry:
                 "elapsed_ms": latest_node_event.get("elapsed_ms"),
                 "warnings": latest_node_event.get("warnings") or latest_node_event.get("warning_codes"),
                 "detail": detail,
+                "evidence_packet_scores": latest_node_event.get("evidence_packet_scores"),
+                "evidence_packet_count": latest_node_event.get("evidence_packet_count"),
             }
             if execution_event_sink is not None:
                 await execution_event_sink.emit(event_name, completion_data)

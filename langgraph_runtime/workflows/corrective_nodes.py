@@ -228,11 +228,6 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         return None
     if not thread_has_attached_documents(state):
         return None
-    if _non_document_evidence_packets(state):
-        return None
-    score_decline = post_retrieval_attachment_decline(state)
-    if score_decline:
-        return score_decline
     doc_packets = _document_evidence_packets(state)
     assessments = {
         str(item.get("packet_id")): item
@@ -240,7 +235,13 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         if isinstance(item, dict) and item.get("packet_id")
     }
     if doc_packets and assessments:
-        return _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
+        assessment_decline = _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
+        if assessment_decline is None:
+            return None
+        return assessment_decline
+    score_decline = post_retrieval_attachment_decline(state)
+    if score_decline:
+        return score_decline
     if not doc_packets:
         for error in state.get("errors") or []:
             if isinstance(error, dict) and str(error.get("code") or "") == "document_scope_forbidden":

@@ -120,6 +120,26 @@ def test_unknown_framework_metadata_remains_visible_without_specialized_visualiz
     assert projection["events"][0]["framework_details"]["future"]["phase"] == "inspect"
 
 
+def test_operation_projection_preserves_raw_retriever_scores_for_export() -> None:
+    projection = build_canonical_trace_projection(
+        events=[_event(1, "operation.completed", {
+            "operation_id": "retrieval_worker",
+            "operation_type": "retrieval_worker",
+            "visit_index": 1,
+            "evidence_packet_scores": [
+                {"id": "retrieval_worker:visit:1:document:1", "raw_retriever_score": 0.88},
+            ],
+            "evidence_packet_count": 1,
+        })],
+        resolved_spec={},
+        framework="langgraph",
+    )
+
+    operation = projection["operations"][0]
+    assert operation["output"]["evidence_packet_scores"][0]["raw_retriever_score"] == 0.88
+    assert operation["output"]["evidence_packet_count"] == 1
+
+
 def test_tool_projection_records_argument_names_without_values() -> None:
     projection = build_canonical_trace_projection(
         events=[_event(1, "tool.completed", {

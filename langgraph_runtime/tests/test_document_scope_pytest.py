@@ -84,3 +84,42 @@ def test_router_post_retrieval_decline_not_blocked_by_document_route():
         "route": "document",
     }
     assert workflow_post_retrieval_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def test_router_post_retrieval_keeps_in_scope_when_doc_packets_lack_scores():
+    state = {
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_sources": [{"file_hash": "a" * 32, "score": 0.12}],
+        },
+        "evidence_packets": [
+            {
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+                "content": "Table 2 big-model EN-FR training cost is 2.3 x 10^19 FLOPs.",
+            }
+        ],
+        "question": "For the big model in Table 2, what is the EN-FR training cost?",
+        "workflow_id": "router_rag_agent",
+        "route": "document",
+    }
+    assert workflow_post_retrieval_scope_decline(state) is None
+
+
+def test_router_post_retrieval_keeps_in_scope_on_high_worker_score_despite_low_prefetch():
+    state = {
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_sources": [{"file_hash": "a" * 32, "score": 0.18}],
+        },
+        "evidence_packets": [
+            {
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+                "content": "BLEU EN-DE score is 28.4.",
+                "raw_retriever_score": 0.91,
+            }
+        ],
+        "question": "What is the EN-DE BLEU score in Table 2?",
+        "workflow_id": "router_rag_agent",
+        "route": "document",
+    }
+    assert workflow_post_retrieval_scope_decline(state) is None
