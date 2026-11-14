@@ -18,6 +18,8 @@ from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     attachment_retrieval_scope_decline,
     attached_document_evidence_haystack,
+    decline_when_all_document_packets_irrelevant,
+    document_evidence_packets,
     thread_has_attached_documents,
 )
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
@@ -193,33 +195,12 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
     }
 
 
-def _document_evidence_packets(state: Mapping[str, Any]) -> list[Dict[str, Any]]:
-    return [
-        packet
-        for packet in evidence_packets(dict(state))
-        if any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
-    ]
-
-
 def _non_document_evidence_packets(state: Mapping[str, Any]) -> list[Dict[str, Any]]:
     return [
         packet
         for packet in evidence_packets(dict(state))
         if not any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
     ]
-
-
-def _decline_when_document_assessments_are_irrelevant(
-    doc_packets: list[Dict[str, Any]],
-    assessments: Mapping[str, Mapping[str, Any]],
-) -> str | None:
-    if not assessments:
-        return None
-    for packet in doc_packets:
-        assessment = assessments.get(str(packet.get("id") or ""))
-        if not assessment or assessment.get("relevant") is True:
-            return None
-    return DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
 def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
@@ -232,16 +213,9 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
     score_decline = attachment_retrieval_scope_decline(state)
     if score_decline:
         return score_decline
-    doc_packets = _document_evidence_packets(state)
-    assessments = {
-        str(item.get("packet_id")): item
-        for item in state.get("evidence_assessments") or []
-        if isinstance(item, dict) and item.get("packet_id")
-    }
-    if doc_packets and assessments:
-        relevance_decline = _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
-        if relevance_decline:
-            return relevance_decline
+    relevance_decline = decline_when_all_document_packets_irrelevant(state)
+    if relevance_decline:
+        return relevance_decline
     for error in state.get("errors") or []:
         if isinstance(error, dict) and str(error.get("code") or "") == "document_scope_forbidden":
             return DOCUMENT_SCOPE_DECLINE_ANSWER
@@ -264,15 +238,9 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         ):
             return DOCUMENT_SCOPE_DECLINE_ANSWER
         return None
-    doc_packets = _document_evidence_packets(state)
-    if not doc_packets:
+    if not document_evidence_packets(state):
         return None
-    assessments = {
-        str(item.get("packet_id")): item
-        for item in state.get("evidence_assessments") or []
-        if isinstance(item, dict) and item.get("packet_id")
-    }
-    return _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
+    return decline_when_all_document_packets_irrelevant(state)
 
 
 def document_scope_decline(state: Mapping[str, Any]) -> str | None:
@@ -326,17 +294,13 @@ def grounded_answer_contract_errors(value: Dict[str, Any]) -> list[str]:
     return errors
 
 
-def _corrective_document_evidence_haystack(state: Mapping[str, Any]) -> str:
-    return attached_document_evidence_haystack(state)
-
-
 def synthesized_answer_grounded_in_corrective_evidence(state: Mapping[str, Any], answer: str) -> bool:
     """True when a short synthesizer answer is substantively supported by graded evidence."""
 
     prose = str(answer or "").strip()
     if not prose or prose == DOCUMENT_SCOPE_DECLINE_ANSWER:
         return False
-    text = _corrective_document_evidence_haystack(state).casefold()
+    text = attached_document_evidence_haystack(state).casefold()
     if not text.strip():
         return False
     candidate = prose.casefold()

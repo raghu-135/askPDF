@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Dict, Mapping
 
 from langgraph_runtime.workflows.evidence import evidence_packets
 from langgraph_runtime.workflows.parallel_contracts import (
@@ -10,8 +10,6 @@ from langgraph_runtime.workflows.parallel_contracts import (
 ROUTER_RAG_WORKFLOW_ID = "router_rag_agent"
 DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this question."
 ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE = 0.42
-# Auto orchestrator uses the same relevance floor when deciding router declines.
-ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE = ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE
 
 
 def thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
@@ -81,6 +79,40 @@ def document_retrieval_scores(state: Mapping[str, Any]) -> list[float]:
     return [*prefetch_document_retrieval_scores(state), *worker_document_retrieval_scores(state)]
 
 
+def merged_state_document_sources(state: Mapping[str, Any]) -> list[Dict[str, Any]]:
+    """Document source rows from prefetch bundle and live worker state."""
+
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    sources: list[Dict[str, Any]] = []
+    for container in (state.get("document_sources") or [], bundle.get("document_sources") or []):
+        if not isinstance(container, list):
+            continue
+        sources.extend(item for item in container if isinstance(item, dict))
+    return sources
+
+
+def packet_assessments_by_id(state: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    return {
+        str(item.get("packet_id")): item
+        for item in (state.get("evidence_assessments") or [])
+        if isinstance(item, Mapping) and item.get("packet_id")
+    }
+
+
+def decline_when_all_document_packets_irrelevant(state: Mapping[str, Any]) -> str | None:
+    """Decline when every assessed document packet is marked not relevant."""
+
+    doc_packets = document_evidence_packets(state)
+    assessments = packet_assessments_by_id(state)
+    if not doc_packets or not assessments:
+        return None
+    for packet in doc_packets:
+        assessment = assessments.get(str(packet.get("id") or ""))
+        if not assessment or assessment.get("relevant") is True:
+            return None
+    return DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
 def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
     """Decline when attached PDFs were searched but nothing scores as plausibly relevant."""
 
@@ -117,19 +149,13 @@ def _combined_document_evidence_text(state: Mapping[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
-def post_retrieval_attachment_decline(state: Mapping[str, Any]) -> str | None:
-    """Score-based decline after workers have run."""
-
-    if not thread_has_attached_documents(state):
-        return None
-    return attachment_retrieval_scope_decline(state)
-
-
 def workflow_post_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
     workflow_id = str(state.get("workflow_id") or "")
     if workflow_id not in {ROUTER_RAG_WORKFLOW_ID, PARALLEL_REFERENCE_WORKFLOW_ID}:
         return None
-    return post_retrieval_attachment_decline(state)
+    if not thread_has_attached_documents(state):
+        return None
+    return attachment_retrieval_scope_decline(state)
 
 
 def attached_document_evidence_haystack(state: Mapping[str, Any]) -> str:

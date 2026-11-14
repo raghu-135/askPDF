@@ -29,7 +29,10 @@ from langgraph_runtime.workflows.corrective_nodes import (
     synthesized_answer_grounded_in_corrective_evidence,
 )
 from langgraph_runtime.workflows.workers import _evidence_packet_scores_for_trace
-from langgraph_runtime.workflows.document_scope import postprocess_grounded_document_answer
+from langgraph_runtime.workflows.document_scope import (
+    merged_state_document_sources,
+    postprocess_grounded_document_answer,
+)
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
 from langgraph_runtime.workflows.canvas_publish import (
@@ -184,20 +187,7 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         "canvas_published": published["published"],
         "evidence_packet_scores": _evidence_packet_scores_for_trace(
             evidence_packets(state),
-            {
-                "document_sources": [
-                    *(
-                        item
-                        for item in (state.get("document_sources") or [])
-                        if isinstance(item, dict)
-                    ),
-                    *(
-                        item
-                        for item in ((state.get("pre_fetch_bundle") or {}).get("document_sources") or [])
-                        if isinstance(item, dict)
-                    ),
-                ],
-            },
+            {"document_sources": merged_state_document_sources(state)},
         ),
         "synthesizer_context_source": context_source,
         "synthesizer_context_chars": len(str(context or "")),
