@@ -20,7 +20,11 @@ from langgraph_runtime.workflows.enums import NodeEventStatus, RouterRoute, Work
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
-from langgraph_runtime.workflows.corrective_nodes import corrective_document_scope_decline, document_scope_decline
+from langgraph_runtime.workflows.corrective_nodes import (
+    corrective_document_scope_decline,
+    document_scope_decline,
+    synthesized_answer_grounded_in_corrective_evidence,
+)
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
 from langgraph_runtime.workflows.canvas_publish import (
@@ -237,12 +241,17 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         if contradictions and any(not item.get("claim_ids") for item in contradictions):
             verified = []
         gaps = [str(item) for item in state.get("unresolved_gaps") or state.get("evidence_gaps") or [] if str(item).strip()]
+        prose_answer = str(state.get("final_answer") or "").strip()
+        prose_grounded = synthesized_answer_grounded_in_corrective_evidence(state, prose_answer)
         if verified:
             lines = [
                 f"- {item['claim']} ({', '.join(item.get('source_ids') or [])})"
                 for item in verified
             ]
             answer = "Verified findings:\n" + "\n".join(lines)
+        elif prose_grounded:
+            answer = prose_answer
+            gaps = []
         else:
             answer = (
                 corrective_document_scope_decline(state)
