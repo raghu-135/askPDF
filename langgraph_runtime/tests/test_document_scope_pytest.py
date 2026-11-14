@@ -171,6 +171,46 @@ def test_router_post_retrieval_keeps_in_scope_on_high_worker_score_despite_low_p
     assert workflow_post_retrieval_scope_decline(state) is None
 
 
+def test_attachment_scope_keeps_short_encoder_in_scope_on_weak_worker_scores():
+    state = {
+        "pre_fetch_bundle": {"documents": [{"file_hash": "a" * 32}]},
+        "evidence_packets": [
+            {
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+                "content": "",
+                "raw_retriever_score": 0.35,
+            }
+        ],
+        "question": "How many encoder layers does the base Transformer use? Reply with the number only.",
+    }
+    assert attachment_retrieval_scope_decline(state) is None
+
+
+def test_relevance_decline_skips_low_confidence_irrelevant_assessments():
+    from langgraph_runtime.workflows.document_scope import decline_when_all_document_packets_irrelevant
+
+    packet_id = "retrieval_worker:1"
+    state = {
+        "corrective_policy": {"minimum_relevance_confidence": 0.65},
+        "evidence_packets": [
+            {
+                "id": packet_id,
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+                "content": "The encoder stack uses N = 6 identical layers.",
+                "raw_retriever_score": 0.38,
+            }
+        ],
+        "evidence_assessments": [
+            {
+                "packet_id": packet_id,
+                "relevant": False,
+                "confidence": 0.2,
+            }
+        ],
+    }
+    assert decline_when_all_document_packets_irrelevant(state) is None
+
+
 def test_postprocess_preserves_model_answer_without_lexical_override():
     state = {
         "workflow_id": "router_rag_agent",

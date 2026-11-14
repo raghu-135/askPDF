@@ -10,6 +10,7 @@ from langgraph_runtime.workflows.parallel_contracts import (
 ROUTER_RAG_WORKFLOW_ID = "router_rag_agent"
 DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this question."
 ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE = 0.42
+ATTACHMENT_WEAK_RETRIEVAL_SCORE = 0.25
 
 
 def thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
@@ -99,16 +100,52 @@ def packet_assessments_by_id(state: Mapping[str, Any]) -> dict[str, Mapping[str,
     }
 
 
+def _grader_assessment_failed(assessment: Mapping[str, Any]) -> bool:
+    needle = "grader did not return"
+    for key in ("contradiction_signals", "rejection_reasons"):
+        for item in assessment.get(key) or []:
+            if needle in str(item).casefold():
+                return True
+    return False
+
+
+def _packet_assessment_confidently_irrelevant(
+    assessment: Mapping[str, Any],
+    *,
+    minimum_relevance_confidence: float,
+) -> bool:
+    if assessment.get("relevant") is not False:
+        return False
+    if _grader_assessment_failed(assessment):
+        return False
+    confidence = assessment.get("confidence")
+    if confidence is None:
+        return True
+    try:
+        return float(confidence) >= minimum_relevance_confidence
+    except (TypeError, ValueError):
+        return False
+
+
 def decline_when_all_document_packets_irrelevant(state: Mapping[str, Any]) -> str | None:
-    """Decline when every assessed document packet is marked not relevant."""
+    """Decline when every assessed document packet is confidently marked not relevant."""
+
+    from langgraph_runtime.workflows.corrective_contracts import normalized_corrective_policy
 
     doc_packets = document_evidence_packets(state)
     assessments = packet_assessments_by_id(state)
     if not doc_packets or not assessments:
         return None
+    policy = normalized_corrective_policy(state.get("corrective_policy"))
+    minimum_confidence = float(policy["minimum_relevance_confidence"])
     for packet in doc_packets:
         assessment = assessments.get(str(packet.get("id") or ""))
         if not assessment or assessment.get("relevant") is True:
+            return None
+        if not _packet_assessment_confidently_irrelevant(
+            assessment,
+            minimum_relevance_confidence=minimum_confidence,
+        ):
             return None
     return DOCUMENT_SCOPE_DECLINE_ANSWER
 
@@ -122,7 +159,10 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
     worker_scores = worker_document_retrieval_scores(state)
     if doc_packets:
         if worker_scores:
-            if max(worker_scores) >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+            peak_worker = max(worker_scores)
+            if peak_worker >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+                return None
+            if peak_worker >= ATTACHMENT_WEAK_RETRIEVAL_SCORE:
                 return None
             if any(str(packet.get("content") or "").strip() for packet in doc_packets):
                 return None
@@ -130,8 +170,12 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
         if any(str(packet.get("content") or "").strip() for packet in doc_packets):
             return None
     prefetch_scores = prefetch_document_retrieval_scores(state)
-    if prefetch_scores and max(prefetch_scores) < ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
-        return DOCUMENT_SCOPE_DECLINE_ANSWER
+    if prefetch_scores:
+        peak_prefetch = max(prefetch_scores)
+        if peak_prefetch >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+            return None
+        if peak_prefetch < ATTACHMENT_WEAK_RETRIEVAL_SCORE:
+            return DOCUMENT_SCOPE_DECLINE_ANSWER
     return None
 
 
@@ -199,4 +243,7 @@ def postprocess_grounded_document_answer(state: Mapping[str, Any], answer: str) 
         return text
     if text.strip() == DOCUMENT_SCOPE_DECLINE_ANSWER or text.startswith(DOCUMENT_SCOPE_DECLINE_ANSWER + "\n"):
         return DOCUMENT_SCOPE_DECLINE_ANSWER
+    relevance_decline = decline_when_all_document_packets_irrelevant(state)
+    if relevance_decline:
+        return relevance_decline
     return text

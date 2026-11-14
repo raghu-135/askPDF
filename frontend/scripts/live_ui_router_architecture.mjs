@@ -7,13 +7,14 @@ import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO = resolve(__dirname, "..");
+const REPO_ROOT = resolve(__dirname, "../..");
 const ART = process.env.ASKPDF_E2E_ARTIFACTS || "/opt/cursor/artifacts";
 
 function loadAdmin() {
   const fromEnv = (process.env.ASKPDF_ADMIN_TOKEN || "").trim();
   if (fromEnv) return fromEnv;
-  for (const line of readFileSync(resolve(REPO, ".env"), "utf8").split("\n")) {
+  const envPath = resolve(REPO_ROOT, ".env");
+  for (const line of readFileSync(envPath, "utf8").split("\n")) {
     if (line.startsWith("ASKPDF_ADMIN_TOKEN=")) return line.slice("ASKPDF_ADMIN_TOKEN=".length).trim();
   }
   throw new Error("ASKPDF_ADMIN_TOKEN missing");
@@ -102,9 +103,19 @@ try {
     if (answer.trim()) break;
   }
   await page.goto(`${APP}/threads/${thread.id}`, { waitUntil: "domcontentloaded", timeout: 120000 });
-  await page.waitForTimeout(8000);
+  const assistantReplyDeadline = Date.now() + 300_000;
+  let visibleAnswer = "";
+  while (Date.now() < assistantReplyDeadline) {
+    const bodies = await page.locator('[data-testid="message-content"], [data-role="assistant"], .prose').allTextContents();
+    visibleAnswer = bodies.join("\n").trim();
+    if (visibleAnswer && !/technical error/i.test(visibleAnswer)) break;
+    await page.waitForTimeout(4000);
+    await page.reload({ waitUntil: "domcontentloaded" });
+  }
+  await page.waitForTimeout(2000);
   await page.screenshot({ path: `${ART}/live-router_rag_agent-architecture-ui.png`, fullPage: true });
-  const ok = /\btransformer\b/i.test(answer) && !/does not specify/i.test(answer);
+  const merged = `${answer}\n${visibleAnswer}`;
+  const ok = /\btransformer\b/i.test(merged) && !/does not specify/i.test(merged) && !/technical error/i.test(merged);
   console.log(JSON.stringify({ pass: ok, answer, thread_id: thread.id }, null, 2));
   process.exitCode = ok ? 0 : 1;
 } finally {
