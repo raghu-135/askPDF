@@ -86,6 +86,28 @@ def fixture_path(fixture_file: str) -> Path:
     return paper_path(arxiv_id)
 
 
+def paper_for_fixture(fixture_file: str) -> dict[str, Any] | None:
+    manifest = load_manifest()
+    for paper in manifest["papers"]:
+        names = (
+            paper["arxiv_id"],
+            paper.get("fixture_file"),
+            f"{paper['arxiv_id']}.pdf",
+        )
+        if fixture_file in names:
+            return paper
+    return None
+
+
+def indexing_timeout_seconds(fixture_file: str) -> float:
+    """Scale indexing wait for large papers (e.g. 144-page survey)."""
+    paper = paper_for_fixture(fixture_file)
+    if not paper:
+        return 1200.0
+    pages = int(paper.get("pages") or 30)
+    return min(7200.0, max(1200.0, pages * 25.0))
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 

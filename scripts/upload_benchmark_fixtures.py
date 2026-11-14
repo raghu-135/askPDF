@@ -11,8 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from benchmark_papers import ensure_all, fixture_path, load_manifest
-from live_stack_client import create_thread, live_client, upload_and_wait
+from benchmark_papers import ensure_all, fixture_path, indexing_timeout_seconds, load_manifest
+from live_stack_client import create_thread, live_client, upload_pdf, wait_indexed
 
 REPO = Path(__file__).resolve().parents[1]
 REPORT = REPO / "benchmarks" / "reports" / ".fixture_hashes.json"
@@ -35,7 +35,13 @@ def main() -> int:
         if not thread_id:
             thread_id = create_thread(client, f"benchmark-fixtures-{int(time.time())}")
         for name in files:
-            file_hash = upload_and_wait(client, thread_id, fixture_path(name))
+            file_hash = upload_pdf(client, thread_id, fixture_path(name))
+            wait_indexed(
+                client,
+                thread_id=thread_id,
+                file_hash=file_hash,
+                timeout=indexing_timeout_seconds(name),
+            )
             mapping[name] = file_hash
             print(f"indexed {name} -> {file_hash}")
     payload = {"thread_id": thread_id, "files": mapping}

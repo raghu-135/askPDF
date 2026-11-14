@@ -19,7 +19,7 @@ import httpx
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from benchmark_papers import ensure_all, fixture_path  # noqa: E402
+from benchmark_papers import ensure_all, fixture_path, indexing_timeout_seconds  # noqa: E402
 from live_stack_client import (  # noqa: E402
     admin_token,
     answer_from_run,
@@ -29,7 +29,8 @@ from live_stack_client import (  # noqa: E402
     pages_from_document_sources,
     scored_agent_run,
     thread_chat,
-    upload_and_wait,
+    upload_pdf,
+    wait_indexed,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -89,7 +90,18 @@ def _save_fixture_hashes(mapping: dict[str, str]) -> None:
 
 
 def upload_fixtures(client: httpx.Client, thread_id: str, files: list[str]) -> dict[str, str]:
-    return {name: upload_and_wait(client, thread_id, fixture_path(name)) for name in files}
+    hashes: dict[str, str] = {}
+    for name in files:
+        file_hash = upload_pdf(client, thread_id, fixture_path(name))
+        wait_indexed(
+            client,
+            thread_id=thread_id,
+            file_hash=file_hash,
+            timeout=indexing_timeout_seconds(name),
+        )
+        hashes[name] = file_hash
+        print(f"indexed {name}", flush=True)
+    return hashes
 
 
 def _metrics_tokens(detail: dict[str, Any]) -> int:
