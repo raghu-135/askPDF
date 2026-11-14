@@ -165,12 +165,18 @@ def lexical_attachment_scope_decline(state: Mapping[str, Any]) -> str | None:
 
 def _retrieved_document_evidence_is_substantive(state: Mapping[str, Any]) -> bool:
     doc_packets = document_evidence_packets(state)
-    if not doc_packets:
-        return False
     worker_scores = worker_document_retrieval_scores(state)
     if worker_scores and max(worker_scores) >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
         return True
-    return any(str(packet.get("content") or "").strip() for packet in doc_packets)
+    if any(str(packet.get("content") or "").strip() for packet in doc_packets):
+        return True
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    if str(bundle.get("document_evidence_text") or "").strip():
+        return True
+    if str(state.get("evidence") or "").strip():
+        return True
+    prefetch_scores = prefetch_document_retrieval_scores(state)
+    return bool(doc_packets and prefetch_scores)
 
 
 def post_retrieval_attachment_decline(state: Mapping[str, Any]) -> str | None:

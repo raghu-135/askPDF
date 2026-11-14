@@ -1168,6 +1168,7 @@ class NodeRegistry:
             "document_source_count": len(output.get("document_sources") or []),
             "web_source_count": len(output.get("web_sources") or []),
             "evidence_packet_scores": packet_scores,
+            "visit_index": int(item.get("ordinal") or 0) + 1,
         })
         return worker_terminal_delta(
             {**item, "dispatch_node_id": state.get("dispatch_node_id")},
