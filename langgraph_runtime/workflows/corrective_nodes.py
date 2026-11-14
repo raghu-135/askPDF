@@ -230,6 +230,9 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
     score_decline = attachment_retrieval_scope_decline(state)
     if score_decline:
         return score_decline
+    relevance_decline = decline_when_all_document_packets_irrelevant(state)
+    if relevance_decline:
+        return relevance_decline
     eligible = corrective_evidence_packets(dict(state))
     if eligible:
         if thread_has_attached_documents(state) and not any(
@@ -238,9 +241,7 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         ):
             return DOCUMENT_SCOPE_DECLINE_ANSWER
         return None
-    if not document_evidence_packets(state):
-        return None
-    return decline_when_all_document_packets_irrelevant(state)
+    return None
 
 
 def document_scope_decline(state: Mapping[str, Any]) -> str | None:
