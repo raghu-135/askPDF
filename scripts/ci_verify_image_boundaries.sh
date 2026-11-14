@@ -10,12 +10,17 @@ MAIN_COMPOSE=(
   -f docker-compose.ci.yml
 )
 
-rag_image="$("${MAIN_COMPOSE[@]}" images rag-service --quiet 2>/dev/null | head -1)"
-langgraph_image="$("${MAIN_COMPOSE[@]}" images langgraph-runtime --quiet 2>/dev/null | head -1)"
-if [ -z "$rag_image" ] || [ -z "$langgraph_image" ]; then
-  echo "Compose images missing after build (rag-service or langgraph-runtime)" >&2
-  exit 1
-fi
+project_name="$(basename "$ROOT" | tr '[:upper:]' '[:lower:]')"
+rag_image="${project_name}-rag-service"
+langgraph_image="askpdf-langgraph-runtime"
+
+for candidate in "$rag_image" "$langgraph_image"; do
+  if ! docker image inspect "$candidate" >/dev/null 2>&1; then
+    echo "Expected image '$candidate' missing after build" >&2
+    docker images --format 'table {{.Repository}}\t{{.Tag}}\t{{.ID}}' | head -20
+    exit 1
+  fi
+done
 
 docker run --rm "$rag_image" python -c 'import importlib.util; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("langgraph_runtime") is None'
 docker run --rm "$langgraph_image" python -c 'import importlib.util, langgraph, runtime_protocol, langgraph_runtime; assert importlib.util.find_spec("app") is None'
