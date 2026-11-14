@@ -325,6 +325,7 @@ def build_agent_workflow_prompt_preview(
 ) -> str:
     if prompt_profile is None:
         prompt_profile = {
+            "auto_rag_agent": PromptProfile.AUTO.value,
             "plan_execute_rag_agent": PromptProfile.PLANNER.value,
             "evaluator_replanner_rag_agent": PromptProfile.EVALUATOR_REPLANNER.value,
             CORRECTIVE_WORKFLOW_ID: PromptProfile.CORRECTIVE_SELF_RAG.value,
@@ -374,6 +375,12 @@ def build_agent_workflow_prompt_preview(
             "## System Message\n\nYou are a strict replanner for a bounded RAG workflow.\n\n"
             "## Human Message\n\n"
             + build_replanner_prompt(state)
+        )
+    elif prompt_profile == PromptProfile.AUTO.value:
+        sections.append(
+            "# Auto Orchestrator\n\n"
+            "Auto chooses a child LangGraph workflow from the live catalog, optionally pausing for plan approval, "
+            "then delegates execution and synthesizes the child answer.\n"
         )
     elif prompt_profile == PromptProfile.PLANNER.value:
         sections.append(

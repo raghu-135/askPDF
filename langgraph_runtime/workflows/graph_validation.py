@@ -35,6 +35,7 @@ from langgraph_runtime.workflows.tool_permission_validation import (
 )
 from langgraph_runtime.workflows.workflow_config_validation import collect_config_errors
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
+from langgraph_runtime.workflows.workflow_runtime import workflow_runtime_features
 
 
 def get_node_catalog() -> Dict[str, Dict[str, Any]]:
@@ -238,10 +239,37 @@ class GenericGraphValidator:
                 node_types_by_id=node_types_by_id,
                 node_catalog=node_catalog,
                 route_registry=route_registry,
+                supports_child_delegation=workflow_runtime_features(spec).get("supports_child_delegation") is True,
             )
         )
         errors.extend(self._collect_parallel_graph_errors(spec, nodes, edges, node_types_by_id))
         errors.extend(self._collect_corrective_graph_errors(spec, nodes, edges, node_types_by_id, adjacency))
+        errors.extend(self._collect_child_delegation_feature_errors(spec, node_types_by_id))
+        return errors
+
+    def _collect_child_delegation_feature_errors(
+        self,
+        spec: Dict[str, Any],
+        node_types_by_id: dict[str, str],
+    ) -> list[str]:
+        features = workflow_runtime_features(spec)
+        if features.get("supports_child_delegation") is not True:
+            return []
+        errors: list[str] = []
+        if features.get("supports_corrective_retrieval") is True:
+            errors.append(
+                "runtime.features.supports_child_delegation cannot be enabled with supports_corrective_retrieval"
+            )
+        corrective_only_types = {
+            WorkflowNodeType.RETRIEVAL_QUALITY_GRADER.value,
+            WorkflowNodeType.GROUNDED_ANSWER_VERIFIER.value,
+        }
+        present_corrective = sorted(corrective_only_types.intersection(set(node_types_by_id.values())))
+        if present_corrective:
+            errors.append(
+                "child delegation workflows must not include corrective-only nodes: "
+                + ", ".join(present_corrective)
+            )
         return errors
 
     def _collect_corrective_graph_errors(
@@ -591,7 +619,7 @@ class GenericGraphValidator:
                 errors.append(
                     f"node catalog type {node_type} must write worker evidence state: {', '.join(missing)}"
                 )
-        for node_type in ("direct_answer", "synthesizer"):
+        for node_type in ("direct_answer", "synthesizer", "delegate_synthesizer"):
             writes = set((node_catalog.get(node_type) or {}).get("state_writes") or [])
             if "final_answer" not in writes:
                 errors.append(f"node catalog type {node_type} must write final_answer")
@@ -819,6 +847,7 @@ class GenericGraphValidator:
         node_types_by_id: dict[str, str],
         node_catalog: Dict[str, Dict[str, Any]],
         route_registry: Dict[str, Dict[str, Any]],
+        supports_child_delegation: bool = False,
     ) -> list[str]:
         errors: list[str] = []
         edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
@@ -854,8 +883,11 @@ class GenericGraphValidator:
         if not finalizer_ids:
             errors.append("graph requires a finalizer node")
 
+        answer_types_requiring_finalizer = {"direct_answer", "synthesizer"}
+        if supports_child_delegation:
+            answer_types_requiring_finalizer.add("delegate_synthesizer")
         for node_id, node_type in sorted(node_types_by_id.items()):
-            if node_type in {"direct_answer", "synthesizer"} and not self._can_reach_type(
+            if node_type in answer_types_requiring_finalizer and not self._can_reach_type(
                 node_id,
                 {"finalizer"},
                 adjacency,

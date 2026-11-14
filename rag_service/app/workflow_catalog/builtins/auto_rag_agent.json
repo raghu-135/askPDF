@@ -1,0 +1,130 @@
+{
+  "builtin_key": "auto_rag_agent",
+  "description": "Understands your question, selects a built-in or custom LangGraph agent when helpful, and asks before larger plans.",
+  "is_builtin": true,
+  "framework": "langgraph",
+  "builder_id": "langgraph_graph",
+  "name": "Auto",
+  "spec_json": {
+    "schema_version": 1,
+    "version": 1,
+    "workflow_id": "auto_rag_agent",
+    "runtime": {
+      "kind": "compiled_rag",
+      "label": "Auto Agent",
+      "failure_code": "auto_rag_execution_failed",
+      "failure_reason_prefix": "Exception during Auto Agent execution",
+      "success_context": "Context retrieved by the Auto Agent workflow.",
+      "failure_context": "Auto Agent execution failed gracefully.",
+      "prompt_preview": "auto",
+      "features": {
+        "supports_replans": false,
+        "supports_child_delegation": true,
+        "supports_answer_quality": false
+      }
+    },
+    "config": {
+      "allowed_tool_ids": [
+        "thread_shape",
+        "wikipedia_reference",
+        "document_search_knowledge",
+        "document_inspection",
+        "document_context",
+        "thread_conversation_history",
+        "durable_memory",
+        "thread_events",
+        "live_web_recon",
+        "clarify_intent",
+        "research_canvas_publish"
+      ],
+      "context_policy": {
+        "evidence_compression": "compact",
+        "evidence_dedupe": true,
+        "evidence_packet_content_limit": 2000,
+        "evidence_packet_limit": 12,
+        "final_context_char_limit": 25536,
+        "final_prompt_assembly": "evidence_packets"
+      },
+      "custom_instructions": "",
+      "auto_policy": {
+        "require_plan_approval_on_complex": true,
+        "max_delegates_per_turn": 1,
+        "pass_prompt_overrides": true,
+        "delegate_policy": {
+          "mode": "catalog",
+          "include_custom": true,
+          "frameworks": ["langgraph"],
+          "exclude_workflow_ids": ["auto_rag_agent", "hermes_rag_agent"]
+        }
+      },
+      "prefetch_policy": {"enabled": true, "mode": "evidence"},
+      "hitl_policy": {
+        "enabled": true,
+        "max_interrupts_per_run": 4,
+        "gates": {
+          "plan_approval_gate": {
+            "enabled": true,
+            "mode": "approval",
+            "phase": "before",
+            "interrupt_type": "plan_approval",
+            "title": "Review Auto plan",
+            "prompt": "Approve running the selected agent workflow with this plan.",
+            "allowed_actions": ["approve", "reject"],
+            "default_action": "approve",
+            "routes": {"approve": "workflow_delegate", "reject": "finalizer"},
+            "target": {"node_id": "workflow_delegate", "node_type": "workflow_delegate"}
+          }
+        }
+      },
+      "loop_policy": {
+        "default_max_node_visits": 1,
+        "max_total_visits": 12,
+        "node_visit_limits": {
+          "auto_orchestrator": 1,
+          "workflow_delegate": 1,
+          "delegate_synthesizer": 1,
+          "plan_approval_gate": 2,
+          "finalizer": 1
+        }
+      },
+      "graph": {
+        "nodes": [
+          {"id": "context_loader", "type": "context_loader"},
+          {"id": "auto_orchestrator", "type": "auto_orchestrator"},
+          {"id": "plan_approval_gate", "type": "hitl_gate"},
+          {"id": "workflow_delegate", "type": "workflow_delegate"},
+          {"id": "delegate_synthesizer", "type": "delegate_synthesizer"},
+          {"id": "finalizer", "type": "finalizer"}
+        ],
+        "edges": [
+          {"from": "START", "to": "context_loader"},
+          {"from": "context_loader", "to": "auto_orchestrator"},
+          {
+            "conditional": true,
+            "from": "auto_orchestrator",
+            "route_fn": "auto_orchestrator_route",
+            "routes": {
+              "delegate": "workflow_delegate",
+              "plan_approval": "plan_approval_gate",
+              "decline": "finalizer"
+            }
+          },
+          {
+            "conditional": true,
+            "from": "plan_approval_gate",
+            "route_fn": "hitl_gate_route",
+            "routes": {"approve": "workflow_delegate", "reject": "finalizer"}
+          },
+          {"from": "workflow_delegate", "to": "delegate_synthesizer"},
+          {"from": "delegate_synthesizer", "to": "finalizer"},
+          {"from": "finalizer", "to": "END"}
+        ]
+      },
+      "system_role": "",
+      "tool_instructions": {},
+      "use_reranker": true,
+      "use_web_search": false
+    }
+  },
+  "visibility": "builtin"
+}

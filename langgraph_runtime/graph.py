@@ -48,6 +48,11 @@ from langgraph_runtime.workflows.evidence import (
     prefetch_refs as _prefetch_refs,
     state_evidence_refs as _state_evidence_refs,
 )
+from langgraph_runtime.workflows.auto_nodes import (
+    auto_orchestrator_node,
+    delegate_synthesizer_node,
+    workflow_delegate_node,
+)
 from langgraph_runtime.workflows.enums import AnswerQualityRoute, EvaluatorRoute, NodeEventStatus, RouterRoute, ROUTER_ROUTES, ToolName, WorkflowNodeType
 from langgraph_runtime.workflows.corrective_nodes import (
     corrective_route_for_report,
@@ -255,6 +260,9 @@ class NodeRegistry:
             WorkflowNodeType.DEEP_COORDINATOR.value: deep_coordinator,
             WorkflowNodeType.DEEP_TASK_SYNTHESIZER.value: deep_task_synthesizer,
             WorkflowNodeType.EVIDENCE_CRITIC.value: evidence_critic,
+            WorkflowNodeType.AUTO_ORCHESTRATOR.value: self.auto_orchestrator,
+            WorkflowNodeType.WORKFLOW_DELEGATE.value: self.workflow_delegate,
+            WorkflowNodeType.DELEGATE_SYNTHESIZER.value: self.delegate_synthesizer,
         }
 
     def get(self, node_type: str) -> Callable[..., Any]:
@@ -524,7 +532,9 @@ class NodeRegistry:
     async def context_loader(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
         try:
-            if state.get("runtime_execution_mode"):
+            if state.get("context_prefetch_seeded") and isinstance(state.get("pre_fetch_bundle"), dict):
+                bundle = dict(state["pre_fetch_bundle"])
+            elif state.get("runtime_execution_mode"):
                 # The external runtime cannot open the product database. Use
                 # the MCP retrieval contracts, whose server-side handlers
                 # remain owned by rag-service, for the same evidence inputs.
@@ -1927,6 +1937,15 @@ class NodeRegistry:
             } if is_corrective else {}),
             "node_events": _append_event(state, WorkflowNodeType.REPLANNER.value, data, started=started, config=config),
         }
+
+    async def auto_orchestrator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        return await auto_orchestrator_node(state, config)
+
+    async def workflow_delegate(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        return await workflow_delegate_node(state, config)
+
+    async def delegate_synthesizer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        return await delegate_synthesizer_node(state, config)
 
     async def direct_answer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         return await direct_answer_node(state, config)

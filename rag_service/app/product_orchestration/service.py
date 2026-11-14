@@ -15,6 +15,12 @@ from app.product_orchestration.metrics import build_run_metrics
 from app.product_orchestration.parallel_observability import project_parallel_events
 from app.product_orchestration.repository import AgentWorkflowRepository, InterruptResolutionResult
 from app.product_orchestration.builtin_workflows import builtin_workflow_keys
+from app.product_orchestration.workflow_delegate import (
+    AUTO_WORKFLOW_ID,
+    DEEP_RESEARCH_WORKFLOW_ID,
+    inject_delegate_catalog_into_spec,
+    resolve_delegate_catalog,
+)
 from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
     workflow_is_chat_eligible,
@@ -401,6 +407,13 @@ class AgentRunService:
                 request_overrides=request_overrides,
             )
             stored_resolved_spec = dict(await provider.normalize(definition, resolved_spec))
+            if workflow.id == AUTO_WORKFLOW_ID:
+                config = stored_resolved_spec.get("config") if isinstance(stored_resolved_spec.get("config"), dict) else {}
+                catalog = await resolve_delegate_catalog(
+                    self.repository,
+                    auto_policy=config.get("auto_policy") if isinstance(config.get("auto_policy"), dict) else {},
+                )
+                stored_resolved_spec = inject_delegate_catalog_into_spec(stored_resolved_spec, catalog)
         except ValueError as exc:
             logger.exception(
                 "Selected agent workflow failed validation; aborting run | thread_id=%s requested_workflow=%s error=%s",
@@ -717,6 +730,188 @@ class AgentRunService:
                     {"run_id": run.id, "status": AgentRunStatus.FAILED.value, "error": error_json},
                 )
             raise
+
+    async def run_delegate_sync(
+        self,
+        *,
+        parent_run_id: str,
+        thread_id: str,
+        child_workflow_id: str,
+        question: str,
+        pre_fetch_bundle: Dict[str, Any],
+        embedding_model: str,
+        llm_model: Optional[str] = None,
+        use_web_search: bool = False,
+        use_reranker: Optional[bool] = True,
+        system_role: str = "",
+        custom_instructions: str = "",
+        tool_instructions: Optional[Dict[str, str]] = None,
+        mcp_execution_context_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        import hashlib
+        from types import SimpleNamespace
+
+        from app.db import get_thread
+        from app.services.agent_task_repository import create_task
+
+        if not embedding_model:
+            raise ValueError("embedding_model is required for delegation")
+
+        parent_run = await self.repository.get_run(parent_run_id)
+        if parent_run is None or str(parent_run.thread_id) != thread_id:
+            raise ValueError("parent_run_id does not match thread_id")
+
+        if child_workflow_id == DEEP_RESEARCH_WORKFLOW_ID:
+            thread = await get_thread(thread_id)
+            if thread is None:
+                raise RuntimeError("thread not found for deep research delegation")
+            idempotency_key = hashlib.sha256(
+                f"auto-delegate:{parent_run_id}:{child_workflow_id}:{question}".encode("utf-8")
+            ).hexdigest()
+            task, _duplicate = await create_task(
+                thread_id=thread_id,
+                project_id=getattr(thread, "project_id", None),
+                user_id=getattr(parent_run, "user_id", None),
+                workflow_id=child_workflow_id,
+                objective=question,
+                idempotency_key=idempotency_key,
+                config={
+                    "llm_model": llm_model,
+                    "use_web_search": use_web_search,
+                    "use_reranker": use_reranker is not False,
+                    "limits": {},
+                },
+            )
+            return {
+                "child_workflow_id": child_workflow_id,
+                "child_run_id": None,
+                "agent_task_id": task.id,
+                "final_answer": f"Deep Research task started. Track progress in task `{task.id}`.",
+                "message": f"Deep Research task started. Track progress in task `{task.id}`.",
+            }
+
+        await self.repository.seed_builtin_workflows()
+        workflow = await self.repository.get_workflow(child_workflow_id, include_custom=True)
+        if workflow is None:
+            raise RuntimeError(f"Child workflow is unavailable: {child_workflow_id}")
+        if not workflow_is_chat_eligible(workflow.spec_json):
+            raise RuntimeError(f"Child workflow is not chat eligible: {child_workflow_id}")
+
+        thread_settings = await get_thread_settings(thread_id)
+        definition = definition_from_workflow(workflow)
+        provider = builder_for_definition(definition)
+        request_overrides = {
+            "llm_model": llm_model,
+            "use_web_search": use_web_search,
+            "use_reranker": use_reranker,
+            "system_role": system_role or None,
+            "tool_instructions": tool_instructions,
+            "custom_instructions": custom_instructions or None,
+        }
+        resolved_spec = await provider.resolve(
+            definition,
+            workflow.spec_json,
+            thread_settings=thread_settings,
+            request_overrides=request_overrides,
+        )
+        stored_resolved_spec = dict(await provider.normalize(definition, resolved_spec))
+        config = stored_resolved_spec.get("config") if isinstance(stored_resolved_spec.get("config"), dict) else {}
+        if isinstance(pre_fetch_bundle, dict) and pre_fetch_bundle:
+            config["seed_pre_fetch_bundle"] = pre_fetch_bundle
+            stored_resolved_spec["config"] = config
+
+        workflow_version = _workflow_version_info(workflow)
+        run = await self.repository.create_run(
+            thread_id=thread_id,
+            workflow_id=workflow.id,
+            workflow_version_id=workflow_version.id if workflow_version is not None else None,
+            workflow_version=workflow_version.version if workflow_version is not None else None,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            definition_category=getattr(workflow, "category", None),
+            resolved_spec_json=stored_resolved_spec,
+            user_id=getattr(parent_run, "user_id", None),
+            parent_run_id=parent_run_id,
+            run_metadata_json={
+                "executed_workflow_id": workflow.id,
+                "framework": definition.framework,
+                "builder_id": definition.builder_id,
+                "question": question,
+                "delegated_from_run_id": parent_run_id,
+            },
+        )
+
+        trace_recorder = AgentTraceRecorder(run)
+        context = {
+            "agent_run_id": run.id,
+            "agent_workflow_id": workflow.id,
+            "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
+            "embedding_model": embedding_model,
+            "llm_model": llm_model,
+        }
+        req = SimpleNamespace(
+            question=question,
+            llm_model=llm_model,
+            use_web_search=use_web_search,
+            use_reranker=use_reranker,
+            system_role_override=system_role,
+            custom_instructions_override=custom_instructions,
+            tool_instructions_override=tool_instructions or {},
+            pre_fetch_bundle=pre_fetch_bundle,
+            bypass_clarification=True,
+        )
+        adapter = adapter_for_definition(definition)
+        runtime_request = AgentRuntimeRequest(
+            run_id=run.id,
+            thread_id=thread_id,
+            definition_id=definition.definition_id,
+            framework=definition.framework,
+            builder_id=definition.builder_id,
+            input={"question": question, "pre_fetch_bundle": pre_fetch_bundle},
+            options={
+                "embedding_model": embedding_model,
+                "llm_model": llm_model,
+                "use_web_search": use_web_search,
+                "use_reranker": use_reranker,
+                "system_role_override": system_role,
+                "custom_instructions_override": custom_instructions,
+                "tool_instructions_override": tool_instructions or {},
+                "mcp_execution_context_token": mcp_execution_context_token,
+            },
+        )
+        runtime_context = RuntimeInvocationContext(
+            request_payload={
+                "question": question,
+                "pre_fetch_bundle": pre_fetch_bundle,
+                "llm_model": llm_model,
+                "use_web_search": use_web_search,
+                "use_reranker": use_reranker,
+            },
+            embedding_model=embedding_model,
+            resolved_spec=stored_resolved_spec,
+            agent_run_context=context,
+        )
+        runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
+        runtime_result = await adapter.start(runtime_request, context=runtime_context)
+        result = result_to_product_payload(runtime_result)
+        status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
+        answer = str(result.get("answer") or result.get("final_answer") or "").strip()
+        metrics = build_run_metrics(result, duration_ms=0)
+        await self.repository.complete_run(
+            run.id,
+            status=status if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value, AgentRunStatus.AWAITING_HUMAN.value} else AgentRunStatus.COMPLETED.value,
+            metrics_json=metrics,
+            error_json=result.get("agent_error"),
+        )
+        debug_payload = trace_recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, result=result)
+        await self.repository.set_run_debug_trace(run.id, debug_payload)
+        return {
+            "child_workflow_id": child_workflow_id,
+            "child_run_id": run.id,
+            "final_answer": answer,
+            "status": status,
+            "result": result,
+        }
 
     async def resume_agent_run(
         self,

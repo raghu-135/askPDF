@@ -63,6 +63,7 @@ async def create_run(
     runtime_binding_json: Optional[Dict[str, Any]] = None,
     running_status: str = "running",
     run_metadata_json: Optional[Dict[str, Any]] = None,
+    parent_run_id: Optional[str] = None,
 ) -> AgentRun:
     async with session.begin():
         workflow = await session.get(AgentWorkflow, workflow_id)
@@ -89,6 +90,7 @@ async def create_run(
             id=run_id,
             thread_id=thread_id,
             user_id=user_id,
+            parent_run_id=parent_run_id,
             workflow_id=workflow_id,
             framework=persisted_framework,
             builder_id=persisted_builder_id,
