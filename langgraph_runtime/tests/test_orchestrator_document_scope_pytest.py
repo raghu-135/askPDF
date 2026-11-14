@@ -108,6 +108,26 @@ def test_orchestrator_tokyo_declines_canonical_despite_non_document_packets():
     assert orchestrator_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
+def test_orchestrator_keeps_encoder_in_scope_when_assessments_mark_irrelevant():
+    state = {
+        "workflow_id": PARALLEL_REFERENCE_WORKFLOW_ID,
+        "pre_fetch_bundle": {"documents": [{"file_hash": "abc" * 8}]},
+        "question": "How many encoder layers does the base Transformer use?",
+        "evidence_packets": [
+            {
+                "id": "retrieval_worker:1",
+                "source_ids": ["doc:" + "ab" * 16 + ":c1"],
+                "content": "The base model uses N=6 identical layers for encoder and decoder.",
+                "raw_retriever_score": 0.35,
+            }
+        ],
+        "evidence_assessments": [
+            {"packet_id": "retrieval_worker:1", "relevant": False},
+        ],
+    }
+    assert orchestrator_document_scope_decline(state) is None
+
+
 def test_orchestrator_keeps_in_scope_when_a_chunk_scores_above_threshold():
     state = {
         "workflow_id": PARALLEL_REFERENCE_WORKFLOW_ID,
