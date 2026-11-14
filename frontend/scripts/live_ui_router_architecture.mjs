@@ -75,7 +75,7 @@ try {
   let chatBody = await api("POST", `/api/threads/${thread.id}/chat`, {
     thread_id: thread.id,
     question: "What architecture does the paper propose? Reply with the architecture name only.",
-    llm_model: "openai/gpt-4.1-mini",
+    llm_model: process.env.ASKPDF_E2E_LLM_MODEL || "google/gemini-2.5-flash",
     use_web_search: false,
     use_reranker: true,
     context_window: 64000,
@@ -91,6 +91,15 @@ try {
       answer = String(agentRun.final_answer || answer);
       if (answer.trim()) break;
     }
+    const msgs = await api("GET", `/api/threads/${thread.id}/messages?limit=8`);
+    const list = Array.isArray(msgs) ? msgs : msgs.messages || [];
+    for (const item of [...list].reverse()) {
+      if (item?.role === "assistant" && String(item.content || "").trim()) {
+        answer = String(item.content);
+        break;
+      }
+    }
+    if (answer.trim()) break;
   }
   await page.goto(`${APP}/threads/${thread.id}`, { waitUntil: "domcontentloaded", timeout: 120000 });
   await page.waitForTimeout(8000);

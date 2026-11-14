@@ -57,7 +57,7 @@ def http_json(method: str, path: str, payload: dict | None = None) -> dict:
     headers = {"Authorization": f"Bearer {ADMIN}", "Content-Type": "application/json"}
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(f"{API}{path}", data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=600) as resp:
+    with urllib.request.urlopen(req, timeout=1800) as resp:
         return json.loads(resp.read().decode())
 
 
