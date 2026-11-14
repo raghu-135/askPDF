@@ -19,6 +19,7 @@ from langgraph_runtime.workflows.evidence import (
 from langgraph_runtime.workflows.enums import NodeEventStatus, RouterRoute, WorkflowNodeType
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
+from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.corrective_nodes import corrective_document_scope_decline, document_scope_decline
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
@@ -62,7 +63,7 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         decline = document_scope_decline(state)
         if decline:
             document_scope_declined = True
-    if decline is None:
+    if decline is None and state.get("workflow_id") != PARALLEL_REFERENCE_WORKFLOW_ID:
         decline = state.get("attachment_scope_decline") or router_attachment_scope_decline(
             state, str(state.get("route") or "")
         )
