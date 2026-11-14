@@ -50,6 +50,7 @@ from app.api.files import router as files_router
 from app.api.messages import router as messages_router
 from app.api.models import router as models_router
 from app.api.agent_workflows import router as agent_workflows_router
+from app.api.internal_agent_runs import router as internal_agent_runs_router
 from app.api.agent_tasks import router as agent_tasks_router
 from app.api.tools import router as tools_router
 from app.api.canvases import router as canvases_router
@@ -446,6 +447,7 @@ app.include_router(files_router, prefix="/api")
 app.include_router(messages_router, prefix="/api")
 app.include_router(models_router, prefix="/api")
 app.include_router(agent_workflows_router, prefix="/api")
+app.include_router(internal_agent_runs_router, prefix="/internal")
 app.include_router(agent_tasks_router, prefix="/api")
 app.include_router(tools_router, prefix="/api")
 app.include_router(canvases_router, prefix="/api")

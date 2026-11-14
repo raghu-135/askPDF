@@ -372,12 +372,14 @@ class AgentWorkflowRepository:
         user_id: Optional[str] = None,
         runtime_binding_json: Optional[Dict[str, Any]] = None,
         run_metadata_json: Optional[Dict[str, Any]] = None,
+        parent_run_id: Optional[str] = None,
     ) -> AgentRun:
         session = await self._get_session()
         return await run_store_create_run(
             session,
             thread_id=thread_id,
             workflow_id=workflow_id,
+            parent_run_id=parent_run_id,
             workflow_version_id=workflow_version_id,
             workflow_version=workflow_version,
             framework=framework,

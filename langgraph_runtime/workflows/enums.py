@@ -88,6 +88,12 @@ class GroundedAnswerRoute(str, Enum):
     FINALIZE_CAUTIOUS = "finalize_cautious"
 
 
+class AutoOrchestratorRoute(str, Enum):
+    DELEGATE = "delegate"
+    PLAN_APPROVAL = "plan_approval"
+    DECLINE = "decline"
+
+
 class RouteFunctionId(str, Enum):
     ROUTER = "router_route"
     PLANNER = "planner_route"
@@ -101,6 +107,7 @@ class RouteFunctionId(str, Enum):
     DEEP_TASK_DISPATCH = "deep_task_dispatch_route"
     DEEP_TASK = "deep_task_route"
     BUDGET_REVIEW = "budget_review_route"
+    AUTO_ORCHESTRATOR = "auto_orchestrator_route"
 
 
 class WorkflowNodeType(str, Enum):
@@ -131,6 +138,9 @@ class WorkflowNodeType(str, Enum):
     DEEP_COORDINATOR = "deep_coordinator"
     DEEP_TASK_SYNTHESIZER = "deep_task_synthesizer"
     EVIDENCE_CRITIC = "evidence_critic"
+    AUTO_ORCHESTRATOR = "auto_orchestrator"
+    WORKFLOW_DELEGATE = "workflow_delegate"
+    DELEGATE_SYNTHESIZER = "delegate_synthesizer"
 
 
 class ToolName(str, Enum):
@@ -274,6 +284,7 @@ class PromptProfile(str, Enum):
     PLANNER = "planner"
     EVALUATOR_REPLANNER = "evaluator_replanner"
     CORRECTIVE_SELF_RAG = "corrective_self_rag"
+    AUTO = "auto"
 
 
 class AgentCheckpointerMode(str, Enum):
@@ -322,6 +333,7 @@ EVALUATOR_ROUTES = {route.value for route in EvaluatorRoute}
 ANSWER_QUALITY_ROUTES = {route.value for route in AnswerQualityRoute}
 CORRECTIVE_RETRIEVAL_ROUTES = {route.value for route in CorrectiveRetrievalRoute}
 GROUNDED_ANSWER_ROUTES = {route.value for route in GroundedAnswerRoute}
+AUTO_ORCHESTRATOR_ROUTES = frozenset(route.value for route in AutoOrchestratorRoute)
 HITL_ACTIONS = {action.value for action in AgentRunResumeAction}
 RESUME_ACTIONS = {
     AgentRunResumeAction.APPROVE.value,

@@ -635,3 +635,23 @@ for _tool_name in (
     TOOL_FRIENDLY_CONFIG[_tool_name]["mcp_enabled"] = True
 
 TOOL_FRIENDLY_CONFIG[TOOL_NAME_ASK_FOR_CLARIFICATION]["mcp_enabled"] = False
+
+
+def _grant_context_loader_prefetch_tools_from_node_catalog() -> None:
+    """Mirror node-catalog prefetch contracts so registry validation cannot drift."""
+
+    from langgraph_runtime.workflows.node_catalog import CONTEXT_LOADER_PREFETCH_TOOL_CONTRACT_IDS
+
+    wanted = set(CONTEXT_LOADER_PREFETCH_TOOL_CONTRACT_IDS)
+    for metadata in TOOL_CONTRACT_METADATA.values():
+        contract_id = metadata.get("id")
+        if not isinstance(contract_id, str) or contract_id not in wanted:
+            continue
+        for key in ("allowed_node_types", "allowed_caller_nodes"):
+            values = list(metadata.get(key) or [])
+            if NODE_CONTEXT_LOADER not in values:
+                values.append(NODE_CONTEXT_LOADER)
+                metadata[key] = values
+
+
+_grant_context_loader_prefetch_tools_from_node_catalog()

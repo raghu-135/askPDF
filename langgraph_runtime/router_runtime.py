@@ -682,6 +682,7 @@ async def _handle_compiled_rag_chat(
         "task_incomplete_reasons": [],
         "task_pause_requested": False,
         "task_cancel_requested": False,
+        "available_delegate_workflows": list(workflow_config.get("available_delegate_workflows") or []),
         "document_sources": [],
         "web_sources": [],
         "used_chat_ids": [],
@@ -690,6 +691,15 @@ async def _handle_compiled_rag_chat(
         "tool_events": [],
         "errors": [],
     }
+    seeded_bundle = getattr(req, "pre_fetch_bundle", None)
+    if not isinstance(seeded_bundle, dict):
+        seeded_bundle = workflow_config.get("seed_pre_fetch_bundle") if isinstance(workflow_config.get("seed_pre_fetch_bundle"), dict) else None
+    if isinstance(seeded_bundle, dict) and seeded_bundle:
+        state["pre_fetch_bundle"] = seeded_bundle
+        state["context_prefetch_seeded"] = True
+        state["document_sources"] = list(seeded_bundle.get("document_sources") or [])
+        state["web_sources"] = list(seeded_bundle.get("web_sources") or [])
+        state["used_chat_ids"] = list(seeded_bundle.get("used_chat_ids") or [])
     _install_budget_meter(config, state)
 
     try:

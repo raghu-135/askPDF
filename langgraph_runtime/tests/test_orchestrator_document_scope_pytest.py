@@ -139,5 +139,6 @@ def test_orchestrator_workflow_compiles_after_scope_changes():
     )
     if spec_path is None:
         pytest.skip("orchestrator workflow catalog is not bundled in the langgraph-runtime image")
-    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    spec = payload["spec_json"]
     assert WorkflowCompiler().compile(spec) is not None

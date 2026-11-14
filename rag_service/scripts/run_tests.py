@@ -112,6 +112,7 @@ UNIT_TEST_FILES = [
     "test_retrieval_clip_pytest.py",
     "test_temporal_metadata_retrieval.py",
     "test_time_utils.py",
+    "test_workflow_delegate_pytest.py",
     "test_http_client_lifecycle.py",
 ]
 
@@ -131,6 +132,7 @@ HERMES_TEST_FILES = [
 ]
 
 MCP_TEST_FILES = [
+    "test_delegate_mcp_grant_pytest.py",
     "test_mcp_allowed_hosts_pytest.py",
     "test_mcp_context.py",
     "test_mcp_transport.py",

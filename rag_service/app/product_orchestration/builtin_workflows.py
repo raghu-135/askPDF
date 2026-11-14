@@ -12,6 +12,7 @@ from app.product_orchestration.workflow_runtime import RUNTIME_TEXT_FIELDS, SUPP
 BUILTIN_WORKFLOW_DIR = Path(__file__).parents[1] / "workflow_catalog" / "builtins"
 
 BUILTIN_DISCOVERY_CATEGORIES = {
+    "auto_rag_agent": "router",
     "router_rag_agent": "router",
     "plan_execute_rag_agent": "replanner",
     "evaluator_replanner_rag_agent": "replanner",

@@ -46,6 +46,9 @@ NODE_DEEP_RESEARCH_SUBAGENT = WorkflowNodeType.DEEP_RESEARCH_SUBAGENT.value
 NODE_DEEP_COORDINATOR = WorkflowNodeType.DEEP_COORDINATOR.value
 NODE_DEEP_TASK_SYNTHESIZER = WorkflowNodeType.DEEP_TASK_SYNTHESIZER.value
 NODE_EVIDENCE_CRITIC = WorkflowNodeType.EVIDENCE_CRITIC.value
+NODE_AUTO_ORCHESTRATOR = WorkflowNodeType.AUTO_ORCHESTRATOR.value
+NODE_WORKFLOW_DELEGATE = WorkflowNodeType.WORKFLOW_DELEGATE.value
+NODE_DELEGATE_SYNTHESIZER = WorkflowNodeType.DELEGATE_SYNTHESIZER.value
 START_NODE = GraphSentinel.START.value
 END_NODE = GraphSentinel.END.value
 
@@ -91,6 +94,7 @@ ROUTE_GROUNDED_ANSWER = RouteFunctionId.GROUNDED_ANSWER.value
 ROUTE_DEEP_TASK_DISPATCH = RouteFunctionId.DEEP_TASK_DISPATCH.value
 ROUTE_DEEP_TASK = RouteFunctionId.DEEP_TASK.value
 ROUTE_BUDGET_REVIEW = RouteFunctionId.BUDGET_REVIEW.value
+ROUTE_AUTO_ORCHESTRATOR = RouteFunctionId.AUTO_ORCHESTRATOR.value
 
 TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
 TOOL_DOCUMENT_SEARCH_KNOWLEDGE = ToolContractId.DOCUMENT_SEARCH_KNOWLEDGE.value
@@ -137,15 +141,29 @@ SPAN_HUMAN_REVIEW = TraceSpanKind.HUMAN_REVIEW.value
 RAW_PAYLOAD_BOUNDED = TracePayloadMode.BOUNDED.value
 
 
+CONTEXT_LOADER_PREFETCH_TOOL_CONTRACT_IDS = [
+    TOOL_THREAD_SHAPE,
+    TOOL_DOCUMENT_SEARCH_KNOWLEDGE,
+    TOOL_THREAD_CONVERSATION_HISTORY,
+    TOOL_DURABLE_MEMORY,
+    TOOL_LIVE_WEB_RECON,
+]
+
 NODE_CATALOG: Dict[str, Dict[str, Any]] = {
     NODE_CONTEXT_LOADER: {
         "display_name": "Context Loader",
         "category": CAT_CONTEXT,
         "capabilities": [CAP_CONTEXT_PREFETCH],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": [TOOL_THREAD_SHAPE],
+        "allowed_tool_contract_ids": list(CONTEXT_LOADER_PREFETCH_TOOL_CONTRACT_IDS),
         "allowed_parent_types": [START_NODE],
-        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_DEEP_TASK_PLANNER, NODE_HITL_GATE],
+        "allowed_child_types": [
+            NODE_ROUTER,
+            NODE_PLANNER,
+            NODE_DEEP_TASK_PLANNER,
+            NODE_AUTO_ORCHESTRATOR,
+            NODE_HITL_GATE,
+        ],
         "limits": {"default_max_visits": 1},
     },
     NODE_ROUTER: {
@@ -339,6 +357,9 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_GROUNDED_ANSWER_VERIFIER,
             NODE_DEEP_COORDINATOR,
             NODE_EVIDENCE_CRITIC,
+            NODE_AUTO_ORCHESTRATOR,
+            NODE_WORKFLOW_DELEGATE,
+            NODE_DELEGATE_SYNTHESIZER,
             NODE_HITL_GATE,
         ],
         "allowed_child_types": [NODE_HITL_GATE, END_NODE],
@@ -350,8 +371,46 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_HITL_INTERRUPT],
         "allowed_route_functions": [ROUTE_HITL_GATE],
         "allowed_tool_contract_ids": [],
-        "allowed_parent_types": [START_NODE, NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_AGGREGATOR, NODE_ANSWER_EVALUATOR, NODE_FINALIZER, NODE_DEEP_COORDINATOR],
-        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_SERIAL_DISPATCH, NODE_PARALLEL_DISPATCH, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_ANSWER_EVALUATOR, NODE_FINALIZER, NODE_DEEP_TASK_SCHEDULER, END_NODE],
+        "allowed_parent_types": [
+            START_NODE,
+            NODE_CONTEXT_LOADER,
+            NODE_ROUTER,
+            NODE_PLANNER,
+            NODE_RETRIEVAL_WORKER,
+            NODE_THREAD_CONVERSATION_HISTORY_WORKER,
+            NODE_DURABLE_MEMORY_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
+            NODE_WEB_WORKER,
+            NODE_EVIDENCE_EVALUATOR,
+            NODE_REPLANNER,
+            NODE_DIRECT_ANSWER,
+            NODE_SYNTHESIZER,
+            NODE_AGGREGATOR,
+            NODE_ANSWER_EVALUATOR,
+            NODE_FINALIZER,
+            NODE_DEEP_COORDINATOR,
+            NODE_AUTO_ORCHESTRATOR,
+        ],
+        "allowed_child_types": [
+            NODE_ROUTER,
+            NODE_PLANNER,
+            NODE_SERIAL_DISPATCH,
+            NODE_PARALLEL_DISPATCH,
+            NODE_RETRIEVAL_WORKER,
+            NODE_THREAD_CONVERSATION_HISTORY_WORKER,
+            NODE_DURABLE_MEMORY_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
+            NODE_WEB_WORKER,
+            NODE_EVIDENCE_EVALUATOR,
+            NODE_REPLANNER,
+            NODE_DIRECT_ANSWER,
+            NODE_SYNTHESIZER,
+            NODE_ANSWER_EVALUATOR,
+            NODE_FINALIZER,
+            NODE_DEEP_TASK_SCHEDULER,
+            NODE_WORKFLOW_DELEGATE,
+            END_NODE,
+        ],
         "limits": {"default_max_visits": 2, "max_visits": 16},
     },
     NODE_PARALLEL_DISPATCH: {
@@ -496,6 +555,36 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": [], "allowed_parent_types": [NODE_DEEP_TASK_SYNTHESIZER],
         "allowed_child_types": [NODE_FINALIZER, NODE_DEEP_TASK_SCHEDULER, NODE_DEEP_TASK_PLANNER],
         "limits": {"default_max_visits": 1, "max_visits": 1000000},
+    },
+    NODE_AUTO_ORCHESTRATOR: {
+        "display_name": "Auto Orchestrator",
+        "category": CAT_CONTROL,
+        "capabilities": [CAP_ROUTE_INTENT, CAP_PLAN_EXECUTION],
+        "allowed_route_functions": [ROUTE_AUTO_ORCHESTRATOR],
+        "allowed_tool_contract_ids": [],
+        "allowed_parent_types": [NODE_CONTEXT_LOADER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_WORKFLOW_DELEGATE, NODE_HITL_GATE, NODE_FINALIZER],
+        "limits": {"default_max_visits": 1},
+    },
+    NODE_WORKFLOW_DELEGATE: {
+        "display_name": "Workflow Delegate",
+        "category": CAT_CONTROL,
+        "capabilities": [NodeCapability.TASK_DELEGATE.value],
+        "allowed_route_functions": [],
+        "allowed_tool_contract_ids": [],
+        "allowed_parent_types": [NODE_AUTO_ORCHESTRATOR, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_DELEGATE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
+        "limits": {"default_max_visits": 1},
+    },
+    NODE_DELEGATE_SYNTHESIZER: {
+        "display_name": "Delegate Synthesizer",
+        "category": CAT_ANSWER,
+        "capabilities": [CAP_ANSWER_SYNTHESIZE],
+        "allowed_route_functions": [],
+        "allowed_tool_contract_ids": [TOOL_RESEARCH_CANVAS_PUBLISH],
+        "allowed_parent_types": [NODE_WORKFLOW_DELEGATE, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_FINALIZER, NODE_HITL_GATE],
+        "limits": {"default_max_visits": 1},
     },
 }
 
@@ -752,6 +841,45 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
         "prompt_slots": [NODE_GROUNDED_ANSWER_VERIFIER],
         "context_policy": {"mode": POLICY_EVALUATE_EVIDENCE, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_DECISION},
         "observability": {"span_kind": SPAN_CONTROL, "event_prefix": NODE_GROUNDED_ANSWER_VERIFIER, "summary_fields": ["grounded_answer_route", "citation_violation_count", "contradiction_count", "budget_exhausted_reason"], "raw_payload": RAW_PAYLOAD_BOUNDED},
+        "max_instances": 1,
+    },
+    NODE_AUTO_ORCHESTRATOR: {
+        "state_reads": ["question", "pre_fetch_bundle", "available_delegate_workflows"],
+        "state_writes": ["auto_orchestrator_route", "delegate_workflow_id", "delegate_plan_summary", "delegate_requires_approval"],
+        "prompt_slots": [NODE_AUTO_ORCHESTRATOR],
+        "context_policy": {"mode": POLICY_ROUTE, "input_budget": BUDGET_BOUNDED_PREFETCH, "output_budget": BUDGET_DECISION},
+        "observability": {
+            "span_kind": SPAN_CONTROL,
+            "event_prefix": NODE_AUTO_ORCHESTRATOR,
+            "summary_fields": ["auto_orchestrator_route", "delegate_workflow_id"],
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
+        },
+        "max_instances": 1,
+    },
+    NODE_WORKFLOW_DELEGATE: {
+        "state_reads": ["delegate_workflow_id", "delegate_plan_summary", "question", "pre_fetch_bundle"],
+        "state_writes": ["final_answer", "document_sources", "web_sources", "delegate_child_run_id", "evidence"],
+        "prompt_slots": [],
+        "context_policy": {"mode": POLICY_PLAN, "input_budget": BUDGET_BOUNDED_SUMMARY, "output_budget": BUDGET_BOUNDED_EVIDENCE},
+        "observability": {
+            "span_kind": SPAN_CONTROL,
+            "event_prefix": NODE_WORKFLOW_DELEGATE,
+            "summary_fields": ["delegate_workflow_id", "delegate_child_run_id"],
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
+        },
+        "max_instances": 1,
+    },
+    NODE_DELEGATE_SYNTHESIZER: {
+        "state_reads": ["question", "final_answer", "delegate_plan_summary", "document_sources", "web_sources"],
+        "state_writes": ["final_answer", "reasoning", "reasoning_available", "reasoning_format"],
+        "prompt_slots": ["final_answer"],
+        "context_policy": {"mode": POLICY_ASSEMBLE_ANSWER, "input_budget": BUDGET_BOUNDED_SUMMARY, "output_budget": BUDGET_ANSWER},
+        "observability": {
+            "span_kind": SPAN_ANSWER,
+            "event_prefix": NODE_DELEGATE_SYNTHESIZER,
+            "summary_fields": ["answer_chars", "delegate_workflow_id"],
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
+        },
         "max_instances": 1,
     },
 }

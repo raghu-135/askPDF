@@ -7,7 +7,7 @@ from typing import Any, Dict
 from app.product_orchestration.enums import WorkflowNodeType, WorkflowRuntimeKind
 
 DEFAULT_AGENT_WORKFLOW_KEY_ENV = "ASKPDF_DEFAULT_AGENT_WORKFLOW_KEY"
-DEFAULT_AGENT_WORKFLOW_KEY = "_".join((WorkflowNodeType.ROUTER.value, "rag", "agent"))
+DEFAULT_AGENT_WORKFLOW_KEY = "auto_rag_agent"
 SUPPORTED_RUNTIME_KINDS = {kind.value for kind in WorkflowRuntimeKind}
 RUNTIME_TEXT_FIELDS = {
     "label",

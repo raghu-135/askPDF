@@ -76,6 +76,17 @@ store execution/checkpoint state owned by their respective runtime.
 
 ### Chat flow
 
+The default chat preset is **Auto** (`auto_rag_agent`), an orchestrator workflow
+that keeps the existing LangGraph presets in the picker. Auto loads a delegate
+catalog from the same admission rules as `GET /api/agent-workflows`, may pause
+on a plan-approval HITL gate for complex or long-running choices, and invokes
+child runs through the internal control-plane endpoint
+`POST /internal/agent-runs/delegate/sync` (parent MCP execution context, optional
+`parent_run_id`, shared `pre_fetch_bundle`). Hermes and self-delegation are
+excluded. Document-scope decline uses the canonical
+"The attached documents do not address this question." string pending shared
+`document_scope` module from PR #94.
+
     frontend chat request
       → control-plane embedding readiness check
       → thread settings and workflow resolution
