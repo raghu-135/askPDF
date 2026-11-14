@@ -12,6 +12,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 LOG_DIR="${ASKPDF_CLOUD_SETUP_LOG_DIR:-/tmp/askpdf-cloud-setup}"
+HF_CACHE_DIR="${REPO_ROOT}/.askpdf-hf-cache"
+HF_CACHE_SEED_MARKER="${HF_CACHE_DIR}/.askpdf-hf-exported"
+HF_CACHE_DOCLING_MARKER="${HF_CACHE_DIR}/.askpdf-docling-warmed"
+RAG_IMAGE_SEED="${ASKPDF_RAG_IMAGE_SEED:-askpdf-rag-service-cache-seed}"
+SAMPLE_PDF="${REPO_ROOT}/rag_service/tests/01030000000000.pdf"
 mkdir -p "$LOG_DIR"
 PROXY_PID_FILE="${LOG_DIR}/openrouter-proxy.pid"
 DOCKERD_PID_FILE="${LOG_DIR}/dockerd.pid"
@@ -182,7 +187,8 @@ EOF
     log "wrote .askpdf-cloud-agent.env for host-gateway test overrides"
     log "pre-building test runner image and warming postgres/weaviate..."
     compose_cmd -p askpdf-test -f docker-compose.test.yml -f docker-compose.cloud-agent.test.override.yml build --pull test-runner
-    log "warming Docling inside test-runner image..."
+    prefetch_docling_models
+    log "verifying Docling inside test-runner with host HF cache..."
     compose_cmd -p askpdf-test -f docker-compose.test.yml -f docker-compose.cloud-agent.test.override.yml \
       run --rm --entrypoint python test-runner \
       -c "from docling.document_converter import DocumentConverter; DocumentConverter(); print('test_runner_docling_ready')"
@@ -204,6 +210,7 @@ EOF
   fi
 
   python3 scripts/fill_env_secrets.py --env .env
+  wire_llm_api_key_in_env
 
   # VM dev stack: Hermes profile + host OpenRouter proxy (containers use host.docker.internal:12345).
   if grep -q '^COMPOSE_PROFILES=' .env; then
@@ -220,6 +227,42 @@ EOF
 
   if [[ -z "${OPENAI_API_KEY:-}" ]] && [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
     log "warning: no OPENAI_API_KEY / OPENROUTER_API_KEY in host environment (LLM proxy will fail)"
+  fi
+}
+
+wire_llm_api_key_in_env() {
+  OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" OPENAI_API_KEY="${OPENAI_API_KEY:-}" python3 - <<'PY'
+import os
+import re
+from pathlib import Path
+
+env_path = Path(".env")
+if not env_path.exists():
+    raise SystemExit("wire_llm_api_key_in_env: .env missing")
+
+key = (os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY") or "").strip()
+lines = env_path.read_text().splitlines(keepends=True)
+found = False
+out: list[str] = []
+for line in lines:
+    if re.match(r"^OPENAI_API_KEY=", line):
+        found = True
+        if key:
+            out.append(f"OPENAI_API_KEY={key}\n")
+        else:
+            out.append(line)
+    else:
+        out.append(line if line.endswith("\n") else line + "\n")
+if key and not found:
+    out.append(f"OPENAI_API_KEY={key}\n")
+env_path.write_text("".join(out))
+PY
+  if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+    log "OPENROUTER_API_KEY is set in the VM environment (wired to .env OPENAI_API_KEY)"
+  elif [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    log "OPENAI_API_KEY is set in the VM environment (OPENROUTER_API_KEY unset)"
+  else
+    log "warning: no LLM API key in VM environment; .env OPENAI_API_KEY unchanged"
   fi
 }
 
@@ -260,12 +303,92 @@ start_openrouter_proxy() {
   exit 1
 }
 
-prefetch_docling_models() {
-  log "warming Docling / Hugging Face models in rag-service image (one-time)..."
-  docker_cli build -f rag_service/Dockerfile -t askpdf-rag-service-warm "${REPO_ROOT}"
-  docker_cli run --rm -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 \
-    -v "${REPO_ROOT}/rag_service/tests/01030000000000.pdf:/tmp/sample.pdf:ro" askpdf-rag-service-warm \
+ensure_hf_cache_dir() {
+  mkdir -p "$HF_CACHE_DIR"
+}
+
+normalize_hf_hub_cache_layout() {
+  # Docling may download into $HF_HOME/hub when HF_HUB_CACHE is unset; embedding
+  # bake uses the repository root. Cloud overrides set HF_HUB_CACHE=/models/hf.
+  local legacy_hub="${HF_CACHE_DIR}/hub"
+  if [[ ! -d "$legacy_hub" ]]; then
+    return 0
+  fi
+  log "merging ${legacy_hub} into ${HF_CACHE_DIR} for a single HF_HUB_CACHE tree..."
+  if [[ -d "${legacy_hub}/blobs" ]]; then
+    mkdir -p "${HF_CACHE_DIR}/blobs"
+    shopt -s dotglob nullglob
+    for blob in "${legacy_hub}/blobs"/*; do
+      [[ -e "$blob" ]] || continue
+      local name
+      name="$(basename "$blob")"
+      if [[ ! -e "${HF_CACHE_DIR}/blobs/${name}" ]]; then
+        mv "$blob" "${HF_CACHE_DIR}/blobs/${name}"
+      fi
+    done
+    shopt -u dotglob nullglob
+    rmdir "${legacy_hub}/blobs" 2>/dev/null || true
+  fi
+  shopt -s dotglob nullglob
+  for item in "$legacy_hub"/*; do
+    [[ -e "$item" ]] || continue
+    local base
+    base="$(basename "$item")"
+    if [[ "$base" = "blobs" ]]; then
+      continue
+    fi
+    if [[ -e "${HF_CACHE_DIR}/${base}" ]]; then
+      continue
+    fi
+    mv "$item" "${HF_CACHE_DIR}/${base}"
+  done
+  shopt -u dotglob nullglob
+  rmdir "$legacy_hub" 2>/dev/null || true
+  sudo chown -R "${USER:-ubuntu}:${USER:-ubuntu}" "$HF_CACHE_DIR" 2>/dev/null || true
+}
+
+seed_hf_cache_from_image() {
+  if [[ -f "$HF_CACHE_SEED_MARKER" ]]; then
+    log "host HF cache already seeded (${HF_CACHE_DIR})"
+    return 0
+  fi
+  ensure_hf_cache_dir
+  log "seeding host HF cache from rag-service image layers..."
+  docker_cli run --rm "$RAG_IMAGE_SEED" tar -C /models/hf -cf - . | tar -C "$HF_CACHE_DIR" -xf -
+  touch "$HF_CACHE_SEED_MARKER"
+}
+
+warm_docling_models_in_cache() {
+  if [[ -f "$HF_CACHE_DOCLING_MARKER" ]]; then
+    log "Docling layout models already present in host HF cache"
+    return 0
+  fi
+  if [[ ! -f "$SAMPLE_PDF" ]]; then
+    log "missing sample PDF for Docling warmup: $SAMPLE_PDF"
+    exit 1
+  fi
+  ensure_hf_cache_dir
+  log "warming Docling / Hugging Face layout models into host HF cache (online once)..."
+  docker_cli run --rm --user "$(id -u):$(id -g)" \
+    -e HF_HOME=/models/hf \
+    -e HF_HUB_CACHE=/models/hf \
+    -e HF_HUB_OFFLINE=0 \
+    -e TRANSFORMERS_OFFLINE=0 \
+    -v "${HF_CACHE_DIR}:/models/hf" \
+    -v "${SAMPLE_PDF}:/tmp/sample.pdf:ro" \
+    "$RAG_IMAGE_SEED" \
     python -c "from pathlib import Path; from app.services.parsing_service import parse_with_docling; data=Path('/tmp/sample.pdf').read_bytes(); parse_with_docling(data, '01030000000000.pdf'); print('docling_sample_pdf_cached')"
+  normalize_hf_hub_cache_layout
+  touch "$HF_CACHE_DOCLING_MARKER"
+}
+
+prefetch_docling_models() {
+  log "building rag-service image for HF cache seed..."
+  docker_cli build -f rag_service/Dockerfile -t "$RAG_IMAGE_SEED" "${REPO_ROOT}"
+  seed_hf_cache_from_image
+  normalize_hf_hub_cache_layout
+  warm_docling_models_in_cache
+  normalize_hf_hub_cache_layout
 }
 
 compose_up_stack() {

@@ -8,6 +8,8 @@ services:
   rag-service:
     ports: !override
       - "8000:8000"
+    volumes:
+      - ./.askpdf-hf-cache:/models/hf
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/askpdf
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/test_askpdf
@@ -17,6 +19,7 @@ services:
       # Models are baked into the image during `cloud-agent-setup.sh install` (embeddings
       # + sample PDF Docling parse). Offline mode avoids unreachable HF egress in VMs.
       HF_HOME: /models/hf
+      HF_HUB_CACHE: /models/hf
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       <<: *llm-via-host-proxy

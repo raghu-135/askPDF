@@ -44,9 +44,25 @@ Repository-managed environments can wire `.cursor/environment.json` (`install` /
 
 ### Docling / Hugging Face
 
-`install` bakes embedding models and runs a sample-PDF Docling parse into the
-`rag-service` image, then `docker-compose.vm-hostgateway.override.yml` sets
-`HF_HUB_OFFLINE=1` so runtime does not hit unreachable HF egress from containers.
+`install` builds `rag-service`, copies image-layer weights into gitignored
+`.askpdf-hf-cache/`, then runs one online Docling sample-PDF parse into that
+directory. `docker-compose.vm-hostgateway.override.yml` mounts
+`.askpdf-hf-cache` on `/models/hf` (with `HF_HUB_CACHE=/models/hf` so baked
+embedding weights and Docling hub artifacts share one tree) and sets
+`HF_HUB_OFFLINE=1` so containers
+use the cache instead of Hugging Face egress (often blocked in cloud VMs).
+
+Re-run `bash scripts/cloud-agent-setup.sh install` to rebuild the cache; delete
+`.askpdf-hf-cache/` to force a full re-download.
+
+### LLM credentials
+
+`install` / `start` copy `OPENROUTER_API_KEY` (preferred) or `OPENAI_API_KEY`
+from the Cursor Cloud Agent secrets into `.env` as `OPENAI_API_KEY`. Containers
+call the host OpenRouter proxy at `http://host.docker.internal:12345/v1`
+(`LLM_API_URL` in `.env`); the proxy forwards to `https://openrouter.ai/api/v1`.
+If chat fails with 401, confirm a secret is set in the environment dashboard
+(never commit keys).
 
 ### Tests
 
