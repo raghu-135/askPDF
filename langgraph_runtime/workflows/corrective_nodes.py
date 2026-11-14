@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, Mapping
 
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
@@ -305,6 +306,29 @@ def grounded_answer_contract_errors(value: Dict[str, Any]) -> list[str]:
     return errors
 
 
+def synthesized_answer_grounded_in_corrective_evidence(state: Mapping[str, Any], answer: str) -> bool:
+    """True when a short synthesizer answer is substantively supported by graded evidence."""
+
+    prose = str(answer or "").strip()
+    if not prose or prose == DOCUMENT_SCOPE_DECLINE_ANSWER:
+        return False
+    text = "\n".join(
+        str(packet.get("content") or "")
+        for packet in corrective_evidence_packets(dict(state))
+        if isinstance(packet, Mapping)
+    ).casefold()
+    if not text.strip():
+        return False
+    candidate = prose.casefold()
+    if candidate in text:
+        return True
+    if len(prose) <= 280:
+        tokens = [token for token in re.findall(r"[a-z0-9]+", candidate) if len(token) > 2]
+        if tokens and sum(1 for token in tokens if token in text) / len(tokens) >= 0.55:
+            return True
+    return False
+
+
 def normalize_grounding_report(parsed: Mapping[str, Any], state: Mapping[str, Any]) -> Dict[str, Any]:
     valid_source_ids = {
         str(source_id) for packet in corrective_evidence_packets(dict(state))
@@ -401,6 +425,8 @@ def grounded_route_for_report(report: Mapping[str, Any], state: Mapping[str, Any
         return GroundedAnswerRoute.FINALIZE_CAUTIOUS.value, "low_usefulness"
     if report.get("verified_claims") and revision_count < policy["max_answer_revisions"]:
         return GroundedAnswerRoute.REVISE.value, ""
+    if synthesized_answer_grounded_in_corrective_evidence(state, str(state.get("final_answer") or "")):
+        return GroundedAnswerRoute.PASS.value, ""
     correction_route, reason = corrective_route_for_report({"verdict": "ambiguous"}, state)
     if correction_route == CorrectiveRetrievalRoute.CORRECT.value and (report.get("unresolved_gaps") or not report.get("verified_claims")):
         return GroundedAnswerRoute.CORRECT.value, ""

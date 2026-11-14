@@ -177,6 +177,33 @@ def export_trace_scores(thread_id: str, run_id: str) -> list[dict]:
     return scores
 
 
+EXTRA_SCENARIOS_BY_WORKFLOW = {
+    "router_rag_agent": [
+        (
+            "architecture",
+            "What architecture does the paper propose? Reply with the architecture name only.",
+            lambda a: (
+                DECLINE not in a
+                and "does not specify" not in a.casefold()
+                and re.search(r"\btransformer\b", a or "", re.I) is not None
+            ),
+        ),
+    ],
+    "corrective_self_rag_agent": [
+        (
+            "paper_title",
+            "What is the title of this paper? Reply with the full title only.",
+            lambda a: (
+                DECLINE not in a
+                and "could not verify" not in a.casefold()
+                and "Unresolved evidence gaps" not in a
+                and "attention is all you need" in (a or "").casefold()
+            ),
+        ),
+    ],
+}
+
+
 SCENARIOS = [
     ("tokyo", "What is the population of Tokyo?", lambda a: a.strip() == DECLINE),
     (
@@ -210,9 +237,18 @@ def main() -> int:
     upload_and_index(thread_id)
 
     rows: list[dict] = []
-    for workflow in ("router_rag_agent", "orchestrator_worker_rag_agent"):
+    workflow_order = (
+        "router_rag_agent",
+        "orchestrator_worker_rag_agent",
+        "corrective_self_rag_agent",
+    )
+    for workflow in workflow_order:
         set_workflow(thread_id, workflow)
-        for key, question, pred in SCENARIOS:
+        scenario_list = [
+            *SCENARIOS,
+            *EXTRA_SCENARIOS_BY_WORKFLOW.get(workflow, []),
+        ]
+        for key, question, pred in scenario_list:
             ms, answer, body = chat(thread_id, question)
             run_id = str(body.get("run_id") or body.get("agent_run_id") or "")
             scores = export_trace_scores(thread_id, run_id) if run_id else []
