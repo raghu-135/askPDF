@@ -16,8 +16,8 @@ from langgraph_runtime.workflows.evidence import (
 )
 from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
+    attachment_retrieval_scope_decline,
     attached_document_evidence_haystack,
-    lexical_attachment_scope_decline,
     thread_has_attached_documents,
 )
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
@@ -229,9 +229,19 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         return None
     if not thread_has_attached_documents(state):
         return None
-    lexical_decline = lexical_attachment_scope_decline(state)
-    if lexical_decline is not None:
-        return lexical_decline
+    score_decline = attachment_retrieval_scope_decline(state)
+    if score_decline:
+        return score_decline
+    doc_packets = _document_evidence_packets(state)
+    assessments = {
+        str(item.get("packet_id")): item
+        for item in state.get("evidence_assessments") or []
+        if isinstance(item, dict) and item.get("packet_id")
+    }
+    if doc_packets and assessments:
+        relevance_decline = _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
+        if relevance_decline:
+            return relevance_decline
     for error in state.get("errors") or []:
         if isinstance(error, dict) and str(error.get("code") or "") == "document_scope_forbidden":
             return DOCUMENT_SCOPE_DECLINE_ANSWER
@@ -243,9 +253,9 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
 
     if state.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
         return None
-    lexical_decline = lexical_attachment_scope_decline(state)
-    if lexical_decline is not None:
-        return lexical_decline
+    score_decline = attachment_retrieval_scope_decline(state)
+    if score_decline:
+        return score_decline
     eligible = corrective_evidence_packets(dict(state))
     if eligible:
         if thread_has_attached_documents(state) and not any(

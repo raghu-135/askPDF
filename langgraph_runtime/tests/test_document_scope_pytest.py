@@ -4,7 +4,6 @@ from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     attachment_retrieval_scope_decline,
     document_retrieval_scores,
-    lexical_attachment_scope_decline,
     postprocess_grounded_document_answer,
     workflow_post_retrieval_scope_decline,
 )
@@ -54,7 +53,7 @@ def test_attachment_scope_keeps_in_scope_high_scoring_prefetch():
     assert router_attachment_scope_decline(state, RouterRoute.CLARIFY.value) is None
 
 
-def test_lexical_decline_when_proper_noun_missing_from_retrieval():
+def test_tokyo_declines_via_low_prefetch_scores_not_lexical_matching():
     state = {
         "pre_fetch_bundle": {
             "documents": [{"file_hash": "a" * 32}],
@@ -65,8 +64,39 @@ def test_lexical_decline_when_proper_noun_missing_from_retrieval():
         "workflow_id": "router_rag_agent",
         "route": "document",
     }
-    assert lexical_attachment_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
-    assert workflow_post_retrieval_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+    # High prefetch score alone does not decline; router proceeds to synthesis.
+    assert workflow_post_retrieval_scope_decline(state) is None
+    state_low_score = {
+        **state,
+        "pre_fetch_bundle": {
+            **state["pre_fetch_bundle"],
+            "document_sources": [{"file_hash": "a" * 32, "score": 0.18}],
+        },
+    }
+    assert workflow_post_retrieval_scope_decline(state_low_score) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def test_natural_language_questions_not_declined_when_retrieval_is_relevant():
+    base_bundle = {
+        "documents": [{"file_hash": "a" * 32}],
+        "document_evidence_text": (
+            "We present results on WMT translation. Our method uses stacked attention. "
+            "Authors include Ashish Vaswani and colleagues."
+        ),
+        "document_sources": [{"file_hash": "a" * 32, "score": 0.72}],
+    }
+    for question in (
+        "Summarize the results.",
+        "Explain the method.",
+        "Who are the authors?",
+    ):
+        state = {
+            "pre_fetch_bundle": base_bundle,
+            "question": question,
+            "workflow_id": "router_rag_agent",
+        }
+        assert attachment_retrieval_scope_decline(state) is None
+        assert workflow_post_retrieval_scope_decline(state) is None
 
 
 def test_router_post_retrieval_decline_not_blocked_by_document_route():
@@ -75,7 +105,7 @@ def test_router_post_retrieval_decline_not_blocked_by_document_route():
         "evidence_packets": [
             {
                 "source_ids": [f"doc:{'a' * 32}:chunk-1"],
-                "content": "Unrelated architecture discussion.",
+                "content": "",
                 "raw_retriever_score": 0.21,
             }
         ],
@@ -141,7 +171,7 @@ def test_router_post_retrieval_keeps_in_scope_on_high_worker_score_despite_low_p
     assert workflow_post_retrieval_scope_decline(state) is None
 
 
-def test_postprocess_replaces_tokyo_hedge_with_canonical_decline():
+def test_postprocess_preserves_model_answer_without_lexical_override():
     state = {
         "workflow_id": "router_rag_agent",
         "pre_fetch_bundle": {
@@ -157,4 +187,4 @@ def test_postprocess_replaces_tokyo_hedge_with_canonical_decline():
         "question": "What is the population of Tokyo?",
     }
     hedge = "I cannot find population figures for Tokyo in the provided context."
-    assert postprocess_grounded_document_answer(state, hedge) == DOCUMENT_SCOPE_DECLINE_ANSWER
+    assert postprocess_grounded_document_answer(state, hedge) == hedge

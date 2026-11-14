@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any, Mapping
 
 from langgraph_runtime.workflows.evidence import evidence_packets
@@ -14,31 +13,6 @@ ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE = 0.42
 # Auto orchestrator uses the same relevance floor when deciding router declines.
 ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE = ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE
 
-_LEXICAL_PROPER_NOUN_STOPWORDS = frozenset({
-    "attention",
-    "bleu",
-    "decoder",
-    "encoder",
-    "flops",
-    "for",
-    "from",
-    "how",
-    "layer",
-    "layers",
-    "model",
-    "reply",
-    "score",
-    "table",
-    "the",
-    "training",
-    "transformer",
-    "what",
-    "when",
-    "where",
-    "which",
-    "why",
-    "with",
-})
 
 def thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
@@ -129,28 +103,6 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _salient_proper_nouns(question: str) -> list[str]:
-    return [
-        term
-        for match in re.finditer(r"\b[A-Z][a-z]{2,}\b", str(question or ""))
-        if (term := match.group(0).lower()) not in _LEXICAL_PROPER_NOUN_STOPWORDS
-    ]
-
-
-def _document_attachment_evidence_text(state: Mapping[str, Any]) -> str:
-    """Document-sourced text only, excluding conversation history and synthetic context."""
-
-    parts: list[str] = []
-    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
-    if str(bundle.get("document_evidence_text") or "").strip():
-        parts.append(str(bundle["document_evidence_text"]))
-    for packet in document_evidence_packets(state):
-        content = str(packet.get("content") or "").strip()
-        if content:
-            parts.append(content)
-    return "\n".join(parts).lower()
-
-
 def _combined_document_evidence_text(state: Mapping[str, Any]) -> str:
     parts: list[str] = []
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
@@ -165,47 +117,12 @@ def _combined_document_evidence_text(state: Mapping[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
-def lexical_attachment_scope_decline(state: Mapping[str, Any]) -> str | None:
-    """Decline when the question names entities absent from retrieved document text."""
-
-    proper_nouns = _salient_proper_nouns(str(state.get("question") or ""))
-    if not proper_nouns:
-        return None
-    haystack = _document_attachment_evidence_text(state)
-    if not haystack.strip():
-        return DOCUMENT_SCOPE_DECLINE_ANSWER
-    if any(term not in haystack for term in proper_nouns):
-        return DOCUMENT_SCOPE_DECLINE_ANSWER
-    return None
-
-
-def _retrieved_document_evidence_is_substantive(state: Mapping[str, Any]) -> bool:
-    doc_packets = document_evidence_packets(state)
-    worker_scores = worker_document_retrieval_scores(state)
-    if worker_scores and max(worker_scores) >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
-        return True
-    if any(str(packet.get("content") or "").strip() for packet in doc_packets):
-        return True
-    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
-    if str(bundle.get("document_evidence_text") or "").strip():
-        return True
-    if str(state.get("evidence") or "").strip():
-        return True
-    prefetch_scores = prefetch_document_retrieval_scores(state)
-    return bool(doc_packets and prefetch_scores)
-
-
 def post_retrieval_attachment_decline(state: Mapping[str, Any]) -> str | None:
-    """Score- and evidence-based decline after workers have run."""
+    """Score-based decline after workers have run."""
 
     if not thread_has_attached_documents(state):
         return None
-    if _retrieved_document_evidence_is_substantive(state):
-        return lexical_attachment_scope_decline(state)
-    decline = attachment_retrieval_scope_decline(state)
-    if decline:
-        return decline
-    return lexical_attachment_scope_decline(state)
+    return attachment_retrieval_scope_decline(state)
 
 
 def workflow_post_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
@@ -256,7 +173,4 @@ def postprocess_grounded_document_answer(state: Mapping[str, Any], answer: str) 
         return text
     if text.strip() == DOCUMENT_SCOPE_DECLINE_ANSWER or text.startswith(DOCUMENT_SCOPE_DECLINE_ANSWER + "\n"):
         return DOCUMENT_SCOPE_DECLINE_ANSWER
-    lexical = lexical_attachment_scope_decline(state)
-    if lexical and text != lexical:
-        return lexical
     return text
