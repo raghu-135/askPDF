@@ -27,6 +27,8 @@ services:
       retries: 12
 
   test-runner:
+    volumes:
+      - ./.askpdf-hf-cache:/models/hf
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/askpdf
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/test_askpdf
@@ -34,6 +36,7 @@ services:
       LLM_API_URL: http://fake-llm:9000/v1
       OPENAI_API_KEY:
       HF_HOME: /models/hf
+      HF_HUB_CACHE: /models/hf
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     extra_hosts:
