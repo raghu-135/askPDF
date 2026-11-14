@@ -260,7 +260,9 @@ def main() -> int:
             *EXTRA_SCENARIOS_BY_WORKFLOW.get(workflow, []),
         ]
         for key, question, pred in scenario_list:
+            print(f"RUN {workflow}/{key} ...", flush=True)
             ms, answer, body = chat(thread_id, question)
+            print(f"DONE {workflow}/{key} pass={bool(pred(answer))} ms={ms}", flush=True)
             run_id = str(body.get("run_id") or body.get("agent_run_id") or "")
             scores = export_trace_scores(thread_id, run_id) if run_id else []
             passed = bool(pred(answer))
