@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "papers": [
+    {
+      "file": "1706.03762.pdf",
+      "arxiv_id": "1706.03762",
+      "title": "Attention Is All You Need",
+      "authors": "Vaswani et al.",
+      "pages": 15,
+      "bytes": 2215244,
+      "source_url": "https://arxiv.org/abs/1706.03762",
+      "pdf_url": "https://arxiv.org/pdf/1706.03762.pdf",
+      "license": "arXiv.org perpetual, non-exclusive license to distribute this article (https://arxiv.org/licenses/nonexclusive-distrib/1.0/)",
+      "role": "benchmark",
+      "tags": ["nlp", "transformers", "figures", "math", "tables"]
+    },
+    {
+      "file": "1810.04805.pdf",
+      "arxiv_id": "1810.04805",
+      "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "authors": "Devlin et al.",
+      "pages": 16,
+      "bytes": 775166,
+      "source_url": "https://arxiv.org/abs/1810.04805",
+      "pdf_url": "https://arxiv.org/pdf/1810.04805.pdf",
+      "license": "arXiv.org perpetual, non-exclusive license to distribute this article (https://arxiv.org/licenses/nonexclusive-distrib/1.0/)",
+      "role": "benchmark",
+      "tags": ["nlp", "pretraining", "tables"]
+    },
+    {
+      "file": "2005.11401.pdf",
+      "arxiv_id": "2005.11401",
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "authors": "Lewis et al.",
+      "pages": 19,
+      "bytes": 885323,
+      "source_url": "https://arxiv.org/abs/2005.11401",
+      "pdf_url": "https://arxiv.org/pdf/2005.11401.pdf",
+      "license": "arXiv.org perpetual, non-exclusive license to distribute this article (https://arxiv.org/licenses/nonexclusive-distrib/1.0/)",
+      "role": "benchmark",
+      "tags": ["rag", "retrieval", "tables"]
+    },
+    {
+      "file": "2106.09685.pdf",
+      "arxiv_id": "2106.09685",
+      "title": "LoRA: Low-Rank Adaptation of Large Language Models",
+      "authors": "Hu et al.",
+      "pages": 26,
+      "bytes": 1609513,
+      "source_url": "https://arxiv.org/abs/2106.09685",
+      "pdf_url": "https://arxiv.org/pdf/2106.09685.pdf",
+      "license": "arXiv.org perpetual, non-exclusive license to distribute this article (https://arxiv.org/licenses/nonexclusive-distrib/1.0/)",
+      "role": "benchmark",
+      "tags": ["peft", "methods", "tables"]
+    },
+    {
+      "file": "2303.18223.pdf",
+      "arxiv_id": "2303.18223",
+      "title": "A Survey of Large Language Models",
+      "authors": "Zhao et al.",
+      "pages": 144,
+      "bytes": 5853703,
+      "source_url": "https://arxiv.org/abs/2303.18223",
+      "pdf_url": "https://arxiv.org/pdf/2303.18223.pdf",
+      "license": "arXiv.org perpetual, non-exclusive license to distribute this article (https://arxiv.org/licenses/nonexclusive-distrib/1.0/)",
+      "role": "benchmark",
+      "tags": ["survey", "long", "taxonomy", "tables"]
+    },
+    {
+      "file": "2305.18290.pdf",
+      "arxiv_id": "2305.18290",
+      "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+      "authors": "Rafailov et al.",
+      "pages": 27,
+      "bytes": 1299212,
+      "source_url": "https://arxiv.org/abs/2305.18290",
+      "pdf_url": "https://arxiv.org/pdf/2305.18290.pdf",
+      "license": "arXiv.org perpetual, non-exclusive license to distribute this article (https://arxiv.org/licenses/nonexclusive-distrib/1.0/)",
+      "role": "holdout",
+      "tags": ["alignment", "holdout"]
+    }
+  ]
+}

@@ -70,6 +70,39 @@ images, verifies import boundaries, runs the default test suite, collects
 control-plane and LangGraph tests, runs the LangGraph runtime proof, and runs
 a separate Hermes runtime-proof job.
 
+## RAG benchmark (on demand)
+
+Shared arXiv fixtures live in `benchmarks/fixtures/`. Upload them into a running
+dev stack:
+
+```bash
+./scripts/upload_benchmark_fixtures.sh
+```
+
+Run the benchmark suite (not part of default CI or `./run_tests.sh`):
+
+```bash
+# stack at http://127.0.0.1:3000 — uses openai/gpt-4.1-mini + gemini-2.5-flash judge
+./scripts/run_rag_benchmark.sh --workflows router_rag_agent auto_rag_agent
+./scripts/run_rag_benchmark.sh --all-workflows --judge
+./scripts/run_rag_benchmark.sh --limit 5                  # smoke
+ASKPDF_INCLUDE_HOLDOUT=1 ./scripts/run_rag_benchmark.sh --holdout --judge
+```
+
+Machine-readable JSON and a short Markdown summary are written under
+`benchmarks/reports/<commit-sha>.{json,md}`. See `benchmarks/rubric.md` and
+`benchmarks/HOLDOUT.md` (DPO holdout — do not tune against).
+
+Overview context gap investigation (retrieval vs final prompt):
+
+```bash
+python3 scripts/investigate_overview_retrieval.py
+# same PDF/question, compare cheap paid vs openrouter/free on identical context
+python3 scripts/compare_overview_models.py
+```
+
+Write-up: `benchmarks/investigation/overview_context_bug.md` (factors **(a)** context vs **(b)** model).
+
 ## Coverage that is still thin
 
 The application test suite is strong around backend contracts and runtime
