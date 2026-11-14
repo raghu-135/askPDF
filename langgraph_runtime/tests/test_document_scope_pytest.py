@@ -4,6 +4,8 @@ from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     attachment_retrieval_scope_decline,
     document_retrieval_scores,
+    lexical_attachment_scope_decline,
+    workflow_post_retrieval_scope_decline,
 )
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.enums import RouterRoute
@@ -49,3 +51,36 @@ def test_attachment_scope_keeps_in_scope_high_scoring_prefetch():
     }
     assert attachment_retrieval_scope_decline(state) is None
     assert router_attachment_scope_decline(state, RouterRoute.CLARIFY.value) is None
+
+
+def test_lexical_decline_when_proper_noun_missing_from_retrieval():
+    state = {
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_evidence_text": "Attention Is All You Need discusses transformer layers.",
+            "document_sources": [{"file_hash": "a" * 32, "score": 0.55}],
+        },
+        "question": "What is the population of Tokyo?",
+        "workflow_id": "router_rag_agent",
+        "route": "document",
+    }
+    assert lexical_attachment_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+    assert workflow_post_retrieval_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def test_router_post_retrieval_decline_not_blocked_by_document_route():
+    state = {
+        "pre_fetch_bundle": {"documents": [{"file_hash": "a" * 32}]},
+        "evidence_packets": [
+            {
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+                "content": "Unrelated architecture discussion.",
+                "raw_retriever_score": 0.21,
+            }
+        ],
+        "document_sources": [{"file_hash": "a" * 32, "score": 0.21}],
+        "question": "What is the population of Tokyo?",
+        "workflow_id": "router_rag_agent",
+        "route": "document",
+    }
+    assert workflow_post_retrieval_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER

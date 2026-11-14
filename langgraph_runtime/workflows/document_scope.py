@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
+from langgraph_runtime.workflows.evidence import evidence_packets
+from langgraph_runtime.workflows.parallel_contracts import (
+    PARALLEL_REFERENCE_WORKFLOW_ID,
+)
+
+ROUTER_RAG_WORKFLOW_ID = "router_rag_agent"
 DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this question."
 ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE = 0.42
-
 
 def thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
@@ -66,3 +72,61 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
     if scores and max(scores) < ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
         return DOCUMENT_SCOPE_DECLINE_ANSWER
     return None
+
+
+def _salient_proper_nouns(question: str) -> list[str]:
+    return [
+        match.group(0).lower()
+        for match in re.finditer(r"\b[A-Z][a-z]{2,}\b", str(question or ""))
+    ]
+
+
+def _combined_document_evidence_text(state: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    if str(bundle.get("document_evidence_text") or "").strip():
+        parts.append(str(bundle["document_evidence_text"]))
+    if str(state.get("evidence") or "").strip():
+        parts.append(str(state["evidence"]))
+    for packet in evidence_packets(dict(state)):
+        content = str(packet.get("content") or "").strip()
+        if content:
+            parts.append(content)
+    return "\n".join(parts).lower()
+
+
+def lexical_attachment_scope_decline(state: Mapping[str, Any]) -> str | None:
+    """Decline when the question names entities absent from retrieved document text."""
+
+    proper_nouns = _salient_proper_nouns(str(state.get("question") or ""))
+    if not proper_nouns:
+        return None
+    haystack = _combined_document_evidence_text(state)
+    if not haystack.strip():
+        return DOCUMENT_SCOPE_DECLINE_ANSWER
+    if any(term not in haystack for term in proper_nouns):
+        return DOCUMENT_SCOPE_DECLINE_ANSWER
+    return None
+
+
+def post_retrieval_attachment_decline(state: Mapping[str, Any]) -> str | None:
+    """Score- and evidence-based decline after workers have run."""
+
+    if not thread_has_attached_documents(state):
+        return None
+    decline = attachment_retrieval_scope_decline(state)
+    if decline:
+        return decline
+    return lexical_attachment_scope_decline(state)
+
+
+def workflow_post_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
+    workflow_id = str(state.get("workflow_id") or "")
+    if workflow_id not in {ROUTER_RAG_WORKFLOW_ID, PARALLEL_REFERENCE_WORKFLOW_ID}:
+        return None
+    if workflow_id == PARALLEL_REFERENCE_WORKFLOW_ID:
+        from langgraph_runtime.workflows.corrective_nodes import _non_document_evidence_packets
+
+        if _non_document_evidence_packets(state):
+            return None
+    return post_retrieval_attachment_decline(state)

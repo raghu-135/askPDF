@@ -16,6 +16,7 @@ from langgraph_runtime.workflows.evidence import (
 from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     attachment_retrieval_scope_decline,
+    post_retrieval_attachment_decline,
     thread_has_attached_documents,
 )
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
@@ -229,7 +230,7 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         return None
     if _non_document_evidence_packets(state):
         return None
-    score_decline = attachment_retrieval_scope_decline(state)
+    score_decline = post_retrieval_attachment_decline(state)
     if score_decline:
         return score_decline
     doc_packets = _document_evidence_packets(state)
@@ -268,11 +269,18 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
 def document_scope_decline(state: Mapping[str, Any]) -> str | None:
     """Shared decline helper for parallel orchestrator and corrective workflows."""
 
+    from langgraph_runtime.workflows.document_scope import (
+        ROUTER_RAG_WORKFLOW_ID,
+        workflow_post_retrieval_scope_decline,
+    )
+
     workflow_id = state.get("workflow_id")
     if workflow_id == CORRECTIVE_WORKFLOW_ID:
         return corrective_document_scope_decline(state)
     if workflow_id == PARALLEL_REFERENCE_WORKFLOW_ID:
         return orchestrator_document_scope_decline(state)
+    if workflow_id == ROUTER_RAG_WORKFLOW_ID:
+        return workflow_post_retrieval_scope_decline(state)
     return None
 
 
