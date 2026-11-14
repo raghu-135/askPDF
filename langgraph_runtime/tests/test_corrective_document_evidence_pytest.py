@@ -157,6 +157,33 @@ def test_corrective_document_scope_decline_when_document_hits_are_irrelevant():
     assert corrective_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
+def test_corrective_document_scope_declines_tokyo_when_only_conversation_evidence_is_eligible():
+    packet_id = "thread_conversation_history_worker:visit:1:conversation:1"
+    state = {
+        "workflow_id": CORRECTIVE_WORKFLOW_ID,
+        "pre_fetch_bundle": {"documents": [{"file_hash": "abc" * 8}]},
+        "question": "What is the population of Tokyo?",
+        "evidence_packets": [
+            {
+                "id": packet_id,
+                "source_ids": ["conversation:61f46c14"],
+                "content": "Earlier you asked about Tokyo demographics.",
+            }
+        ],
+        "evidence_assessments": [
+            {
+                "packet_id": packet_id,
+                "relevant": True,
+                "confidence": 0.9,
+                "provenance_complete": True,
+                "instruction_injection_risk": False,
+            }
+        ],
+        "corrective_policy": {"minimum_relevance_confidence": 0.65},
+    }
+    assert corrective_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
 def test_corrective_document_scope_decline_skips_when_relevant_packet_exists():
     packet_id = "retrieval_worker:visit:1:document:abc"
     source_id = "doc:abcdefabcdefabcdefabcdefabcdefab:c-table2"
