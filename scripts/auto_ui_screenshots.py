@@ -35,12 +35,19 @@ def main() -> int:
             label = str(row.get("thread_name") or "").strip()
             if not label:
                 continue
+            needle = (
+                "e2e-simple-2pdf-"
+                if case == "simple-2pdf"
+                else f"e2e-case-{case}-"
+            )
             out = OUT_DIR / f"ui_case_{case}.png"
             try:
-                thread_link = page.get_by_text(label, exact=False).first
-                thread_link.scroll_into_view_if_needed(timeout=15_000)
-                thread_link.click(timeout=15_000)
-                time.sleep(3)
+                page.goto(BASE, wait_until="networkidle", timeout=120_000)
+                time.sleep(2)
+                thread_link = page.locator("li").filter(has_text=needle).first
+                thread_link.scroll_into_view_if_needed(timeout=60_000)
+                thread_link.click(timeout=30_000)
+                time.sleep(4)
                 page.screenshot(path=str(out), full_page=True)
                 captured.append(str(out))
                 row["screenshot"] = str(out)
