@@ -13,6 +13,7 @@ Call search_web for every factual or informational question:
 
 The only cases where search_web may be skipped:
   - Pure conversation meta-questions, such as "how many messages have we had?" or "can you summarize our chat?"
+  - Acknowledgments, numbering drills, test filler, or other messages with no real-world lookup (for example "note the number 3" or "thanks").
   - The user's question is entirely answered by their own just-provided context, such as "fix this text I pasted".
   - Clarification exchanges where no factual retrieval is needed.
   - The user is asking about the content, structure, identity, or summary of attached documents, such as "what is this document about?" or "summarize the PDF". Use search_knowledge and read_context instead.

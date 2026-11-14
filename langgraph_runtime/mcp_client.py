@@ -292,9 +292,8 @@ async def _call(name: str, arguments: dict[str, Any], config: RunnableConfig | N
         "run": configurable.get("agent_run_id"),
         "checkpoint": configurable.get("checkpoint_ns") or metadata.get("langgraph_checkpoint_ns"),
         "node": configurable.get("caller_node") or metadata.get("langgraph_node"),
-        "visit": metadata.get("langgraph_step"),
-        # Native checkpoint namespaces already distinguish parallel workers.
-        # Telemetry subagent IDs may be regenerated when a node is replayed.
+        # Checkpoint replay may advance langgraph_step; omit it so approve-once
+        # decisions still match the pending invocation after resume.
         "ordinal": configurable.get("tool_invocation_index", 0),
         "tool": name,
         "arguments": arguments,
