@@ -19,6 +19,12 @@ import httpx
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from benchmark_config import (  # noqa: E402
+    chat_request_options,
+    context_baseline_record,
+    load_benchmark_config,
+    thread_settings_baseline,
+)
 from benchmark_papers import ensure_all, fixture_path, indexing_timeout_seconds  # noqa: E402
 from live_stack_client import (  # noqa: E402
     admin_token,
@@ -173,9 +179,16 @@ def run_question(
     case: dict[str, Any],
     *,
     judge: Callable[[str, str, dict[str, Any]], bool],
+    chat_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     started = time.time()
-    body = thread_chat(client, thread_id, case["question"], llm_model=CHAT_MODEL)
+    body = thread_chat(
+        client,
+        thread_id,
+        case["question"],
+        llm_model=CHAT_MODEL,
+        chat_options=chat_options,
+    )
     run_id = body.get("agent_run_id")
     detail = scored_agent_run(client, thread_id, str(run_id)) if run_id else {}
     answer = str(body.get("answer") or answer_from_run(detail) or "")
@@ -254,6 +267,24 @@ def write_report(report: dict[str, Any], sha: str) -> tuple[Path, Path]:
         f"- Chat model: `{report['chat_model']}`",
         f"- Judge model: `{report['judge_model']}`",
         "",
+    ]
+    baseline = report.get("context_baseline")
+    if isinstance(baseline, dict):
+        ctx = baseline.get("context") if isinstance(baseline.get("context"), dict) else {}
+        lines += [
+            "## Context baseline",
+            "",
+            f"- Config: `{baseline.get('config_path', 'benchmarks/benchmark_config.json')}`",
+            f"- `context_window`: {ctx.get('context_window')}",
+            f"- `use_reranker`: {ctx.get('use_reranker')}",
+            f"- `use_web_search`: {ctx.get('use_web_search')}",
+            "",
+        ]
+        budget = ctx.get("context_budget")
+        if isinstance(budget, dict):
+            lines.append("- `context_budget`: " + ", ".join(f"{k}={v}" for k, v in sorted(budget.items())))
+            lines.append("")
+    lines += [
         "## Summary by workflow",
         "",
         "| Workflow | Cases | Retrieval | Answers | Median latency (s) | LLM tokens |",
@@ -303,6 +334,9 @@ def main() -> int:
     args = parser.parse_args()
     workflows = list(BUILTIN_WORKFLOWS) if args.all_workflows else args.workflows
     admin_token()  # validate before long run
+    benchmark_cfg = load_benchmark_config()
+    chat_opts = chat_request_options(benchmark_cfg)
+    thread_baseline = thread_settings_baseline(benchmark_cfg)
     ensure_all(include_holdout=args.holdout or args.holdout_only)
     sha = _git_sha()
     main_cases = json.loads(QUESTIONS.read_text(encoding="utf-8"))["questions"]
@@ -316,6 +350,7 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "chat_model": CHAT_MODEL,
         "judge_model": JUDGE_MODEL,
+        "context_baseline": context_baseline_record(benchmark_cfg),
         "workflows": {},
         "cases": [],
     }
@@ -336,7 +371,12 @@ def main() -> int:
             if args.holdout_only:
                 continue
             stamp = int(time.time())
-            thread_id = create_thread(client, f"benchmark-{workflow}-{stamp}", workflow_id=workflow)
+            thread_id = create_thread(
+                client,
+                f"benchmark-{workflow}-{stamp}",
+                workflow_id=workflow,
+                settings_patch=thread_baseline,
+            )
             hashes = upload_fixtures(client, thread_id, all_main_set)
             _save_fixture_hashes(hashes)
             rows: list[dict[str, Any]] = []
@@ -344,7 +384,7 @@ def main() -> int:
                 case_files = case.get("fixture_files") or []
                 if not all(name in all_main_set for name in case_files):
                     continue
-                row = run_question(client, thread_id, case, judge=judge_fn)
+                row = run_question(client, thread_id, case, judge=judge_fn, chat_options=chat_opts)
                 row["workflow"] = workflow
                 rows.append(row)
                 report["cases"].append(row)
@@ -353,12 +393,17 @@ def main() -> int:
 
         if holdout_cases and (args.holdout or args.holdout_only):
             wf = "router_rag_agent"
-            thread_id = create_thread(client, f"benchmark-holdout-{int(time.time())}", workflow_id=wf)
+            thread_id = create_thread(
+                client,
+                f"benchmark-holdout-{int(time.time())}",
+                workflow_id=wf,
+                settings_patch=thread_baseline,
+            )
             needed = sorted(set(holdout_files))
             upload_fixtures(client, thread_id, needed)
             hrows = []
             for case in holdout_cases:
-                row = run_question(client, thread_id, case, judge=judge_fn)
+                row = run_question(client, thread_id, case, judge=judge_fn, chat_options=chat_opts)
                 row["workflow"] = wf
                 row["holdout"] = True
                 hrows.append(row)

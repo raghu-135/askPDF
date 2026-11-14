@@ -80,6 +80,11 @@ downloaded, not committed). Before upload or benchmark:
 ./scripts/upload_benchmark_fixtures.sh
 ```
 
+Context window and packing ratios are pinned in `benchmarks/benchmark_config.json`
+(same baseline on every question; optional override via `ASKPDF_BENCHMARK_CONFIG` or
+`ASKPDF_BENCHMARK_CONTEXT_OVERRIDES_JSON`). Thread defaults (`replans`, reranker, etc.)
+use the same file via `PUT /threads/{id}/settings`.
+
 Run the benchmark suite (not part of default CI or `./run_tests.sh`):
 
 ```bash

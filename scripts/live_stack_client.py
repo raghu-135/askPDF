@@ -74,22 +74,32 @@ def wait_indexed(
     raise TimeoutError(f"indexing timeout for {file_hash}")
 
 
+def update_thread_settings(client: httpx.Client, thread_id: str, updates: dict[str, Any]) -> None:
+    """Merge updates onto persisted thread chat settings."""
+    if not updates:
+        return
+    client.put(
+        f"/threads/{thread_id}/settings",
+        json=updates,
+    ).raise_for_status()
+
+
 def create_thread(
     client: httpx.Client,
     name: str,
     *,
     workflow_id: Optional[str] = None,
+    settings_patch: Optional[dict[str, Any]] = None,
 ) -> str:
     pid = project_id(client.get("/projects").json())
     body: dict[str, Any] = {"name": name}
     if pid:
         body["project_id"] = pid
     thread_id = client.post("/threads", json=body).json()["id"]
+    merged_patch: dict[str, Any] = dict(settings_patch or {})
     if workflow_id:
-        client.put(
-            f"/threads/{thread_id}/settings",
-            json={"agent_workflow": {"workflow_id": workflow_id}},
-        ).raise_for_status()
+        merged_patch = {**merged_patch, "agent_workflow": {"workflow_id": workflow_id}}
+    update_thread_settings(client, thread_id, merged_patch)
     return thread_id
 
 
@@ -119,15 +129,19 @@ def thread_chat(
     *,
     llm_model: str,
     bypass_clarification: bool = True,
+    chat_options: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "thread_id": thread_id,
+        "question": question,
+        "llm_model": llm_model,
+        "bypass_clarification": bypass_clarification,
+    }
+    if chat_options:
+        payload.update(chat_options)
     response = client.post(
         f"/threads/{thread_id}/chat",
-        json={
-            "thread_id": thread_id,
-            "question": question,
-            "llm_model": llm_model,
-            "bypass_clarification": bypass_clarification,
-        },
+        json=payload,
         timeout=900.0,
     )
     response.raise_for_status()
