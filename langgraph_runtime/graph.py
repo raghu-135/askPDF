@@ -1608,10 +1608,13 @@ class NodeRegistry:
             "contract_repair": contract_repair,
         }
         final_answer = str(state.get("final_answer") or "")
+        from langgraph_runtime.workflows.document_scope import DOCUMENT_SCOPE_DECLINE_ANSWER
+
         if (
             route == AnswerQualityRoute.FINALIZE_CAUTIOUS.value
             and report["issues"]
             and not canvas_absence_limitations_suppressed(state)
+            and final_answer.strip() != DOCUMENT_SCOPE_DECLINE_ANSWER
         ):
             final_answer = final_answer.rstrip() + "\n\nLimitations: " + "; ".join(report["issues"])
         data = {
