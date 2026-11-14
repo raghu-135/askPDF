@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from typing import Any, Dict
@@ -244,11 +245,22 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         prose_answer = str(state.get("final_answer") or "").strip()
         prose_grounded = synthesized_answer_grounded_in_corrective_evidence(state, prose_answer)
         if verified:
-            lines = [
-                f"- {item['claim']} ({', '.join(item.get('source_ids') or [])})"
-                for item in verified
-            ]
-            answer = "Verified findings:\n" + "\n".join(lines)
+            if len(verified) == 1 and not contradictions:
+                claim = str(verified[0].get("claim") or "").strip()
+                quoted = re.findall(r"['\"]([^'\"]{4,})['\"]", claim)
+                if quoted:
+                    answer = quoted[-1].strip()
+                elif len(claim) <= 160:
+                    answer = claim
+                else:
+                    answer = "Verified findings:\n" + f"- {claim} ({', '.join(verified[0].get('source_ids') or [])})"
+                gaps = []
+            else:
+                lines = [
+                    f"- {item['claim']} ({', '.join(item.get('source_ids') or [])})"
+                    for item in verified
+                ]
+                answer = "Verified findings:\n" + "\n".join(lines)
         elif prose_grounded:
             answer = prose_answer
             gaps = []

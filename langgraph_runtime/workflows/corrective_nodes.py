@@ -242,7 +242,16 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
 
     if state.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
         return None
-    if corrective_evidence_packets(dict(state)):
+    lexical_decline = lexical_attachment_scope_decline(state)
+    if lexical_decline is not None:
+        return lexical_decline
+    eligible = corrective_evidence_packets(dict(state))
+    if eligible:
+        if thread_has_attached_documents(state) and not any(
+            any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
+            for packet in eligible
+        ):
+            return DOCUMENT_SCOPE_DECLINE_ANSWER
         return None
     doc_packets = _document_evidence_packets(state)
     if not doc_packets:
