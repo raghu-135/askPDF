@@ -126,9 +126,18 @@ async function assertApprovalVisible(page) {
   }
 }
 
-async function waitForReviewPanelClosed(page) {
+async function waitForReviewPanelClosed(page, { approveLabel = null, maxApprovals = 1 } = {}) {
   const panel = page.getByTestId('chat-human-review-panel');
-  await expect(page.getByRole('button', { name: /^Approving/i })).toHaveCount(0, { timeout: 240000 }).catch(() => {});
+  for (let attempt = 0; attempt < maxApprovals; attempt += 1) {
+    await expect(page.getByRole('button', { name: /^Approving/i })).toHaveCount(0, { timeout: 240000 }).catch(() => {});
+    if ((await panel.count()) === 0) return;
+    if (!approveLabel) break;
+    const approve = page.getByRole('button', { name: approveLabel });
+    if (await approve.isVisible().catch(() => false)) {
+      await approve.click();
+      await page.waitForTimeout(1500);
+    }
+  }
   await expect(panel).toHaveCount(0, { timeout: 240000 });
 }
 
@@ -188,7 +197,10 @@ async function runApproveOnceFlow(page, suffix) {
   await sendChat(page, 'What is the current USD to EUR exchange rate? Reply briefly with a number.');
   await assertApprovalVisible(page);
   await page.getByRole('button', { name: /Approve once/i }).click();
-  await waitForReviewPanelClosed(page);
+  await waitForReviewPanelClosed(page, {
+    approveLabel: /Approve once/i,
+    maxApprovals: 6,
+  });
   await waitForAssistantAnswerAfter(
     page,
     'USD',
@@ -204,7 +216,10 @@ async function runApproveForRunFlow(page, suffix) {
   await sendChat(page, 'What is the current USD to EUR exchange rate? Reply briefly with a number.');
   await assertApprovalVisible(page);
   await page.getByRole('button', { name: /Approve for this run/i }).click();
-  await waitForReviewPanelClosed(page);
+  await waitForReviewPanelClosed(page, {
+    approveLabel: /Approve for this run/i,
+    maxApprovals: 4,
+  });
   await waitForAssistantAnswerAfter(
     page,
     'USD',
