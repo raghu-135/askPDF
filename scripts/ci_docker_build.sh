@@ -84,6 +84,6 @@ RUNTIME_COMPOSE=(
   -p askpdf-runtime-prefetch
   -f docker-compose.runtime-integration.yml
 )
-retry "${RUNTIME_COMPOSE[@]}" build rag-service langgraph-runtime
+retry "${RUNTIME_COMPOSE[@]}" build rag-service langgraph-runtime runtime-test-runner fake-llm
 
 echo "Docker image build complete (cache at $CACHE_DIR)"

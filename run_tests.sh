@@ -104,6 +104,19 @@ external_runtime_test() {
     fi
 }
 
+ensure_runtime_compose_images() {
+    if [ "${ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD:-}" = "1" ]; then
+        echo "Skipping runtime compose build (ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD=1)"
+        return 0
+    fi
+    if docker image inspect askpdf-runtime-control-plane >/dev/null 2>&1 \
+        && docker image inspect askpdf-langgraph-runtime >/dev/null 2>&1; then
+        echo "Runtime integration images already present; skipping compose build"
+        return 0
+    fi
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service langgraph-runtime
+}
+
 wait_for_external_job() {
     local service="$1"
     local label="$2"
@@ -141,7 +154,7 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
         export EXTERNAL_RUNTIME_LLM_API_URL="http://fake-llm:9000/v1"
     fi
     echo "Starting isolated LangGraph runtime Compose environment '$EXTERNAL_RUNTIME_PROJECT_NAME'..."
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service langgraph-runtime
+    ensure_runtime_compose_images
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql db-migrate runtime-checkpoint-db-init runtime-db-migrate weaviate fake-llm rag-service langgraph-runtime
     wait_for_external_job db-migrate "Product database migration"
     wait_for_external_job runtime-checkpoint-db-init "Runtime checkpoint database initialization"
@@ -289,7 +302,10 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
     export HERMES_RUNTIME_INTEGRATION=true
     echo "Starting deterministic Hermes runtime Hermes runtime proof..."
     trap external_runtime_diagnostics ERR
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service
+    if [ "${ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD:-}" != "1" ] \
+        && ! docker image inspect askpdf-runtime-control-plane >/dev/null 2>&1; then
+        "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service
+    fi
     if ! "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate fake-llm rag-service hermes hermes-runtime; then
         echo "Hermes runtime Compose environment failed to start" >&2
         exit 1
