@@ -151,20 +151,32 @@ async function scrollTranscriptToEnd(page) {
   await page.waitForTimeout(500);
 }
 
-async function waitForAssistantAnswerAfter(page, userText, pattern) {
+async function waitForAssistantAnswerAfter(page, pattern) {
   await waitForChatSendComplete(page);
-  await scrollTranscriptToEnd(page);
-  const afterUser = page.locator('li, .MuiListItem-root').filter({ hasText: new RegExp(pattern.source, pattern.flags || 'i') }).last();
-  await afterUser.waitFor({ timeout: 240000 });
-  const text = await afterUser.innerText();
+  const answer = page
+    .locator('li, .MuiListItem-root')
+    .filter({ hasText: /Open trace/i })
+    .filter({ hasText: pattern })
+    .last();
+  await answer.waitFor({ state: 'visible', timeout: 240000 });
+  await answer.scrollIntoViewIfNeeded();
+  const text = await answer.innerText();
   expect(text).not.toMatch(/Approve search_web/i);
   expect(text.length).toBeGreaterThan(20);
   return text;
 }
 
-async function captureChatScreenshot(page, filename) {
+async function captureChatScreenshot(page, filename, { answerPattern = /EUR|exchange|USD|Paris|weather|skip|without|unable/i } = {}) {
   await scrollTranscriptToEnd(page);
-  await page.waitForTimeout(300);
+  const answer = page
+    .locator('li, .MuiListItem-root')
+    .filter({ hasText: /Open trace/i })
+    .filter({ hasText: answerPattern })
+    .last();
+  if (await answer.count()) {
+    await answer.scrollIntoViewIfNeeded();
+  }
+  await page.waitForTimeout(400);
   await page.screenshot({ path: filename, fullPage: false });
 }
 
@@ -186,8 +198,10 @@ async function runSkipDenyFlow(page, suffix) {
   await assertApprovalVisible(page);
   await page.getByRole('button', { name: /Skip this tool/i }).click();
   await waitForReviewPanelClosed(page);
-  await waitForAssistantAnswerAfter(page, 'Paris', /Paris|weather|without|skip|unable|sorry|forecast|search/i);
-  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-denied.png`));
+  await waitForAssistantAnswerAfter(page, /Paris|weather|without|skip|unable|sorry|forecast|real-time/i);
+  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-denied.png`), {
+    answerPattern: /Paris|weather|without|skip|unable|sorry|forecast|real-time/i,
+  });
 }
 
 async function runApproveOnceFlow(page, suffix) {
@@ -201,12 +215,10 @@ async function runApproveOnceFlow(page, suffix) {
     approveLabel: /Approve once/i,
     maxApprovals: 6,
   });
-  await waitForAssistantAnswerAfter(
-    page,
-    'USD',
-    /EUR|exchange|USD|dollar|euro|rate|\d|0\.\d/i,
-  );
-  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-approved-once.png`));
+  await waitForAssistantAnswerAfter(page, /EUR|exchange|USD|dollar|euro|rate|0\.\d/i);
+  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-approved-once.png`), {
+    answerPattern: /EUR|exchange|USD|dollar|euro|rate|0\.\d/i,
+  });
 }
 
 async function runApproveForRunFlow(page, suffix) {
@@ -220,12 +232,10 @@ async function runApproveForRunFlow(page, suffix) {
     approveLabel: /Approve for this run/i,
     maxApprovals: 4,
   });
-  await waitForAssistantAnswerAfter(
-    page,
-    'USD',
-    /EUR|exchange|USD|dollar|euro|rate|\d|0\.\d/i,
-  );
-  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-approved-scoped.png`));
+  await waitForAssistantAnswerAfter(page, /EUR|exchange|USD|dollar|euro|rate|0\.\d/i);
+  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-approved-scoped.png`), {
+    answerPattern: /EUR|exchange|USD|dollar|euro|rate|0\.\d/i,
+  });
 }
 
 const viewports = [
