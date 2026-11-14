@@ -12,5 +12,6 @@ COPY runtime_protocol /tmp/runtime_protocol
 RUN pip install --no-deps /tmp/runtime_protocol
 
 COPY langgraph_runtime /app/langgraph_runtime
+COPY rag_service/app/workflow_catalog/builtins /app/rag_service/app/workflow_catalog/builtins
 
 CMD ["python", "-m", "langgraph_runtime.test_runner"]
