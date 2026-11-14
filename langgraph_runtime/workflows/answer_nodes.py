@@ -206,6 +206,23 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
 async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
     if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and (
+        fact := explicit_corrective_document_fact_fallback(state)
+    ):
+        data = {
+            "status": NodeEventStatus.COMPLETED.value,
+            "event_name": "corrective.document_fact_answer",
+            "answer_chars": len(fact),
+            "output_preview": {"answer": compact_preview(fact)},
+        }
+        log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
+        return {
+            "final_answer": fact,
+            "reasoning": "",
+            "reasoning_available": False,
+            "reasoning_format": "none",
+            "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
+        }
+    if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and (
         state.get("grounded_answer_route") == "finalize_cautious"
         or state.get("corrective_retrieval_route") == "insufficient"
     ):
