@@ -9,7 +9,10 @@ from typing import Any, Dict, Mapping
 from langchain_core.runnables import RunnableConfig
 
 from langgraph_runtime.control_plane_client import delegate_sync
-from langgraph_runtime.workflows.corrective_nodes import DOCUMENT_SCOPE_DECLINE_ANSWER
+from langgraph_runtime.workflows.corrective_nodes import (
+    DOCUMENT_SCOPE_DECLINE_ANSWER,
+    ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE,
+)
 from langgraph_runtime.workflows.enums import AutoOrchestratorRoute, NodeEventStatus
 from langgraph_runtime.workflows.runtime_invocation import append_event, log_node_end
 from langgraph_runtime.workflows.state import RouterRagState
@@ -27,10 +30,6 @@ _DEEP_RESEARCH_PATTERN = re.compile(
 )
 _COMPLEX_PATTERN = re.compile(
     r"\b(compare|contrast|versus|vs\.?|across|both papers|two papers|multiple documents)\b",
-    re.IGNORECASE,
-)
-_WORLD_FACT_PATTERN = re.compile(
-    r"\b(population of|capital of|weather in|how many people live)\b",
     re.IGNORECASE,
 )
 
@@ -58,15 +57,17 @@ _DELEGATE_SKIP_SCOPE_DECLINE = frozenset(
 def auto_scope_decline(state: Mapping[str, Any], *, workflow_id: str = "") -> str | None:
     """Canonical document-scope decline for Auto after delegate choice.
 
-    Out-of-scope world-fact questions with attached documents but no prefetch evidence
-    may decline only when Auto would route to the simple router delegate.
-  Deep Research and multi-document orchestration paths are never pre-empted.
+    When documents are attached but pre-fetch produced no document (or web) evidence,
+    decline only on the simple router path. Deep Research and orchestration delegates
+    are never pre-empted here.
     """
 
     if workflow_id in _DELEGATE_SKIP_SCOPE_DECLINE:
         return None
     if not workflow_id:
         return DOCUMENT_SCOPE_DECLINE_ANSWER
+    if workflow_id != ROUTER_WORKFLOW_ID:
+        return None
     bundle = state.get("pre_fetch_bundle") or {}
     attached = bool(state.get("document_sources"))
     if isinstance(bundle, dict):
@@ -78,18 +79,37 @@ def auto_scope_decline(state: Mapping[str, Any], *, workflow_id: str = "") -> st
             attached = True
     if not attached:
         return None
-    evidence = ""
-    if isinstance(bundle, dict):
+
+    def _bundle_sources() -> list[Dict[str, Any]]:
+        sources: list[Dict[str, Any]] = []
+        if isinstance(bundle, dict):
+            raw = bundle.get("document_sources")
+            if isinstance(raw, list):
+                sources.extend(item for item in raw if isinstance(item, dict))
+        raw_state = state.get("document_sources")
+        if isinstance(raw_state, list):
+            sources.extend(item for item in raw_state if isinstance(item, dict))
+        return sources
+
+    def _prefetch_has_supporting_evidence() -> bool:
         for key in ("document_evidence_text", "web_search_evidence_text", "web_evidence_text"):
-            evidence = str(bundle.get(key) or "").strip()
-            if evidence:
-                break
-    question = str(state.get("question") or "")
-    if _WORLD_FACT_PATTERN.search(question):
-        return DOCUMENT_SCOPE_DECLINE_ANSWER
-    if evidence:
+            if isinstance(bundle, dict) and str(bundle.get(key) or "").strip():
+                if key != "document_evidence_text":
+                    return True
+                sources = _bundle_sources()
+                scores = [
+                    float(item.get("score"))
+                    for item in sources
+                    if isinstance(item.get("score"), (int, float))
+                ]
+                if not scores:
+                    return True
+                return max(scores) >= ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE
+        return False
+
+    if _prefetch_has_supporting_evidence():
         return None
-    return None
+    return DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
 def _document_count(state: Mapping[str, Any]) -> int:
@@ -112,8 +132,7 @@ def _choose_delegate_workflow(state: Mapping[str, Any], *, catalog_ids: set[str]
     question = str(state.get("question") or "")
     if DEEP_RESEARCH_WORKFLOW_ID in catalog_ids and _DEEP_RESEARCH_PATTERN.search(question):
         return DEEP_RESEARCH_WORKFLOW_ID, "Deep Research fits this open-ended research request."
-    doc_count = _document_count(state)
-    if doc_count >= 2 or _COMPLEX_PATTERN.search(question):
+    if _COMPLEX_PATTERN.search(question):
         if ORCHESTRATOR_WORKFLOW_ID in catalog_ids:
             return ORCHESTRATOR_WORKFLOW_ID, "Run the parallel orchestrator across the attached documents."
         if PLAN_EXECUTE_WORKFLOW_ID in catalog_ids:
@@ -134,22 +153,6 @@ def _auto_policy(state: Mapping[str, Any]) -> Dict[str, Any]:
 async def auto_orchestrator_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
     catalog_ids = _catalog_ids(state)
-    world_fact_decline = auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID)
-    if world_fact_decline:
-        data = {
-            "status": NodeEventStatus.COMPLETED.value,
-            "auto_orchestrator_route": AutoOrchestratorRoute.DECLINE.value,
-            "delegate_workflow_id": "",
-            "output_preview": {"final_answer": compact_preview(world_fact_decline)},
-        }
-        log_node_end(state, "auto_orchestrator", started, data)
-        return {
-            "auto_orchestrator_route": AutoOrchestratorRoute.DECLINE.value,
-            "final_answer": world_fact_decline,
-            "document_scope_declined": True,
-            "node_events": append_event(state, "auto_orchestrator", data, started=started, config=config),
-        }
-
     workflow_id, rationale = _choose_delegate_workflow(state, catalog_ids=catalog_ids)
     decline = auto_scope_decline(state, workflow_id=workflow_id)
     if decline:
@@ -170,9 +173,7 @@ async def auto_orchestrator_node(state: RouterRagState, config: RunnableConfig) 
     if not workflow_id:
         route = AutoOrchestratorRoute.DECLINE.value
     else:
-        require_approval = workflow_id == DEEP_RESEARCH_WORKFLOW_ID or (
-            _COMPLEX_PATTERN.search(str(state.get("question") or "")) or _document_count(state) >= 2
-        )
+        require_approval = workflow_id == DEEP_RESEARCH_WORKFLOW_ID
         route = AutoOrchestratorRoute.PLAN_APPROVAL.value if require_approval else AutoOrchestratorRoute.DELEGATE.value
 
     plan_summary = f"Delegate to `{workflow_id}`: {rationale}" if workflow_id else rationale

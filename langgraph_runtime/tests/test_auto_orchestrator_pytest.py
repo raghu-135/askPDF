@@ -29,12 +29,35 @@ def test_auto_builtin_validates_and_compiles():
     WorkflowCompiler().compile(spec, checkpointer=None)
 
 
-def test_auto_scope_decline_for_world_fact_without_evidence():
+def test_auto_scope_decline_for_router_without_prefetch_evidence():
     state = {
-        "question": "What is the population of Tokyo?",
+        "question": "What is the kinetic energy of a satellite in low Earth orbit?",
         "pre_fetch_bundle": {
             "documents": [{"file_hash": "a" * 32}],
             "document_evidence_text": "",
+        },
+    }
+    assert auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def test_auto_scope_decline_allows_router_when_prefetch_has_evidence():
+    state = {
+        "question": "Summarize the introduction.",
+        "pre_fetch_bundle": {
+            "document_sources": [{"file_hash": "a" * 32, "score": 0.88}],
+            "document_evidence_text": "Attention is all you need.",
+        },
+    }
+    assert auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID) is None
+
+
+def test_auto_scope_decline_for_router_when_prefetch_scores_are_low():
+    state = {
+        "question": "What regulatory capital ratio applies under Basel IV in 2030?",
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_sources": [{"file_hash": "a" * 32, "score": 0.21}],
+            "document_evidence_text": "Table 2 training cost for the base model.",
         },
     }
     assert auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID) == DOCUMENT_SCOPE_DECLINE_ANSWER

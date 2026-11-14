@@ -41,7 +41,7 @@
       },
       "custom_instructions": "",
       "auto_policy": {
-        "require_plan_approval_on_complex": true,
+        "require_plan_approval_on_complex": false,
         "max_delegates_per_turn": 1,
         "pass_prompt_overrides": true,
         "delegate_policy": {
