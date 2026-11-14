@@ -17,10 +17,25 @@ if [ -n "$(ls -A "$CACHE_DIR" 2>/dev/null || true)" ]; then
   cache_from=(--cache-from "type=local,src=$CACHE_DIR")
 fi
 
+retry() {
+  local attempt=1
+  local delay=45
+  while [ "$attempt" -le 4 ]; do
+    if "$@"; then
+      return 0
+    fi
+    echo "Command failed (attempt ${attempt}/4), retrying in ${delay}s..." >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay + 15))
+  done
+  return 1
+}
+
 build_with_cache() {
   local tag="$1"
   shift
-  docker buildx build \
+  retry docker buildx build \
     "${cache_from[@]}" \
     --cache-to "type=local,dest=$CACHE_NEW,mode=max" \
     --load \
@@ -42,7 +57,8 @@ MAIN_COMPOSE=(
 )
 
 "${MAIN_COMPOSE[@]}" config --quiet
-"${MAIN_COMPOSE[@]}" build
+# CI does not need frontend or browser-capture images (avoids lscr.io rate limits).
+retry "${MAIN_COMPOSE[@]}" build rag-service langgraph-runtime db-migrate
 
 build_with_cache askpdf-control-plane-tests \
   --build-arg DOWNLOAD_LOCAL_MODELS=false \
@@ -61,13 +77,13 @@ TEST_COMPOSE=(
   -f docker-compose.test.yml
   -f docker-compose.test.ci.yml
 )
-"${TEST_COMPOSE[@]}" build test-runner
+retry "${TEST_COMPOSE[@]}" build test-runner
 
 RUNTIME_COMPOSE=(
   docker compose --env-file .env.ci
   -p askpdf-runtime-prefetch
   -f docker-compose.runtime-integration.yml
 )
-"${RUNTIME_COMPOSE[@]}" build rag-service langgraph-runtime
+retry "${RUNTIME_COMPOSE[@]}" build rag-service langgraph-runtime
 
 echo "Docker image build complete (cache at $CACHE_DIR)"
