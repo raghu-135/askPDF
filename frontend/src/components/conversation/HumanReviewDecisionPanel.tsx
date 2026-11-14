@@ -7,7 +7,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { AgentRunPendingInterrupt, AgentRunResumeAction } from '../../lib/api';
 import { AgentRunResumeAction as ResumeAction, HitlSelectionMode } from '../../lib/enums';
 import type { ToolDisplayCatalog } from '../../lib/tool-approval-presentation';
-import { toolApprovalDisplayName, toolApprovalSummaryLine } from '../../lib/tool-approval-presentation';
+import { toolApprovalSummaryLine, toolApprovalTitle } from '../../lib/tool-approval-presentation';
 import { ResizableDecisionPanel } from './ResizableDecisionPanel';
 
 export type HumanReviewScopeOption = {
@@ -132,12 +132,12 @@ export function HumanReviewDecisionPanel({
   );
 
   const panelTitle = isToolApproval && proposedTool?.name
-    ? `Approve ${toolApprovalDisplayName(String(proposedTool.name), toolCatalog)}?`
+    ? toolApprovalTitle(String(proposedTool.name), toolCatalog)
     : (interrupt.title || (interrupt.proposed_tool ? 'Approve tool use?' : 'Human review required'));
 
   return (
     <ResizableDecisionPanel
-      title={interrupt.title || panelTitle}
+      title={panelTitle}
       variant="approval"
       rootRef={rootRef}
       horizontalInset={1}

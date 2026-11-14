@@ -17,6 +17,30 @@ export function toolApprovalDisplayName(
   return humanizeToolName(toolName);
 }
 
+/** Plain-language approval card title (prefer over raw interrupt titles like "Approve search_web?"). */
+export function toolApprovalTitle(
+  toolName: string,
+  catalog?: ToolDisplayCatalog,
+): string {
+  const display = toolApprovalDisplayName(toolName, catalog);
+  const description = catalog?.[toolName]?.description?.trim() || '';
+  const signals = `${display} ${description}`.toLowerCase();
+  if (/\b(web|internet)\b/.test(signals) && /\bsearch/.test(signals)) {
+    return 'Allow a web search?';
+  }
+  if (/\bwikipedia\b|\bwiki\b/.test(signals)) {
+    return 'Allow a Wikipedia lookup?';
+  }
+  if (/\bpublish\b/.test(signals) && /\bcanvas\b/.test(signals)) {
+    return 'Allow publishing to the canvas?';
+  }
+  const verb = display.toLowerCase();
+  if (verb.startsWith('search ')) {
+    return `Allow a ${verb.slice('search '.length)}?`;
+  }
+  return `Allow ${verb}?`;
+}
+
 function primaryArgumentPhrase(argumentsJson: Record<string, unknown> | undefined): string | null {
   const args = argumentsJson || {};
   const preferredKeys = ['query', 'q', 'question', 'search', 'url', 'symbol', 'topic'];

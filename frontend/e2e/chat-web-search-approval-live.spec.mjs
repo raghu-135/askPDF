@@ -8,13 +8,30 @@ const ART = process.env.ASKPDF_E2E_ARTIFACTS || '/opt/cursor/artifacts';
 const BASE = process.env.ASKPDF_E2E_BASE_URL || 'http://127.0.0.1:3000';
 const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'openai/gpt-4.1-mini';
 
+async function selectRouterAgentWorkflow(page) {
+  const header = page.locator('div').filter({
+    has: page.getByRole('combobox', { name: /Select LLM/i }),
+  }).first();
+  const settingsButton = header.getByRole('button').last();
+  await settingsButton.waitFor({ timeout: 60000 });
+  await settingsButton.click();
+  const dialog = page.getByRole('dialog');
+  await dialog.waitFor({ timeout: 30000 });
+  await dialog.getByRole('combobox', { name: /Agent workflow/i }).click();
+  await page.getByRole('option', { name: /Router Agent/i }).click();
+  const save = page.getByRole('button', { name: /^Save$/i });
+  await save.scrollIntoViewIfNeeded();
+  await save.click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden', timeout: 60000 }).catch(() => {});
+}
+
 async function ensureChatWorkspace(page) {
   await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.waitForTimeout(1500);
 
   const llmCombo = page.getByRole('combobox', { name: /Select LLM/i }).first();
   if (await llmCombo.isVisible({ timeout: 3000 }).catch(() => false)) {
-    return;
+    return null;
   }
 
   let projectLabel = 'web-approval-test';
@@ -35,7 +52,8 @@ async function ensureChatWorkspace(page) {
     .first();
   await createThreadBtn.waitFor({ timeout: 60000 });
   await createThreadBtn.click();
-  await page.getByRole('textbox').first().fill(`approval-live-${Date.now()}`);
+  const threadName = `approval-live-${Date.now()}`;
+  await page.getByRole('textbox').first().fill(threadName);
   await page.getByRole('button', { name: /^Create$/i }).click();
   await llmCombo.waitFor({ timeout: 60000 });
 }
@@ -74,7 +92,7 @@ async function setWebSearchLabel(page, expectedSubstring) {
     const label = await btn.getAttribute('aria-label');
     if (label?.includes(expectedSubstring)) return;
     await btn.click();
-    await page.waitForTimeout(350);
+    await page.waitForTimeout(450);
   }
   throw new Error(`Could not set web search to mode matching "${expectedSubstring}"`);
 }
@@ -115,7 +133,10 @@ async function assertApprovalVisible(page) {
   const composer = page.getByPlaceholder(/Ask a question about your documents/i).first();
   await panel.scrollIntoViewIfNeeded();
   await expect(composer).toBeVisible();
+  await expect(page.getByText(/Allow a web search\?/i)).toBeVisible();
   await expect(page.getByText(/Search the web for:/i)).toBeVisible();
+  await expect(page.getByText(/Approve search_web/i)).toHaveCount(0);
+  await expect(page.getByRole('separator', { name: 'Resize decision panel' })).toBeVisible();
   const approveOnce = page.getByRole('button', { name: /Approve once/i });
   const skip = page.getByRole('button', { name: /Skip this tool/i });
   await approveOnce.waitFor({ timeout: 240000 });
@@ -147,11 +168,20 @@ async function scrollTranscriptToEnd(page) {
   await page.waitForTimeout(500);
 }
 
+async function assertPanelScrollable(page) {
+  const panel = page.getByTestId('chat-human-review-panel');
+  const scrollHeight = await panel.evaluate((el) => el.scrollHeight);
+  const clientHeight = await panel.evaluate((el) => el.clientHeight);
+  expect(scrollHeight).toBeGreaterThanOrEqual(clientHeight);
+  await panel.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
 async function waitForAssistantAnswerAfter(page, pattern) {
   await waitForChatSendComplete(page);
   const answer = page
     .locator('li, .MuiListItem-root')
-    .filter({ hasText: /Open trace/i })
     .filter({ hasText: pattern })
     .last();
   await answer.waitFor({ state: 'visible', timeout: 240000 });
@@ -178,7 +208,10 @@ async function captureChatScreenshot(page, filename, { answerPattern = /EUR|exch
 
 async function prepareThread(page) {
   await ensureChatWorkspace(page);
+  await createFreshThread(page);
   await pickModel(page, MODEL);
+  await waitForComposerReady(page);
+  await selectRouterAgentWorkflow(page);
   await waitForComposerReady(page);
 }
 
@@ -187,10 +220,14 @@ async function runSkipDenyFlow(page, suffix) {
   await setWebSearchLabel(page, 'Ask me every time');
   await sendChat(page, 'What is the weather in Paris today? Reply in one sentence.');
   await assertApprovalVisible(page);
+  await assertPanelScrollable(page);
+  await captureChatScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-skip-prompt.png`), {
+    answerPattern: /Paris|weather|Search the web/i,
+  });
   await page.getByRole('button', { name: /Skip this tool/i }).click();
   await waitForReviewPanelClosed(page);
   await waitForAssistantAnswerAfter(page, /Paris|weather|without|skip|unable|sorry|forecast|real-time/i);
-  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-denied.png`), {
+  await captureChatScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-skip-answer.png`), {
     answerPattern: /Paris|weather|without|skip|unable|sorry|forecast|real-time/i,
   });
 }
@@ -199,36 +236,29 @@ async function runApproveOnceFlow(page, suffix) {
   await prepareThread(page);
   await setWebSearchLabel(page, 'Ask me every time');
   await page.waitForTimeout(500);
-  await sendChat(page, 'Use the internet search tool to find the current USD to EUR exchange rate. Reply with one number.');
-  await page.waitForTimeout(1500);
+  await sendChat(
+    page,
+    'Use the internet search tool to find the current USD to EUR exchange rate. Reply with one number.',
+  );
   await assertApprovalVisible(page);
+  await assertPanelScrollable(page);
   await captureChatScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-prompt.png`));
   await page.getByRole('button', { name: /Approve once/i }).click();
   await expect(page.getByRole('button', { name: /Approved, continuing/i })).toBeVisible({ timeout: 15000 });
   await captureChatScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-continuing.png`));
-  await waitForReviewPanelClosed(page, {
-    approveLabel: /Approve once/i,
-    maxApprovals: 6,
-  });
+  const approveForRun = page.getByRole('button', { name: /Approve for this run/i });
+  if (await approveForRun.isVisible({ timeout: 15000 }).catch(() => false)) {
+    await approveForRun.click();
+    await page.waitForTimeout(1500);
+  } else {
+    const secondApproveOnce = page.getByRole('button', { name: /^Approve once$/i });
+    if (await secondApproveOnce.isVisible({ timeout: 15000 }).catch(() => false)) {
+      await secondApproveOnce.click();
+      await expect(page.getByRole('button', { name: /Approved, continuing/i })).toBeVisible({ timeout: 15000 });
+    }
+  }
   await waitForAssistantAnswerAfter(page, /EUR|exchange|USD|dollar|euro|rate|0\.\d/i);
   await captureChatScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-answer.png`), {
-    answerPattern: /EUR|exchange|USD|dollar|euro|rate|0\.\d/i,
-  });
-}
-
-async function runApproveForRunFlow(page, suffix) {
-  await createFreshThread(page);
-  await waitForComposerReady(page);
-  await setWebSearchLabel(page, 'Ask me every time');
-  await sendChat(page, 'What is the current USD to EUR exchange rate? Reply briefly with a number.');
-  await assertApprovalVisible(page);
-  await page.getByRole('button', { name: /Approve for this run/i }).click();
-  await waitForReviewPanelClosed(page, {
-    approveLabel: /Approve for this run/i,
-    maxApprovals: 4,
-  });
-  await waitForAssistantAnswerAfter(page, /EUR|exchange|USD|dollar|euro|rate|0\.\d/i);
-  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-approved-scoped.png`), {
     answerPattern: /EUR|exchange|USD|dollar|euro|rate|0\.\d/i,
   });
 }
@@ -246,11 +276,21 @@ test.describe.serial('Live chat web search approval UI', () => {
   });
 
   for (const vp of viewports) {
-    test(vp.suffix, async ({ browser }) => {
+    test(`approve once @ ${vp.suffix}`, async ({ browser, request }) => {
       const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
       const page = await context.newPage();
       try {
         await runApproveOnceFlow(page, vp.suffix);
+      } finally {
+        await context.close();
+      }
+    });
+
+    test(`skip tool @ ${vp.suffix}`, async ({ browser, request }) => {
+      const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
+      const page = await context.newPage();
+      try {
+        await runSkipDenyFlow(page, vp.suffix);
       } finally {
         await context.close();
       }

@@ -39,7 +39,7 @@ const html = `<!DOCTYPE html>
         <div>Assistant: Waiting for approval…</div>
       </div>
       <div class="decision" data-testid="chat-approval-shell">
-        <div class="decision-title">Approve search_web?</div>
+        <div class="decision-title">Allow a web search?</div>
         <div data-testid="chat-human-review-panel" class="decision-body">
           <p class="summary">Search the web for: What is the current USD to EUR exchange rate?</p>
           <span>Show technical details</span>

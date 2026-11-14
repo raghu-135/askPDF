@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   toolApprovalDisplayName,
   toolApprovalSummaryLine,
+  toolApprovalTitle,
 } from '../src/lib/tool-approval-presentation.ts';
 
 test('toolApprovalSummaryLine uses catalog display name and query', () => {
@@ -15,4 +16,9 @@ test('toolApprovalSummaryLine uses catalog display name and query', () => {
 
 test('toolApprovalDisplayName falls back to humanized tool id', () => {
   assert.equal(toolApprovalDisplayName('publish_canvas', {}), 'Publish Canvas');
+});
+
+test('toolApprovalTitle uses catalog wording for web search', () => {
+  const catalog = { search_web: { display_name: 'Internet Search', description: 'Live web search' } };
+  assert.equal(toolApprovalTitle('search_web', catalog), 'Allow a web search?');
 });

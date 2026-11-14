@@ -1825,41 +1825,56 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             let response: any;
             let terminalError: string | undefined;
-            await streamResumeAgentRun(pendingHumanReview.runId, {
-                action,
-                interrupt_id: interrupt.interrupt_id,
-                resume_token: interrupt.resume_token || undefined,
-                resume_version: interrupt.resume_version || undefined,
-                selected_option_ids: selectedOptionIds,
-                thread_id: activeThread.id,
-                edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
-                client_metadata: { source: 'chat_pending_review_panel' },
-            }, (event) => {
-                if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
-                if (
-                    humanReviewSubmissionKeyRef.current !== submissionKey
-                    && /^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)
-                ) {
-                    setHumanReviewCapabilityRevision((revision) => revision + 1);
-                    void refreshHumanReviewCapabilities();
+            const resumeAbort = new AbortController();
+            let resumeTerminalReceived = false;
+            try {
+                await streamResumeAgentRun(pendingHumanReview.runId, {
+                    action,
+                    interrupt_id: interrupt.interrupt_id,
+                    resume_token: interrupt.resume_token || undefined,
+                    resume_version: interrupt.resume_version || undefined,
+                    selected_option_ids: selectedOptionIds,
+                    thread_id: activeThread.id,
+                    edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
+                    client_metadata: { source: 'chat_pending_review_panel' },
+                }, (event) => {
+                    if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
+                    if (
+                        humanReviewSubmissionKeyRef.current !== submissionKey
+                        && /^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)
+                    ) {
+                        setHumanReviewCapabilityRevision((revision) => revision + 1);
+                        void refreshHumanReviewCapabilities();
+                    }
+                    const terminalEvents = ['__result__', '__error__', 'run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'];
+                    if (!terminalEvents.includes(event.event)) return;
+                    const parsed = parseAgentRunResumeStreamEvent(event.event, event.data as Record<string, unknown> | undefined);
+                    if (!parsed) return;
+                    if (parsed.errorMessage) {
+                        terminalError = parsed.errorMessage;
+                    } else if (Object.keys(parsed.response).length > 0) {
+                        response = parsed.response;
+                    }
+                    const isFailure = ['__error__', 'run.failed', 'stream.error'].includes(event.event) && !response;
+                    if (isFailure && !terminalError) {
+                        terminalError = 'Unable to resume the agent run.';
+                    }
+                    setLiveExecution((current) => current?.messageId === liveMessageId
+                        ? { ...current, running: false, error: isFailure ? terminalError : undefined }
+                        : current);
+                    if (response || terminalError) {
+                        resumeTerminalReceived = true;
+                        resumeAbort.abort();
+                    }
+                }, resumeAbort.signal);
+            } catch (err: any) {
+                if (!resumeTerminalReceived && err?.name !== 'AbortError') {
+                    throw err;
                 }
-                const terminalEvents = ['__result__', '__error__', 'run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'];
-                if (!terminalEvents.includes(event.event)) return;
-                const parsed = parseAgentRunResumeStreamEvent(event.event, event.data as Record<string, unknown> | undefined);
-                if (!parsed) return;
-                if (parsed.errorMessage) {
-                    terminalError = parsed.errorMessage;
-                } else if (Object.keys(parsed.response).length > 0) {
-                    response = parsed.response;
-                }
-                const isFailure = ['__error__', 'run.failed', 'stream.error'].includes(event.event) && !response;
-                if (isFailure && !terminalError) {
-                    terminalError = 'Unable to resume the agent run.';
-                }
-                setLiveExecution((current) => current?.messageId === liveMessageId
-                    ? { ...current, running: false, error: isFailure ? terminalError : undefined }
-                    : current);
-            });
+            }
+            if (!response && terminalError) {
+                throw new Error(terminalError);
+            }
             if (!response) throw new Error(terminalError || 'The resume stream ended before returning a result.');
 
             const resumedRun = response?.agent_run;
