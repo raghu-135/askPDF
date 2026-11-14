@@ -98,6 +98,7 @@ jobs:
           docker compose -p askpdf-test -f docker-compose.test.yml down --volumes --remove-orphans || true
           docker compose -p askpdf-runtime-collection -f docker-compose.runtime-integration.yml down --volumes --remove-orphans || true
           docker volume prune -f || true
+          docker builder prune -f || true
           df -h
 
       - name: Run mandatory LangGraph runtime proof
