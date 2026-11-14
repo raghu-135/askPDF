@@ -533,8 +533,49 @@ def _operations(events: Sequence[AgentRuntimeEvent], framework: str) -> list[dic
             if row["duration_ms"] is None:
                 row["duration_ms"] = _duration_ms(row.get("started_at"), row.get("completed_at"))
             row["output"] = _bounded_value(payload.get("result_summary") or payload.get("output") or payload.get("output_summary") or payload.get("detail") or {})
+            if payload.get("evidence_packet_scores") is not None:
+                output = row["output"] if isinstance(row["output"], dict) else {}
+                row["output"] = {
+                    **output,
+                    "evidence_packet_scores": _bounded_value(payload.get("evidence_packet_scores")),
+                }
+            if payload.get("evidence_packet_count") is not None:
+                output = row["output"] if isinstance(row["output"], dict) else {}
+                row["output"] = {**output, "evidence_packet_count": payload.get("evidence_packet_count")}
             row["error"] = _bounded_value(payload.get("error"))
     return sorted(rows.values(), key=lambda row: (int(row.get("sequence") or 0), str(row["operation_id"]), int(row["visit_index"])))
+
+
+def _merge_worker_evidence_scores(
+    events: Sequence[AgentRuntimeEvent],
+    operations: list[dict[str, Any]],
+) -> None:
+    scores_by_key: dict[tuple[str, int], Any] = {}
+    for event in events:
+        if not event.kind.startswith("worker."):
+            continue
+        payload = dict(event.payload)
+        operation_id = str(
+            payload.get("worker_node_id")
+            or payload.get("node")
+            or payload.get("operation_id")
+            or ""
+        ).strip()
+        if not operation_id:
+            continue
+        visit_index = int(_number(payload.get("visit_index")) or int(_number(payload.get("ordinal")) or 0) + 1 or 1)
+        scores = payload.get("evidence_packet_scores")
+        if scores:
+            scores_by_key[(operation_id, visit_index)] = scores
+    for row in operations:
+        output = row.get("output") if isinstance(row.get("output"), dict) else {}
+        if output.get("evidence_packet_scores"):
+            continue
+        key = (str(row.get("operation_id") or ""), int(row.get("visit_index") or 1))
+        scores = scores_by_key.get(key)
+        if not scores:
+            continue
+        row["output"] = {**output, "evidence_packet_scores": _bounded_value(scores)}
 
 
 def _event_rows(events: Sequence[AgentRuntimeEvent], prefix: str, framework: str) -> list[dict[str, Any]]:
@@ -777,6 +818,7 @@ def build_canonical_trace_projection(
                       "details": {**cancellation_request, "runtime_confirmation": "confirmed"}},
         }) if event.kind == "run.cancelled" else event for event in ordered]
     operations = _operations(ordered, framework)
+    _merge_worker_evidence_scores(ordered, operations)
     # Trace rendering is diagnostic-only. Isolate malformed historical groups
     # so a projection problem cannot turn an otherwise valid trace into a 500.
     parallel_groups = build_parallel_groups_safely(ordered)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from typing import Any, Dict
@@ -19,7 +20,15 @@ from langgraph_runtime.workflows.evidence import (
 from langgraph_runtime.workflows.enums import NodeEventStatus, RouterRoute, WorkflowNodeType
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
-from langgraph_runtime.workflows.corrective_nodes import corrective_document_scope_decline, document_scope_decline
+from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
+from langgraph_runtime.workflows.corrective_nodes import (
+    DOCUMENT_SCOPE_DECLINE_ANSWER,
+    corrective_document_scope_decline,
+    document_scope_decline,
+    explicit_corrective_document_fact_fallback,
+    synthesized_answer_grounded_in_corrective_evidence,
+)
+from langgraph_runtime.workflows.document_scope import postprocess_grounded_document_answer
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
 from langgraph_runtime.workflows.canvas_publish import (
@@ -54,11 +63,18 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
     started = time.perf_counter()
     document_scope_declined = False
     decline = None
-    if node_name in {WorkflowNodeType.SYNTHESIZER.value, WorkflowNodeType.DIRECT_ANSWER.value}:
+    if node_name in {
+        WorkflowNodeType.SYNTHESIZER.value,
+        WorkflowNodeType.DIRECT_ANSWER.value,
+        WorkflowNodeType.ANSWER_REVISER.value,
+    }:
         decline = document_scope_decline(state)
         if decline:
             document_scope_declined = True
-    if decline is None:
+    if decline is None and state.get("workflow_id") not in {
+        PARALLEL_REFERENCE_WORKFLOW_ID,
+        CORRECTIVE_WORKFLOW_ID,
+    }:
         decline = state.get("attachment_scope_decline") or router_attachment_scope_decline(
             state, str(state.get("route") or "")
         )
@@ -171,6 +187,8 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
     answer_text = published["answer"]
     if published.get("published"):
         answer_text = finalize_canvas_answer_prose(answer_text, canvas_published=True)
+    if state.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
+        answer_text = postprocess_grounded_document_answer(state, answer_text)
     update: Dict[str, Any] = {
         "final_answer": answer_text,
         "reasoning": published["reasoning"],
@@ -191,9 +209,42 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
 async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
     if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and (
+        fact := explicit_corrective_document_fact_fallback(state)
+    ):
+        data = {
+            "status": NodeEventStatus.COMPLETED.value,
+            "event_name": "corrective.document_fact_answer",
+            "answer_chars": len(fact),
+            "output_preview": {"answer": compact_preview(fact)},
+        }
+        log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
+        return {
+            "final_answer": fact,
+            "reasoning": "",
+            "reasoning_available": False,
+            "reasoning_format": "none",
+            "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
+        }
+    if state.get("workflow_id") == CORRECTIVE_WORKFLOW_ID and (
         state.get("grounded_answer_route") == "finalize_cautious"
         or state.get("corrective_retrieval_route") == "insufficient"
     ):
+        scope = corrective_document_scope_decline(state)
+        if scope:
+            data = {
+                "status": NodeEventStatus.COMPLETED.value,
+                "event_name": "document_scope_declined",
+                "answer_chars": len(scope),
+                "output_preview": {"answer": compact_preview(scope)},
+            }
+            log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
+            return {
+                "final_answer": scope,
+                "reasoning": "",
+                "reasoning_available": False,
+                "reasoning_format": "none",
+                "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
+            }
         valid_source_ids = {
             normalized
             for packet in corrective_evidence_packets(state)
@@ -232,12 +283,31 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         if contradictions and any(not item.get("claim_ids") for item in contradictions):
             verified = []
         gaps = [str(item) for item in state.get("unresolved_gaps") or state.get("evidence_gaps") or [] if str(item).strip()]
+        prose_answer = str(state.get("final_answer") or "").strip()
+        prose_grounded = synthesized_answer_grounded_in_corrective_evidence(state, prose_answer)
         if verified:
-            lines = [
-                f"- {item['claim']} ({', '.join(item.get('source_ids') or [])})"
-                for item in verified
-            ]
-            answer = "Verified findings:\n" + "\n".join(lines)
+            if len(verified) == 1 and not contradictions:
+                claim = str(verified[0].get("claim") or "").strip()
+                quoted = re.findall(r"['\"]([^'\"]{4,})['\"]", claim)
+                if quoted:
+                    answer = quoted[-1].strip()
+                elif len(claim) <= 160:
+                    answer = claim
+                else:
+                    answer = "Verified findings:\n" + f"- {claim} ({', '.join(verified[0].get('source_ids') or [])})"
+                gaps = []
+            else:
+                lines = [
+                    f"- {item['claim']} ({', '.join(item.get('source_ids') or [])})"
+                    for item in verified
+                ]
+                answer = "Verified findings:\n" + "\n".join(lines)
+        elif prose_grounded:
+            answer = prose_answer
+            gaps = []
+        elif (fact := explicit_corrective_document_fact_fallback(state)):
+            answer = fact
+            gaps = []
         else:
             answer = (
                 corrective_document_scope_decline(state)
@@ -252,7 +322,7 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         if gaps:
             answer += "\n\nUnresolved evidence gaps:\n" + "\n".join(f"- {gap}" for gap in gaps)
         reason = str(state.get("corrective_budget_exhausted_reason") or "")
-        if reason in CORRECTIVE_BUDGET_REASONS:
+        if reason in CORRECTIVE_BUDGET_REASONS and answer != DOCUMENT_SCOPE_DECLINE_ANSWER:
             answer += f"\n\nCorrection stopped because the {reason.replace('_', ' ')} budget was exhausted."
         data = {
             "status": NodeEventStatus.COMPLETED.value,
@@ -385,6 +455,8 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
     if canvas_update.get("task_canvas_ref"):
         data["canvas_ref"] = canvas_update["task_canvas_ref"]
     final_answer = str(state.get("final_answer") or "")
+    if state.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
+        final_answer = postprocess_grounded_document_answer(state, final_answer)
     if canvas_update.get("task_canvas_published"):
         from runtime_protocol.research_gaps import finalize_canvas_answer_prose
 

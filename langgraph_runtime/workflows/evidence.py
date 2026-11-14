@@ -316,6 +316,57 @@ def corrective_evidence_packets(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             "evaluator_confidence": confidence,
             "coverage": sorted({str(item) for item in assessment.get("coverage") or [] if str(item).strip()}),
         })
+    if not selected:
+        fallback: list[tuple[float, Dict[str, Any], str]] = []
+        for packet in evidence_packets(state):
+            packet_id = str(packet.get("id") or "")
+            if not any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or [])):
+                continue
+            content = str(packet.get("content") or "").strip()
+            if not content:
+                continue
+            assessment = assessments.get(packet_id) or {}
+            if assessment.get("instruction_injection_risk") is True:
+                continue
+            try:
+                confidence = float(assessment.get("confidence") or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            source_ids = sorted({
+                normalized
+                for item in packet.get("source_ids") or []
+                if (normalized := normalized_canonical_source_id(item))
+            })
+            if not source_ids:
+                source_ids = sorted({
+                    str(item).strip()
+                    for item in packet.get("source_ids") or []
+                    if str(item).strip().startswith("doc:")
+                })
+            if not source_ids:
+                continue
+            fallback.append((confidence, packet, packet_id))
+        if fallback:
+            fallback.sort(key=lambda item: item[0], reverse=True)
+            _, packet, packet_id = fallback[0]
+            normalized_ids = sorted({
+                normalized
+                for item in packet.get("source_ids") or []
+                if (normalized := normalized_canonical_source_id(item))
+            })
+            if not normalized_ids:
+                normalized_ids = sorted({
+                    str(item).strip()
+                    for item in packet.get("source_ids") or []
+                    if str(item).strip().startswith("doc:")
+                })
+            selected.append({
+                **packet,
+                "source_ids": normalized_ids,
+                "assessment_ref": packet_id,
+                "evaluator_confidence": fallback[0][0],
+                "coverage": [],
+            })
     selected.sort(key=lambda item: (
         -len(item.get("coverage") or []),
         -float(item.get("evaluator_confidence") or 0.0),

@@ -69,8 +69,10 @@ def test_scientific_notation_cells_are_coalesced_and_normalized():
     assert "BLEU/EN-DE: 28.4" in big["text"]
     assert "BLEU/EN-FR: 41.8" in big["text"]
     # Training costs merged across EN-DE/EN-FR and normalized
-    assert "Training Cost (FLOPs)/EN-DE / Training Cost (FLOPs)/EN-FR: 3.3 × 10^18" in base["text"]
-    assert "Training Cost (FLOPs)/EN-DE / Training Cost (FLOPs)/EN-FR: 2.3 × 10^19" in big["text"]
+    assert "Training Cost (FLOPs)/EN-DE: 3.3 × 10^18" in base["text"]
+    assert "Training Cost (FLOPs)/EN-FR: 3.3 × 10^18" in base["text"]
+    assert "Training Cost (FLOPs)/EN-DE: 2.3 × 10^19" in big["text"]
+    assert "Training Cost (FLOPs)/EN-FR: 2.3 × 10^19" in big["text"]
     # Row bodies carry the normalized values too
     assert base["table_row_body"].endswith("3.3 × 10^18")
     assert big["table_row_body"].endswith("2.3 × 10^19")

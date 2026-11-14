@@ -8,6 +8,8 @@ from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW
 from langgraph_runtime.workflows.corrective_nodes import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     corrective_document_scope_decline,
+    grounded_route_for_report,
+    synthesized_answer_grounded_in_corrective_evidence,
 )
 from langgraph_runtime.workflows.evidence import (
     append_corrective_evidence_packets,
@@ -155,6 +157,33 @@ def test_corrective_document_scope_decline_when_document_hits_are_irrelevant():
     assert corrective_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
+def test_corrective_document_scope_declines_tokyo_when_only_conversation_evidence_is_eligible():
+    packet_id = "thread_conversation_history_worker:visit:1:conversation:1"
+    state = {
+        "workflow_id": CORRECTIVE_WORKFLOW_ID,
+        "pre_fetch_bundle": {"documents": [{"file_hash": "abc" * 8}]},
+        "question": "What is the population of Tokyo?",
+        "evidence_packets": [
+            {
+                "id": packet_id,
+                "source_ids": ["conversation:61f46c14"],
+                "content": "Earlier you asked about Tokyo demographics.",
+            }
+        ],
+        "evidence_assessments": [
+            {
+                "packet_id": packet_id,
+                "relevant": True,
+                "confidence": 0.9,
+                "provenance_complete": True,
+                "instruction_injection_risk": False,
+            }
+        ],
+        "corrective_policy": {"minimum_relevance_confidence": 0.65},
+    }
+    assert corrective_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
 def test_corrective_document_scope_decline_skips_when_relevant_packet_exists():
     packet_id = "retrieval_worker:visit:1:document:abc"
     source_id = "doc:abcdefabcdefabcdefabcdefabcdefab:c-table2"
@@ -181,6 +210,73 @@ def test_corrective_document_scope_decline_skips_when_relevant_packet_exists():
     }
     assert corrective_document_scope_decline(state) is None
     assert corrective_evidence_packets(state)
+
+
+def test_synthesized_title_answer_grounded_in_corrective_evidence():
+    packet_id = "retrieval_worker:visit:1:document:abc"
+    source_id = "doc:abcdefabcdefabcdefabcdefabcdefab:c-title"
+    state = {
+        "workflow_id": CORRECTIVE_WORKFLOW_ID,
+        "final_answer": "Attention Is All You Need",
+        "corrective_policy": {"minimum_relevance_confidence": 0.65},
+        "evidence_packets": [
+            {
+                "id": packet_id,
+                "source_ids": [source_id],
+                "content": "Provided proper attribution, Attention Is All You Need is provided.",
+            }
+        ],
+        "evidence_assessments": [
+            {
+                "packet_id": packet_id,
+                "relevant": True,
+                "confidence": 0.95,
+                "provenance_complete": True,
+                "instruction_injection_risk": False,
+                "coverage": ["title"],
+            }
+        ],
+    }
+    assert synthesized_answer_grounded_in_corrective_evidence(state, state["final_answer"])
+    route, _ = grounded_route_for_report({"supported_claim_ratio": 0.0, "unresolved_gaps": ["title"]}, state)
+    assert route == "pass"
+
+
+@pytest.mark.asyncio
+async def test_finalizer_preserves_grounded_prose_when_verifier_emits_no_claims():
+    packet_id = "retrieval_worker:visit:1:document:abc"
+    source_id = "doc:abcdefabcdefabcdefabcdefabcdefab:c-title"
+    state = {
+        "workflow_id": CORRECTIVE_WORKFLOW_ID,
+        "grounded_answer_route": "finalize_cautious",
+        "corrective_retrieval_route": "synthesize",
+        "final_answer": "Attention Is All You Need",
+        "verified_claims": [],
+        "contradiction_report": [],
+        "evidence_packets": [
+            {
+                "id": packet_id,
+                "source_ids": [source_id],
+                "content": "Attention Is All You Need",
+            }
+        ],
+        "evidence_assessments": [
+            {
+                "packet_id": packet_id,
+                "relevant": True,
+                "confidence": 0.95,
+                "provenance_complete": True,
+                "instruction_injection_risk": False,
+                "coverage": ["title"],
+            }
+        ],
+        "corrective_policy": {"minimum_relevance_confidence": 0.65},
+        "unresolved_gaps": ["paper title"],
+    }
+    result = await finalizer_node(state, {"configurable": {"langgraph_node": "finalizer"}})
+    assert result["final_answer"] == "Attention Is All You Need"
+    assert "could not verify" not in result["final_answer"].casefold()
+    assert "Unresolved evidence gaps" not in result["final_answer"]
 
 
 @pytest.mark.asyncio

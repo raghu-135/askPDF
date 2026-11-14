@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, Mapping
 
 from langgraph_runtime.agent.evidence_contract import normalized_canonical_source_id
@@ -13,6 +14,15 @@ from langgraph_runtime.workflows.evidence import (
     evidence_packets,
     instruction_injection_reason_codes,
 )
+from langgraph_runtime.workflows.document_scope import (
+    DOCUMENT_SCOPE_DECLINE_ANSWER,
+    attached_document_evidence_haystack,
+    explicit_document_fact_fallback,
+    lexical_attachment_scope_decline,
+    thread_has_attached_documents,
+)
+
+explicit_corrective_document_fact_fallback = explicit_document_fact_fallback
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.enums import CorrectiveRetrievalRoute, GroundedAnswerRoute
 
@@ -186,10 +196,6 @@ def normalize_retrieval_quality_report(parsed: Mapping[str, Any], state: Mapping
     }
 
 
-DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this question."
-ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE = 0.42
-
-
 def _document_evidence_packets(state: Mapping[str, Any]) -> list[Dict[str, Any]]:
     return [
         packet
@@ -204,12 +210,6 @@ def _non_document_evidence_packets(state: Mapping[str, Any]) -> list[Dict[str, A
         for packet in evidence_packets(dict(state))
         if not any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
     ]
-
-
-def _thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
-    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
-    documents = bundle.get("documents")
-    return isinstance(documents, list) and bool(documents)
 
 
 def _decline_when_document_assessments_are_irrelevant(
@@ -230,29 +230,14 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
 
     if state.get("workflow_id") != PARALLEL_REFERENCE_WORKFLOW_ID:
         return None
-    if not _thread_has_attached_documents(state):
+    if not thread_has_attached_documents(state):
         return None
-    if _non_document_evidence_packets(state):
-        return None
-    doc_packets = _document_evidence_packets(state)
-    scores = [
-        float(packet.get("raw_retriever_score"))
-        for packet in doc_packets
-        if isinstance(packet.get("raw_retriever_score"), (int, float))
-    ]
-    if scores and max(scores) < ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE:
-        return DOCUMENT_SCOPE_DECLINE_ANSWER
-    assessments = {
-        str(item.get("packet_id")): item
-        for item in state.get("evidence_assessments") or []
-        if isinstance(item, dict) and item.get("packet_id")
-    }
-    if doc_packets and assessments:
-        return _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
-    if not doc_packets:
-        for error in state.get("errors") or []:
-            if isinstance(error, dict) and str(error.get("code") or "") == "document_scope_forbidden":
-                return DOCUMENT_SCOPE_DECLINE_ANSWER
+    lexical_decline = lexical_attachment_scope_decline(state)
+    if lexical_decline is not None:
+        return lexical_decline
+    for error in state.get("errors") or []:
+        if isinstance(error, dict) and str(error.get("code") or "") == "document_scope_forbidden":
+            return DOCUMENT_SCOPE_DECLINE_ANSWER
     return None
 
 
@@ -261,11 +246,23 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
 
     if state.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
         return None
-    if corrective_evidence_packets(dict(state)):
+    lexical_decline = lexical_attachment_scope_decline(state)
+    if lexical_decline is not None:
+        return lexical_decline
+    eligible = corrective_evidence_packets(dict(state))
+    if eligible:
+        if thread_has_attached_documents(state) and not any(
+            any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
+            for packet in eligible
+        ):
+            return DOCUMENT_SCOPE_DECLINE_ANSWER
         return None
     doc_packets = _document_evidence_packets(state)
     if not doc_packets:
         return None
+    if any(str(packet.get("content") or "").strip() for packet in doc_packets):
+        if explicit_corrective_document_fact_fallback(state) is not None:
+            return None
     assessments = {
         str(item.get("packet_id")): item
         for item in state.get("evidence_assessments") or []
@@ -277,11 +274,18 @@ def corrective_document_scope_decline(state: Mapping[str, Any]) -> str | None:
 def document_scope_decline(state: Mapping[str, Any]) -> str | None:
     """Shared decline helper for parallel orchestrator and corrective workflows."""
 
+    from langgraph_runtime.workflows.document_scope import (
+        ROUTER_RAG_WORKFLOW_ID,
+        workflow_post_retrieval_scope_decline,
+    )
+
     workflow_id = state.get("workflow_id")
     if workflow_id == CORRECTIVE_WORKFLOW_ID:
         return corrective_document_scope_decline(state)
     if workflow_id == PARALLEL_REFERENCE_WORKFLOW_ID:
         return orchestrator_document_scope_decline(state)
+    if workflow_id == ROUTER_RAG_WORKFLOW_ID:
+        return workflow_post_retrieval_scope_decline(state)
     return None
 
 
@@ -316,6 +320,29 @@ def grounded_answer_contract_errors(value: Dict[str, Any]) -> list[str]:
         if isinstance(item, dict) and not isinstance(item.get("claim_ids"), list):
             errors.append("each contradiction must contain claim_ids")
     return errors
+
+
+def _corrective_document_evidence_haystack(state: Mapping[str, Any]) -> str:
+    return attached_document_evidence_haystack(state)
+
+
+def synthesized_answer_grounded_in_corrective_evidence(state: Mapping[str, Any], answer: str) -> bool:
+    """True when a short synthesizer answer is substantively supported by graded evidence."""
+
+    prose = str(answer or "").strip()
+    if not prose or prose == DOCUMENT_SCOPE_DECLINE_ANSWER:
+        return False
+    text = _corrective_document_evidence_haystack(state).casefold()
+    if not text.strip():
+        return False
+    candidate = prose.casefold()
+    if candidate in text:
+        return True
+    if len(prose) <= 280:
+        tokens = [token for token in re.findall(r"[a-z0-9]+", candidate) if len(token) > 2]
+        if tokens and sum(1 for token in tokens if token in text) / len(tokens) >= 0.55:
+            return True
+    return False
 
 
 def normalize_grounding_report(parsed: Mapping[str, Any], state: Mapping[str, Any]) -> Dict[str, Any]:
@@ -414,6 +441,10 @@ def grounded_route_for_report(report: Mapping[str, Any], state: Mapping[str, Any
         return GroundedAnswerRoute.FINALIZE_CAUTIOUS.value, "low_usefulness"
     if report.get("verified_claims") and revision_count < policy["max_answer_revisions"]:
         return GroundedAnswerRoute.REVISE.value, ""
+    if synthesized_answer_grounded_in_corrective_evidence(state, str(state.get("final_answer") or "")):
+        return GroundedAnswerRoute.PASS.value, ""
+    if explicit_corrective_document_fact_fallback(state):
+        return GroundedAnswerRoute.PASS.value, ""
     correction_route, reason = corrective_route_for_report({"verdict": "ambiguous"}, state)
     if correction_route == CorrectiveRetrievalRoute.CORRECT.value and (report.get("unresolved_gaps") or not report.get("verified_claims")):
         return GroundedAnswerRoute.CORRECT.value, ""

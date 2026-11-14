@@ -12,7 +12,10 @@ from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphBubbleUp
 
-from langgraph_runtime.agent.canvas_layout_skills import canvas_emit_enabled
+from langgraph_runtime.agent.canvas_layout_skills import (
+    canvas_emit_enabled,
+    canvas_publish_synthesis_enabled,
+)
 from langgraph_runtime.canvas_draft_contract import CANVAS_PUBLISH_DRAFT_HINT
 from langgraph_runtime.agent.reasoning import normalize_ai_response
 from langgraph_runtime.agent.tool_contract import normalize_tool_result
@@ -205,7 +208,7 @@ async def synthesize_with_canvas_publish(
 
     conversation = list(messages)
     retry_attempts, retry_observer = llm_retry_observer()
-    emit_enabled = canvas_emit_enabled(state.get("allowed_tool_ids")) and hasattr(llm, "bind_tools")
+    emit_enabled = canvas_publish_synthesis_enabled(state) and hasattr(llm, "bind_tools")
     published = False
     failed_attempts = 0
     publish_calls = 0

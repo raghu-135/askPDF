@@ -254,6 +254,7 @@ services:
       - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
       - OPENAI_BASE_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ASKPDF_OPENROUTER_USAGE_ACCOUNTING=${ASKPDF_OPENROUTER_USAGE_ACCOUNTING:-1}
     env_file: []
     entrypoint:
       - /bin/sh
@@ -308,6 +309,7 @@ services:
       - HERMES_PROFILE_GID=${HERMES_PROFILE_GID:?HERMES_PROFILE_GID must be set in .env}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
+      - ASKPDF_OPENROUTER_USAGE_ACCOUNTING=${ASKPDF_OPENROUTER_USAGE_ACCOUNTING:-1}
       - MCP_TRANSPORT=loopback_http
       - MCP_LOOPBACK_URL=http://rag-service:8000/internal/mcp/
       - MCP_REQUEST_TIMEOUT_SECONDS=${MCP_REQUEST_TIMEOUT_SECONDS:?MCP_REQUEST_TIMEOUT_SECONDS must be set in .env}

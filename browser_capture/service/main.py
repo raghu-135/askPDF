@@ -27,6 +27,16 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Browser Capture Service - Direct CDP")
 
+
+class NoCapturableBrowserTab(Exception):
+    """Browser CDP is reachable but no http(s) tab is available to capture."""
+
+
+NO_HTTP_TAB_MESSAGE = (
+    "Browser capture did not find a capturable http(s) page. "
+    "Open a normal web page in Brave before capturing."
+)
+
 # Thread pool for CPU-bound operations (WeasyPrint)
 _thread_pool = ThreadPoolExecutor(max_workers=4)
 
@@ -122,10 +132,10 @@ async def get_active_tab_via_cdp():
                 logger.info(f"Fallback to tab: {url} - {tab.get('title')}")
                 return tab
         
-        raise Exception(
-            "No capturable browser tab found. Open an http(s) page in Brave before capturing."
-        )
-        
+        raise NoCapturableBrowserTab(NO_HTTP_TAB_MESSAGE)
+
+    except NoCapturableBrowserTab:
+        raise
     except Exception as e:
         logger.error(f"Failed to get active tab: {e}")
         raise
@@ -505,8 +515,16 @@ async def capture_page():
     try:
         logger.info(f"Connecting to browser at {BROWSER_DEBUG_URL}")
         
-        # Get active tab
-        active_tab = await get_active_tab_via_cdp()
+        try:
+            active_tab = await get_active_tab_via_cdp()
+        except NoCapturableBrowserTab as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "browser_capture_no_http_tab",
+                    "message": str(exc),
+                },
+            ) from exc
         websocket_url = active_tab.get('webSocketDebuggerUrl')
         logger.info(f"WebSocket URL: {websocket_url}")
         
