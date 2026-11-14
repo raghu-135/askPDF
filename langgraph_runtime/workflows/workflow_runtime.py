@@ -38,6 +38,8 @@ ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "parallel_policy",
     "corrective_policy",
     "task_policy",
+    "auto_policy",
+    "available_delegate_workflows",
 }
 
 

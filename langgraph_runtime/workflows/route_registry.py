@@ -146,7 +146,11 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         "route_labels": [route.value for route in AutoOrchestratorRoute],
         "target_types_by_label": {
             AutoOrchestratorRoute.DELEGATE.value: [WorkflowNodeType.WORKFLOW_DELEGATE.value],
-            AutoOrchestratorRoute.PLAN_APPROVAL.value: [WorkflowNodeType.HITL_GATE.value],
+            AutoOrchestratorRoute.PLAN_APPROVAL.value: [
+                WorkflowNodeType.HITL_GATE.value,
+                WorkflowNodeType.WORKFLOW_DELEGATE.value,
+                WorkflowNodeType.FINALIZER.value,
+            ],
             AutoOrchestratorRoute.DECLINE.value: [WorkflowNodeType.FINALIZER.value],
         },
     },

@@ -24,19 +24,7 @@
       }
     },
     "config": {
-      "allowed_tool_ids": [
-        "thread_shape",
-        "wikipedia_reference",
-        "document_search_knowledge",
-        "document_inspection",
-        "document_context",
-        "thread_conversation_history",
-        "durable_memory",
-        "thread_events",
-        "live_web_recon",
-        "clarify_intent",
-        "research_canvas_publish"
-      ],
+      "allowed_tool_ids": ["thread_shape"],
       "context_policy": {
         "evidence_compression": "compact",
         "evidence_dedupe": true,
