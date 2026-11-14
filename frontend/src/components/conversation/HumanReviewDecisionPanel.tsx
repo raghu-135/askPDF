@@ -81,60 +81,83 @@ export function HumanReviewDecisionPanel({
     return onAction(action, options);
   };
 
+  const actionButtons = (
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+      {actions.has(ResumeAction.Approve) && <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>{submitting === ResumeAction.Approve ? 'Approving...' : isToolApproval ? 'Approve once' : 'Approve'}</Button>}
+      {actions.has(ResumeAction.ApproveForScope) && <Button size="small" variant="contained" color="secondary" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ApproveForScope)}>{submitting === ResumeAction.ApproveForScope ? 'Approving...' : `Approve for this ${approvalScopeKind}`}</Button>}
+      {actions.has(ResumeAction.ApproveSelected) && <Button size="small" variant="contained" disabled={disabled || Boolean(submitting) || selectedIds.length === 0} onClick={() => void submit(ResumeAction.ApproveSelected)}>{submitting === ResumeAction.ApproveSelected ? 'Approving...' : 'Approve selected'}</Button>}
+      {actions.has(ResumeAction.Edit) && <Button size="small" variant="contained" color="secondary" startIcon={<EditIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting) || (editingScope ? selectedIds.length === 0 : !editText.trim())} onClick={() => void submit(ResumeAction.Edit)}>{submitting === ResumeAction.Edit ? 'Saving...' : editingScope ? 'Approve selected scope' : 'Save edit'}</Button>}
+      {actions.has(ResumeAction.ContinueWithout) && <Button size="small" variant="outlined" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>{submitting === ResumeAction.ContinueWithout ? 'Continuing...' : isToolApproval ? `Skip this tool for this ${approvalScopeKind}` : 'Continue'}</Button>}
+      {actions.has(ResumeAction.Reject) && <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>{submitting === ResumeAction.Reject ? 'Rejecting...' : 'Reject'}</Button>}
+    </Box>
+  );
+
+  const stickyFooterLayout = isToolApproval;
+
   return (
     <ResizableDecisionPanel
       title={interrupt.title || (interrupt.proposed_tool ? 'Approve tool use?' : 'Human review required')}
       variant="approval"
       rootRef={rootRef}
       horizontalInset={1}
+      fillColumn={stickyFooterLayout}
+      defaultRatio={stickyFooterLayout ? 0.42 : 0.3}
+      narrowDefaultRatio={stickyFooterLayout ? 0.46 : 0.32}
+      showResizeHandle={!stickyFooterLayout}
+      footer={stickyFooterLayout ? (
+        <>
+          {actionButtons}
+          {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
+          {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
+        </>
+      ) : undefined}
     >
-      {(interrupt.prompt || interrupt.body) && (
-        <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {interrupt.prompt || interrupt.body}
-        </Typography>
-      )}
-      {isToolApproval && proposedTool?.arguments && (
-        <Box component="pre" sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem', maxHeight: 200, overflow: 'auto' }}>
-          {JSON.stringify(proposedTool.arguments, null, 2)}
-        </Box>
-      )}
-      {selectableOptions.length > 0 && (actions.has(ResumeAction.ApproveSelected) || editingScope) && (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-          {editingScope && <Typography variant="caption" color="text.secondary">Select the approved research scope.</Typography>}
-          {selectableOptions.map((option) => (
-            <FormControlLabel
-              key={option.id}
-              sx={{ m: 0, alignItems: 'flex-start' }}
-              control={<Checkbox size="small" checked={selectedIds.includes(option.id)} onChange={() => toggleOption(option.id)} disabled={disabled || Boolean(submitting)} />}
-              label={<Box><Typography variant="caption">{option.label}</Typography>{option.description && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{option.description}</Typography>}</Box>}
-            />
-          ))}
-        </Box>
-      )}
-      {interrupt.proposed_final_answer && (
-        <TextField
-          fullWidth
-          size="small"
-          multiline
-          minRows={5}
-          maxRows={12}
-          label={actions.has(ResumeAction.Edit) ? 'Final answer draft' : 'Proposed final answer'}
-          value={editText}
-          disabled={disabled || !actions.has(ResumeAction.Edit) || Boolean(submitting)}
-          onChange={(event) => onEditTextChange?.(event.target.value)}
-          sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'action.hover' } }}
-        />
-      )}
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-        {actions.has(ResumeAction.Approve) && <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>{submitting === ResumeAction.Approve ? 'Approving...' : isToolApproval ? 'Approve once' : 'Approve'}</Button>}
-        {actions.has(ResumeAction.ApproveForScope) && <Button size="small" variant="contained" color="secondary" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ApproveForScope)}>{submitting === ResumeAction.ApproveForScope ? 'Approving...' : `Approve for this ${approvalScopeKind}`}</Button>}
-        {actions.has(ResumeAction.ApproveSelected) && <Button size="small" variant="contained" disabled={disabled || Boolean(submitting) || selectedIds.length === 0} onClick={() => void submit(ResumeAction.ApproveSelected)}>{submitting === ResumeAction.ApproveSelected ? 'Approving...' : 'Approve selected'}</Button>}
-        {actions.has(ResumeAction.Edit) && <Button size="small" variant="contained" color="secondary" startIcon={<EditIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting) || (editingScope ? selectedIds.length === 0 : !editText.trim())} onClick={() => void submit(ResumeAction.Edit)}>{submitting === ResumeAction.Edit ? 'Saving...' : editingScope ? 'Approve selected scope' : 'Save edit'}</Button>}
-        {actions.has(ResumeAction.ContinueWithout) && <Button size="small" variant="outlined" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>{submitting === ResumeAction.ContinueWithout ? 'Continuing...' : isToolApproval ? `Skip this tool for this ${approvalScopeKind}` : 'Continue'}</Button>}
-        {actions.has(ResumeAction.Reject) && <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>{submitting === ResumeAction.Reject ? 'Rejecting...' : 'Reject'}</Button>}
+      <Box data-testid="chat-human-review-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minWidth: 0 }}>
+        {(interrupt.prompt || interrupt.body) && (
+          <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {interrupt.prompt || interrupt.body}
+          </Typography>
+        )}
+        {isToolApproval && proposedTool?.arguments && (
+          <Box component="pre" sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem', maxHeight: 200, overflow: 'auto' }}>
+            {JSON.stringify(proposedTool.arguments, null, 2)}
+          </Box>
+        )}
+        {selectableOptions.length > 0 && (actions.has(ResumeAction.ApproveSelected) || editingScope) && (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+            {editingScope && <Typography variant="caption" color="text.secondary">Select the approved research scope.</Typography>}
+            {selectableOptions.map((option) => (
+              <FormControlLabel
+                key={option.id}
+                sx={{ m: 0, alignItems: 'flex-start' }}
+                control={<Checkbox size="small" checked={selectedIds.includes(option.id)} onChange={() => toggleOption(option.id)} disabled={disabled || Boolean(submitting)} />}
+                label={<Box><Typography variant="caption">{option.label}</Typography>{option.description && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{option.description}</Typography>}</Box>}
+              />
+            ))}
+          </Box>
+        )}
+        {interrupt.proposed_final_answer && (
+          <TextField
+            fullWidth
+            size="small"
+            multiline
+            minRows={5}
+            maxRows={12}
+            label={actions.has(ResumeAction.Edit) ? 'Final answer draft' : 'Proposed final answer'}
+            value={editText}
+            disabled={disabled || !actions.has(ResumeAction.Edit) || Boolean(submitting)}
+            onChange={(event) => onEditTextChange?.(event.target.value)}
+            sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'action.hover' } }}
+          />
+        )}
+        {!stickyFooterLayout ? (
+          <>
+            {actionButtons}
+            {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
+            {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
+          </>
+        ) : null}
       </Box>
-      {disabled && disabledReason && <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography>}
-      {error && <Typography variant="caption" color="error">{error}</Typography>}
     </ResizableDecisionPanel>
   );
 }

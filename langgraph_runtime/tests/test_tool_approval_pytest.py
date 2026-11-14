@@ -15,6 +15,58 @@ class State(TypedDict, total=False):
 
 
 @pytest.mark.asyncio
+async def test_approve_once_resumes_when_langgraph_step_changes_on_replay(monkeypatch):
+    """Approve-once must match the same invocation after checkpoint replay."""
+    decisions: dict[str, bool] = {}
+    executed: list[str] = []
+    call_steps: list[int | None] = []
+
+    async def transport(name, arguments, config):
+        invocation_id = arguments["_askpdf_invocation_id"]
+        metadata = dict((config or {}).get("metadata") or {})
+        call_steps.append(metadata.get("langgraph_step"))
+        if not decisions.get(invocation_id):
+            request = tool_approval_request(
+                name,
+                {"query": arguments["query"]},
+                policy=ToolApprovalPolicy(ApprovalMode.ASK),
+                caller="research",
+                response_operation="run.resume",
+            )
+            request["proposed_tool"]["invocation_id"] = invocation_id
+            return json.dumps({"artifacts": {"approval_request": request}})
+        executed.append(arguments["query"])
+        return json.dumps({"content": "evidence", "artifacts": {}})
+
+    monkeypatch.setattr(mcp_client, "_call_transport", transport)
+
+    async def research(state, config):
+        metadata = dict((config or {}).get("metadata") or {})
+        if state.get("_replayed"):
+            metadata["langgraph_step"] = int(metadata.get("langgraph_step") or 0) + 1
+        config = {**config, "metadata": metadata}
+        payload = await mcp_client._call("search_web", {"query": "USD EUR rate"}, config)
+        return {"result": payload, "_replayed": True}
+
+    graph = StateGraph(State)
+    graph.add_node("research", research)
+    graph.add_edge(START, "research")
+    graph.add_edge("research", END)
+    app = graph.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "approve-once-step", "agent_run_id": "run-once"}}
+    paused = await app.ainvoke({}, config)
+    assert paused["__interrupt__"]
+    assert not executed
+    pending = paused["__interrupt__"][0].value
+    invocation_id = pending["proposed_tool"]["invocation_id"]
+    decisions[invocation_id] = True
+    completed = await app.ainvoke(Command(resume={"action": "approve"}), config)
+    assert "__interrupt__" not in completed
+    assert executed == ["USD EUR rate"]
+    assert len(set(call_steps)) >= 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("approved", [True, False])
 async def test_mcp_tool_approval_resumes_exact_invocation(monkeypatch, approved):
     calls = []
