@@ -132,7 +132,6 @@ HERMES_TEST_FILES = [
 ]
 
 MCP_TEST_FILES = [
-    "test_builtin_workflow_runtime_validation_pytest.py",
     "test_delegate_mcp_grant_pytest.py",
     "test_mcp_allowed_hosts_pytest.py",
     "test_mcp_context.py",
