@@ -43,6 +43,9 @@ export const REVIEW_PANEL_MIN_TRANSCRIPT_RATIO = 0.12;
 /** Minimum stacked workbench chat slice while reviewing (under documents). */
 export const REVIEW_STACKED_WORKBENCH_BOTTOM_RATIO = 0.58;
 
+/** After review ends, keep a usable chat slice on stacked layouts without holding the review boost. */
+export const STACKED_CHAT_COMFORT_BOTTOM_RATIO = 0.5;
+
 export const DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT = 'askpdf-workbench-review-boost';
 
 /** Match workbench auto placement: below this width the chat column stacks under documents. */

@@ -58,6 +58,7 @@ import { ProcessStatus, ThreadFileSourceType } from "../lib/enums";
 import { normalizeWorkbenchLayout, type ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 import {
   DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
+  STACKED_CHAT_COMFORT_BOTTOM_RATIO,
   REVIEW_STACKED_WORKBENCH_BOTTOM_RATIO,
 } from '../lib/deep-research-review-panel-layout';
 import { checkEmbeddingModelReady } from '../lib/models-api';
@@ -143,7 +144,7 @@ export default function Home() {
         reviewBoostedBottomRatioRef.current = null;
         setWorkbenchLayout((previous) => normalizeWorkbenchLayout({
           ...previous,
-          bottomRatio: restored,
+          bottomRatio: Math.max(restored, STACKED_CHAT_COMFORT_BOTTOM_RATIO),
         }));
       }
     };

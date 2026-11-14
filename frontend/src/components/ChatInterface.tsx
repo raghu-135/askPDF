@@ -2890,6 +2890,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 flex: '0 0 auto',
                 maxHeight: reviewTranscriptMaxHeight,
                 minHeight: 0,
+            } : stackedWorkbench ? {
+                flex: '1 1 auto',
+                minHeight: 'min(40vh, 280px)',
             } : undefined}
             decisionSx={chatHumanReviewOpen ? {
                 flex: '1 1 0',
