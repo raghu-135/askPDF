@@ -186,21 +186,27 @@ async def run_tool_worker(
         label=spec.evidence_label,
         limit=evidence_text_limit(state),
     )
-    evidence_packets = (
-        append_corrective_evidence_packets(
+    segments = artifacts.get("evidence_segments")
+    if isinstance(segments, list) and segments:
+        evidence_packets = append_corrective_evidence_packets(
             state,
             config,
-            segments=artifacts.get("evidence_segments"),
+            segments=segments,
         )
-        if state.get("workflow_id") in {CORRECTIVE_WORKFLOW_ID, PARALLEL_REFERENCE_WORKFLOW_ID}
-        else append_evidence_packet(
+    elif state.get("workflow_id") in {CORRECTIVE_WORKFLOW_ID, PARALLEL_REFERENCE_WORKFLOW_ID}:
+        evidence_packets = append_corrective_evidence_packets(
+            state,
+            config,
+            segments=segments,
+        )
+    else:
+        evidence_packets = append_evidence_packet(
             state,
             config,
             kind=spec.evidence_kind,
             content=payload.get("content", ""),
             refs=refs_from_artifacts(artifacts),
         )
-    )
 
     update = spec.state_update(state, payload, artifacts, evidence, evidence_packets) if spec.state_update else {}
     output_state = {**state, **update, "evidence": evidence, "evidence_packets": evidence_packets}
@@ -214,6 +220,14 @@ async def run_tool_worker(
         },
         "evidence_chars": len(str(evidence or "")),
         "evidence_packet_count": len(evidence_packets),
+        "evidence_packet_scores": [
+            {
+                "id": packet.get("id"),
+                "raw_retriever_score": packet.get("raw_retriever_score"),
+            }
+            for packet in evidence_packets
+            if isinstance(packet, dict) and packet.get("raw_retriever_score") is not None
+        ],
     }
     if "document_sources" in update:
         data["document_source_count"] = len(update["document_sources"])

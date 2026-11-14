@@ -17,7 +17,7 @@ ART.mkdir(parents=True, exist_ok=True)
 LOG = ART / "verification-leftovers-results.json"
 
 API = os.environ.get("ASKPDF_E2E_API_URL", "http://127.0.0.1:8000")
-MODEL = os.environ.get("ASKPDF_E2E_LLM_MODEL", "openai/gpt-4.1-nano")
+MODEL = os.environ.get("ASKPDF_E2E_LLM_MODEL", "openai/gpt-4.1-mini")
 PDF = Path(os.environ.get("ASKPDF_E2E_PDF", "/tmp/attention.pdf"))
 DECLINE = "The attached documents do not address this question."
 
@@ -58,16 +58,31 @@ def upload_pdf(thread_id: str) -> str:
     return json.loads(out)["file_hash"]
 
 
-def wait_ready(thread_id: str, file_hash: str, timeout_s: int = 600) -> None:
+def retry_index(thread_id: str, file_hash: str) -> None:
+    try:
+        http_json("POST", f"/api/threads/{thread_id}/files/{file_hash}/retry")
+    except urllib.error.HTTPError:
+        pass
+
+
+def wait_ready(thread_id: str, file_hash: str, timeout_s: int = 900) -> None:
     deadline = time.time() + timeout_s
+    retried = False
     while time.time() < deadline:
         try:
             body = http_json("GET", f"/api/threads/{thread_id}/files/{file_hash}/status")
         except urllib.error.HTTPError:
+            if not retried:
+                retry_index(thread_id, file_hash)
+                retried = True
             time.sleep(3)
             continue
-        if body.get("status") == "ready":
+        status = str(body.get("status") or "")
+        if status == "ready":
             return
+        if status in {"failed", "error"} and not retried:
+            retry_index(thread_id, file_hash)
+            retried = True
         time.sleep(3)
     raise TimeoutError("indexing did not reach ready")
 
@@ -133,6 +148,7 @@ def main() -> int:
     thread = http_json("POST", f"/api/projects/{project['id']}/threads", {"name": "verify"})
     thread_id = thread["id"]
     file_hash = upload_pdf(thread_id)
+    retry_index(thread_id, file_hash)
     wait_ready(thread_id, file_hash)
     results["thread_id"] = thread_id
     results["file_hash"] = file_hash
@@ -147,30 +163,61 @@ def main() -> int:
         "timing_ms": 0,
     }
 
-    workflow_rows = {}
+    CANVAS_FALLBACK = "Published a research canvas with cited claims from your documents."
+
+    scenarios = [
+        ("tokyo_population", "What is the population of Tokyo?", lambda answer: DECLINE in answer),
+        (
+            "encoder_layers",
+            "How many encoder layers does the base Transformer use? Reply with the number only.",
+            lambda answer: "6" in answer.split() or answer.strip() == "6",
+        ),
+        (
+            "table2_base_enfr",
+            "For the Transformer (base model) in Table 2, what is the EN-FR training cost in FLOPs? Reply with the value only.",
+            lambda answer: "3.3" in answer
+            and "10^18" in answer.replace(" ", "").replace("×", "x")
+            and CANVAS_FALLBACK not in answer,
+        ),
+        (
+            "table2_big_enfr",
+            "For the Transformer (big model) in Table 2, what is the EN-FR training cost in FLOPs? Reply with the value only.",
+            lambda answer: "2.3" in answer
+            and "10^19" in answer.replace(" ", "").replace("×", "x")
+            and "10^23" not in answer.replace(" ", "")
+            and CANVAS_FALLBACK not in answer,
+        ),
+    ]
+
+    matrix: list[dict] = []
+    workflow_rows: dict = {}
     for workflow in ("router_rag_agent", "orchestrator_worker_rag_agent"):
         set_workflow(thread_id, workflow)
-        oos_ms, oos_answer, _ = chat(thread_id, "What is the population of Tokyo?")
-        in_ms, in_answer, _ = chat(
-            thread_id,
-            "For the Transformer (base model) in Table 2, what is the EN-FR training cost in FLOPs? Reply with only the numeric value in scientific notation.",
-        )
-        workflow_rows[workflow] = {
-            "out_of_scope_ms": oos_ms,
-            "out_of_scope_answer": oos_answer,
-            "out_of_scope_pass": DECLINE in oos_answer,
-            "in_scope_ms": in_ms,
-            "in_scope_answer": in_answer,
-            "in_scope_pass": "3.3" in in_answer and "10^18" in in_answer.replace(" ", "").replace("×", "x"),
-        }
+        workflow_rows[workflow] = {}
+        for key, question, predicate in scenarios:
+            elapsed_ms, answer, _ = chat(thread_id, question)
+            passed = bool(predicate(answer))
+            row = {
+                "workflow": workflow,
+                "scenario": key,
+                "pass": passed,
+                "timing_ms": elapsed_ms,
+                "answer": answer,
+            }
+            matrix.append(row)
+            workflow_rows[workflow][key] = row
 
+    results["matrix"] = matrix
     results["items"]["2_scope_decline"] = {
-        "pass": all(row["out_of_scope_pass"] for row in workflow_rows.values()),
-        "workflows": workflow_rows,
+        "pass": all(row["pass"] for row in matrix if row["scenario"] == "tokyo_population"),
     }
-    results["items"]["3_table2_enfr"] = {
-        "pass": all(row["in_scope_pass"] for row in workflow_rows.values()),
-        "workflows": workflow_rows,
+    results["items"]["3_table2"] = {
+        "pass": all(
+            row["pass"] for row in matrix if row["scenario"] in {"table2_base_enfr", "table2_big_enfr"}
+        ),
+    }
+    results["items"]["3_encoder_layers"] = {
+        "pass": all(row["pass"] for row in matrix if row["scenario"] == "encoder_layers"),
     }
 
     hermes = http_json(

@@ -54,7 +54,11 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
     started = time.perf_counter()
     document_scope_declined = False
     decline = None
-    if node_name in {WorkflowNodeType.SYNTHESIZER.value, WorkflowNodeType.DIRECT_ANSWER.value}:
+    if node_name in {
+        WorkflowNodeType.SYNTHESIZER.value,
+        WorkflowNodeType.DIRECT_ANSWER.value,
+        WorkflowNodeType.ANSWER_REVISER.value,
+    }:
         decline = document_scope_decline(state)
         if decline:
             document_scope_declined = True

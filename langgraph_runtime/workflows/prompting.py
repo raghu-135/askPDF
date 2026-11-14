@@ -306,6 +306,14 @@ def build_final_answer_messages(state: Dict[str, Any], context: str) -> Dict[str
             "Every material factual claim must cite one or more exact canonical source ids shown beside its evidence. "
             "Never cite an id that is not attached to the supporting passage."
         )
+    from langgraph_runtime.workflows.document_scope import thread_has_attached_documents
+
+    if thread_has_attached_documents(state):
+        messages["system"] += (
+            "\n\nNumeric rule: copy numeric values exactly as they appear in the cited evidence "
+            "(same mantissa and exponent wording). Do not rescale, round differently, or change "
+            "scientific-notation style (for example do not turn `3.3 x 10^18` into `3.3e+23`)."
+        )
     return messages
 
 

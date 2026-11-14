@@ -32,6 +32,7 @@ UNIT_TEST_FILES = [
     "test_fill_env_secrets_pytest.py",
     "test_document_repair.py",
     "test_document_conversion_worker.py",
+    "test_attention_table2_training_cost_pytest.py",
     "test_agent_course_correction_reconciliation_pytest.py",
     "test_agent_grounding_evaluator_pytest.py",
     "test_agent_prompt_behavior.py",
