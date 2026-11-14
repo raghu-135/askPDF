@@ -269,7 +269,11 @@ def _result_from_graph(
             "budget_usage": _public_value(dict(result.get("task_budget_usage") or {})),
             "artifacts": [_public_value(dict(value)) for value in result.get("runtime_artifacts") or [] if isinstance(value, Mapping)],
             "pending_interrupt": (
-                {"operation": "set", "value": dict(public_interruption)}
+                {"operation": "set", "value": {
+                    **dict(public_interruption),
+                    "gaps": list(gaps),
+                    "warnings": [dict(value) for value in warnings if isinstance(value, Mapping)],
+                }}
                 if isinstance(public_interruption, Mapping)
                 else {"operation": "clear"}
             ),

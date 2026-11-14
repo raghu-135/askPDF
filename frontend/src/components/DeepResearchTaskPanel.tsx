@@ -879,7 +879,7 @@ export default function DeepResearchTaskPanel({
           isBudgetReview={isBudgetReview}
           todoTitles={reviewTodoTitles}
         />
-        <Box data-testid="review-limitations-scroller" sx={{ flexShrink: 0, minWidth: 0, pr: 0.25, overflow: 'hidden' }}>
+        <Box data-testid="review-limitations-scroller" sx={{ flexShrink: 0, minWidth: 0, minHeight: 0, pr: 0.25, overflow: 'hidden' }}>
           <DeepResearchIssueList pending={pendingInterrupt} todoTitles={reviewTodoTitles} defaultExpanded />
         </Box>
         <DeepResearchProvisionalAnswer
