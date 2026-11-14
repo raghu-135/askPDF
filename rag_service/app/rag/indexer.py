@@ -11,6 +11,7 @@ import os
 import json
 import logging
 import asyncio
+import time
 from collections import Counter
 from typing import Dict, Any, List, Optional, Tuple
 from app.db import (
@@ -32,9 +33,13 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.models.llm_server_client import (
-    get_embedding_model, get_llm, 
-    DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
-    RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
+    get_embedding_model,
+    get_llm,
+    should_use_local_embeddings,
+    DEFAULT_TOKEN_BUDGET,
+    RATIO_MEMORY_SUMMARIZATION_THRESHOLD,
+    RATIO_MEMORY_HARD_LIMIT,
+    CHARS_PER_TOKEN,
 )
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
@@ -51,6 +56,16 @@ from app.services.embedding_tokenizer import resolve_embedding_tokenizer
 logger = logging.getLogger(__name__)
 
 _document_index_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _log_index_stage_duration(stage: str, file_hash: str, started: float, detail: str = "") -> None:
+    logger.info(
+        "Document index stage %s for %s: %.2fs%s",
+        stage,
+        file_hash,
+        time.perf_counter() - started,
+        f" {detail}" if detail else "",
+    )
 
 
 class DocumentVersionChangedError(RuntimeError):
@@ -584,35 +599,42 @@ async def generate_embeddings(chunks: List[str], embedding_model: str, formatter
     Uses asyncio.to_thread to prevent blocking the FastAPI event loop.
     """
     from app.models.retry import invoke_with_retry
+
+    if not chunks:
+        return []
+
     embedding_client = get_embedding_model(embedding_model)
     formatted_chunks = [formatter(chunk) for chunk in chunks] if formatter is not None else chunks
+
+    # Local SentenceTransformer models are not thread-safe under concurrent
+    # encode calls; a single encode pass batches internally and is much faster
+    # than overlapping CPU inference from parallel asyncio tasks.
+    if should_use_local_embeddings(embedding_model):
+        return await invoke_with_retry(embedding_client.aembed_documents, formatted_chunks)
+
     batch_size = 100  # LLM API/server strict batch size limits
-    vectors = []
-    
-    # Process batches with concurrency control to prevent blocking
-    semaphore = asyncio.Semaphore(3)  # Limit concurrent embedding calls
-    tasks = []
-    
+    vectors: List[List[float]] = []
+
+    # Process remote batches with limited concurrency to avoid provider throttling.
+    semaphore = asyncio.Semaphore(3)
+    tasks: list[asyncio.Task] = []
+
     async def process_batch(start_idx: int) -> List[List[float]]:
         async with semaphore:
-            batch = formatted_chunks[start_idx:start_idx + batch_size]
+            batch = formatted_chunks[start_idx : start_idx + batch_size]
             return await invoke_with_retry(embedding_client.aembed_documents, batch)
-    
-    # Create tasks for each batch
+
     for i in range(0, len(chunks), batch_size):
-        task = asyncio.create_task(process_batch(i))
-        tasks.append(task)
-    
-    # Wait for all batches to complete
+        tasks.append(asyncio.create_task(process_batch(i)))
+
     batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Flatten results and handle any exceptions
+
     for i, result in enumerate(batch_results):
         if isinstance(result, Exception):
-            logger.error(f"Embedding batch {i} failed: {result}")
+            logger.error("Embedding batch %d failed: %s", i, result)
             raise result
         vectors.extend(result)
-    
+
     return vectors
 
 
@@ -680,11 +702,18 @@ async def index_document_for_thread(
             retrieval_projection: list[dict[str, Any]] = []
             if not markdown_content:
                 file_record = await get_file(file_hash)
+                projection_started = time.perf_counter()
                 retrieval_manifest, retrieval_projection, projection_metadata = await ensure_retrieval_projection(
                     file_hash=file_hash,
                     embedding_model=embedding_model,
                     file_name=file_record.file_name if file_record else None,
                     source_metadata=metadata,
+                )
+                _log_index_stage_duration(
+                    "projection",
+                    file_hash,
+                    projection_started,
+                    detail=f"({len(retrieval_projection)} chunks)",
                 )
                 metadata.update(projection_metadata)
                 if expected_source_version and str(projection_metadata.get("source_version")) != str(expected_source_version):
@@ -832,7 +861,14 @@ async def index_document_for_thread(
             logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
 
             # 2. Generate embeddings
+            embed_started = time.perf_counter()
             vectors = await generate_embeddings(chunks, embedding_model, formatter=document_formatter)
+            _log_index_stage_duration(
+                "embedding",
+                file_hash,
+                embed_started,
+                detail=f"({len(chunks)} chunks, model={embedding_model})",
+            )
 
             # 3. Prepare metadata for each chunk
             chunk_metadatas = []
@@ -895,6 +931,7 @@ async def index_document_for_thread(
                     vector_count=0,
                 )
             
+            vector_write_started = time.perf_counter()
             indexed_count = await db_client.index_pdf_chunks(
                 thread_id=thread_id,
                 embedding_model=embedding_model,
@@ -903,6 +940,12 @@ async def index_document_for_thread(
                 embeddings=vectors,
                 metadatas=chunk_metadatas,
                 chunk_ids=[str(item.get("chunk_id")) for item in retrieval_projection] if retrieval_projection else None,
+            )
+            _log_index_stage_duration(
+                "weaviate",
+                file_hash,
+                vector_write_started,
+                detail=f"({indexed_count} objects)",
             )
 
             if retrieval_manifest is not None:
