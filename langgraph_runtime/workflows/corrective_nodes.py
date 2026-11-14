@@ -228,6 +228,7 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         return None
     if not thread_has_attached_documents(state):
         return None
+    doc_packets = _document_evidence_packets(state)
     score_decline = post_retrieval_attachment_decline(state)
     if score_decline:
         return score_decline
