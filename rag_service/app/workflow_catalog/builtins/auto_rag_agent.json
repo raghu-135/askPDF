@@ -24,7 +24,13 @@
       }
     },
     "config": {
-      "allowed_tool_ids": ["thread_shape"],
+      "allowed_tool_ids": [
+        "thread_shape",
+        "document_search_knowledge",
+        "thread_conversation_history",
+        "durable_memory",
+        "live_web_recon"
+      ],
       "context_policy": {
         "evidence_compression": "compact",
         "evidence_dedupe": true,

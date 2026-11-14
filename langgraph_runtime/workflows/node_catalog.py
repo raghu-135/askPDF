@@ -141,13 +141,21 @@ SPAN_HUMAN_REVIEW = TraceSpanKind.HUMAN_REVIEW.value
 RAW_PAYLOAD_BOUNDED = TracePayloadMode.BOUNDED.value
 
 
+CONTEXT_LOADER_PREFETCH_TOOL_CONTRACT_IDS = [
+    TOOL_THREAD_SHAPE,
+    TOOL_DOCUMENT_SEARCH_KNOWLEDGE,
+    TOOL_THREAD_CONVERSATION_HISTORY,
+    TOOL_DURABLE_MEMORY,
+    TOOL_LIVE_WEB_RECON,
+]
+
 NODE_CATALOG: Dict[str, Dict[str, Any]] = {
     NODE_CONTEXT_LOADER: {
         "display_name": "Context Loader",
         "category": CAT_CONTEXT,
         "capabilities": [CAP_CONTEXT_PREFETCH],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": [TOOL_THREAD_SHAPE],
+        "allowed_tool_contract_ids": list(CONTEXT_LOADER_PREFETCH_TOOL_CONTRACT_IDS),
         "allowed_parent_types": [START_NODE],
         "allowed_child_types": [
             NODE_ROUTER,

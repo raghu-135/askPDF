@@ -876,7 +876,6 @@ class AgentRunService:
                 "system_role_override": system_role,
                 "custom_instructions_override": custom_instructions,
                 "tool_instructions_override": tool_instructions or {},
-                "mcp_execution_context_token": mcp_execution_context_token,
             },
         )
         runtime_context = RuntimeInvocationContext(
