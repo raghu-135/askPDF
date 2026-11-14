@@ -4,6 +4,7 @@
  * Usage: node scripts/cloud-agent-deep-research-e2e.mjs [--hermes-retry]
  */
 import { createRequire } from 'node:module';
+import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +104,26 @@ await json('POST', `${API}/api/agent-tasks/${taskId}/commands/start?thread_id=${
   'Idempotency-Key': `start-${taskId}`,
 });
 
-let task = await pollTask(taskId, thread);
+let task;
+if (hermesRetry && process.env.ASKPDF_E2E_INDUCE_HERMES_FAILURE !== '0') {
+  const compose = (file) => path.join(repoRoot, file);
+  execSync([
+    'docker', 'compose',
+    '-f', compose('docker-compose.yml'),
+    '-f', compose('docker-compose.vm-hostgateway.override.yml'),
+    'stop', 'hermes', 'hermes-runtime',
+  ].join(' '), { cwd: repoRoot, stdio: 'ignore' });
+  task = await pollTask(taskId, thread, { timeoutMs: 120_000 });
+  execSync([
+    'docker', 'compose',
+    '-f', compose('docker-compose.yml'),
+    '-f', compose('docker-compose.vm-hostgateway.override.yml'),
+    'start', 'hermes', 'hermes-runtime',
+  ].join(' '), { cwd: repoRoot, stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 12_000));
+} else {
+  task = await pollTask(taskId, thread);
+}
 const result = {
   task_id: taskId,
   thread_id: thread,
@@ -115,12 +135,18 @@ const result = {
   screenshot: await screenshot(hermesRetry ? 'hermes-flow' : 'deep-research-flow'),
 };
 
-if (hermesRetry && task.status === 'failed') {
-  const retried = await json('POST', `${API}/api/agent-tasks/${taskId}/commands/retry?thread_id=${thread}`, {
-    expected_version: task.version,
-  }, { 'Idempotency-Key': `retry-${taskId}-${Date.now()}` });
-  task = await pollTask(taskId, thread, { timeoutMs: 600_000 });
-  result.retry = { command_status: retried?.task?.status, final_status: task.status };
+if (hermesRetry) {
+  if (task.status === 'failed') {
+    const retried = await json('POST', `${API}/api/agent-tasks/${taskId}/commands/retry?thread_id=${thread}`, {
+      expected_version: task.version,
+    }, { 'Idempotency-Key': `retry-${taskId}-${Date.now()}` });
+    task = await pollTask(taskId, thread, { timeoutMs: 600_000 });
+    result.retry = {
+      command_status: retried?.task?.status,
+      final_status: task.status,
+      final_phase: task.current_phase,
+    };
+  }
 }
 
 if (!hermesRetry && task.status === 'awaiting_approval') {
@@ -156,5 +182,6 @@ if (!hermesRetry && task.status === 'awaiting_approval') {
   }
 }
 
-writeFileSync(path.join(ART, 'dr-e2e-result.json'), JSON.stringify(result, null, 2));
+const resultPath = path.join(ART, hermesRetry ? 'hermes-e2e-result.json' : 'dr-e2e-result.json');
+writeFileSync(resultPath, JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));
