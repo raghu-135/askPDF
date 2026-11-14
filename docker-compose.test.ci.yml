@@ -1,0 +1,7 @@
+# CI-only overlay: keep test image builds fast (models load at runtime or tests skip).
+services:
+  test-runner:
+    build:
+      args:
+        DOWNLOAD_LOCAL_MODELS: "false"
+        WARM_DOCLING_MODELS: "false"

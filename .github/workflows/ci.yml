@@ -30,6 +30,9 @@ env:
   SELKIES_UI_SIDEBAR_SHOW_SHARING: "false"
   SELKIES_UI_SIDEBAR_SHOW_APPS: "false"
   HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+  DOCKER_BUILDKIT: "1"
+  COMPOSE_DOCKER_CLI_BUILD: "1"
+  ASKPDF_BUILDX_CACHE_DIR: /tmp/.buildx-cache
 
 jobs:
   docker-build:
@@ -40,49 +43,70 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore BuildKit cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: askpdf-buildx-${{ hashFiles('rag_service/Dockerfile', 'rag_service/Dockerfile.test', 'rag_service/requirements.txt', 'rag_service/requirements-dev.txt', 'langgraph_runtime/Dockerfile', 'langgraph_runtime/Dockerfile.test', 'hermes_runtime/Dockerfile', 'frontend/Dockerfile', 'browser_capture/Dockerfile', 'docker-compose.yml', 'docker-compose.ci.yml', 'docker-compose.test.yml', 'docker-compose.test.ci.yml', 'docker-compose.runtime-integration.yml') }}
+          restore-keys: |
+            askpdf-buildx-
+
       - name: Create clean CI environment
         run: |
           cp .env.ci .env
 
       - name: Build Docker images
-        run: |
-          docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml config --quiet
-          docker compose --env-file .env.ci -f docker-compose.yml -f docker-compose.ci.yml build
+        run: bash scripts/ci_docker_build.sh
 
       - name: Verify framework image boundaries
-        run: |
-          docker build --build-arg DOWNLOAD_LOCAL_MODELS=false -f rag_service/Dockerfile -t askpdf-control-plane .
-          docker build -f langgraph_runtime/Dockerfile -t askpdf-langgraph-runtime .
-          docker build -f hermes_runtime/Dockerfile -t askpdf-hermes-runtime .
-          docker build --build-arg DOWNLOAD_LOCAL_MODELS=false --build-arg WARM_DOCLING_MODELS=false -f rag_service/Dockerfile.test -t askpdf-control-plane-tests .
-          docker build -f langgraph_runtime/Dockerfile.test -t askpdf-langgraph-runtime-tests .
-          docker run --rm askpdf-control-plane python -c 'import importlib.util; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("langgraph_runtime") is None'
-          docker run --rm askpdf-langgraph-runtime python -c 'import importlib.util, langgraph, runtime_protocol, langgraph_runtime; assert importlib.util.find_spec("app") is None'
-          docker run --rm askpdf-hermes-runtime python -c 'import importlib.util, hermes_runtime, runtime_protocol; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("app") is None'
-          docker run --rm askpdf-control-plane-tests python -c 'import importlib.util, app, runtime_protocol; assert importlib.util.find_spec("langgraph") is None; assert importlib.util.find_spec("langgraph_runtime") is None'
-          docker run --rm askpdf-langgraph-runtime-tests python -c 'import importlib.util, langgraph, langgraph_runtime, runtime_protocol; assert importlib.util.find_spec("app") is None'
+        run: bash scripts/ci_verify_image_boundaries.sh
 
       - name: Check diff hygiene
         run: git diff --check
 
+      - name: Save BuildKit cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: /tmp/.buildx-cache
+          key: askpdf-buildx-${{ hashFiles('rag_service/Dockerfile', 'rag_service/Dockerfile.test', 'rag_service/requirements.txt', 'rag_service/requirements-dev.txt', 'langgraph_runtime/Dockerfile', 'langgraph_runtime/Dockerfile.test', 'hermes_runtime/Dockerfile', 'frontend/Dockerfile', 'browser_capture/Dockerfile', 'docker-compose.yml', 'docker-compose.ci.yml', 'docker-compose.test.yml', 'docker-compose.test.ci.yml', 'docker-compose.runtime-integration.yml') }}
+
   tests:
     name: Test suite
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     needs: docker-build
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore BuildKit cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: askpdf-buildx-${{ hashFiles('rag_service/Dockerfile', 'rag_service/Dockerfile.test', 'rag_service/requirements.txt', 'rag_service/requirements-dev.txt', 'langgraph_runtime/Dockerfile', 'langgraph_runtime/Dockerfile.test', 'hermes_runtime/Dockerfile', 'frontend/Dockerfile', 'browser_capture/Dockerfile', 'docker-compose.yml', 'docker-compose.ci.yml', 'docker-compose.test.yml', 'docker-compose.test.ci.yml', 'docker-compose.runtime-integration.yml') }}
+          restore-keys: |
+            askpdf-buildx-
+
       - name: Create clean CI environment
         run: |
           cp .env.ci .env
+
+      - name: Warm Docker images from CI cache
+        run: bash scripts/ci_docker_build.sh
 
       - name: Run Docker test runner
         run: ./run_tests.sh
 
       - name: Collect control-plane tests
         run: |
-          docker compose -p askpdf-test -f docker-compose.test.yml \
+          docker compose -p askpdf-test -f docker-compose.test.yml -f docker-compose.test.ci.yml \
             run --rm -e PYTHONPATH=/workspace:/app --entrypoint pytest \
             test-runner --collect-only -q /app/tests
 
@@ -119,9 +143,23 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore BuildKit cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: askpdf-buildx-${{ hashFiles('rag_service/Dockerfile', 'rag_service/Dockerfile.test', 'rag_service/requirements.txt', 'rag_service/requirements-dev.txt', 'langgraph_runtime/Dockerfile', 'langgraph_runtime/Dockerfile.test', 'hermes_runtime/Dockerfile', 'frontend/Dockerfile', 'browser_capture/Dockerfile', 'docker-compose.yml', 'docker-compose.ci.yml', 'docker-compose.test.yml', 'docker-compose.test.ci.yml', 'docker-compose.runtime-integration.yml') }}
+          restore-keys: |
+            askpdf-buildx-
+
       - name: Create clean CI environment
         run: |
           cp .env.ci .env
+
+      - name: Warm Docker images from CI cache
+        run: bash scripts/ci_docker_build.sh
 
       - name: Run deterministic Hermes proof
         run: ./run_tests.sh --hermes-runtime

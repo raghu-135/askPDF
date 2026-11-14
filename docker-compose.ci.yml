@@ -1,4 +1,14 @@
 services:
+  rag-service:
+    build:
+      args:
+        DOWNLOAD_LOCAL_MODELS: "false"
+
+  db-migrate:
+    build:
+      args:
+        DOWNLOAD_LOCAL_MODELS: "false"
+
   frontend:
     env_file: []
     environment:
