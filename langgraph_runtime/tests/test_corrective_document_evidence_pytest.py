@@ -148,7 +148,7 @@ def test_corrective_document_scope_decline_when_document_hits_are_irrelevant():
             {
                 "packet_id": packet_id,
                 "relevant": False,
-                "confidence": 0.2,
+                "confidence": 0.9,
                 "provenance_complete": True,
                 "instruction_injection_risk": False,
             }
@@ -300,7 +300,7 @@ async def test_finalizer_declines_out_of_scope_corrective_questions():
             {
                 "packet_id": packet_id,
                 "relevant": False,
-                "confidence": 0.1,
+                "confidence": 0.92,
                 "provenance_complete": True,
                 "instruction_injection_risk": False,
             }
