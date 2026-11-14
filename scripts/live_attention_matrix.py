@@ -105,6 +105,25 @@ def chat(thread_id: str, question: str) -> tuple[int, str, dict]:
     answer = str(body.get("answer") or body.get("final_answer") or "")
     if not answer and isinstance(body.get("assistant_message"), dict):
         answer = str(body["assistant_message"].get("content") or "")
+    run_id = str(body.get("run_id") or body.get("agent_run_id") or "")
+    if not answer.strip() and run_id:
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            try:
+                payload = http_json("GET", f"/api/agent-runs/{run_id}?thread_id={thread_id}")
+            except urllib.error.HTTPError:
+                time.sleep(1)
+                continue
+            agent_run = payload.get("agent_run") if isinstance(payload.get("agent_run"), dict) else payload
+            if isinstance(agent_run, dict):
+                answer = str(
+                    agent_run.get("final_answer")
+                    or (agent_run.get("result") if isinstance(agent_run.get("result"), dict) else {}).get("final_answer")
+                    or answer
+                )
+                if answer.strip():
+                    break
+            time.sleep(1)
     return ms, answer, body
 
 
@@ -215,7 +234,7 @@ def main() -> int:
             shot.write_text(json.dumps({"answer": answer, "row": row}, indent=2), encoding="utf-8")
             _write_screenshot(ART / f"live-{workflow}-{key}.png", workflow, key, question, answer, passed)
 
-    out = {"sha": sha, "model": MODEL, "rows": rows}
+    out = {"sha": sha, "model": MODEL, "thread_id": thread_id, "rows": rows}
     (ART / "live-attention-matrix.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
     print(json.dumps(out, indent=2))
     return 0 if all(r["pass"] for r in rows) else 1
