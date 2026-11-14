@@ -19,18 +19,20 @@ import httpx
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from benchmark_papers import ensure_all, fixture_path  # noqa: E402
 from live_stack_client import (  # noqa: E402
     admin_token,
     answer_from_run,
     create_thread,
+    get_agent_run,
     live_client,
+    pages_from_document_sources,
     scored_agent_run,
     thread_chat,
     upload_and_wait,
 )
 
 REPO = Path(__file__).resolve().parents[1]
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "pdfs"
 MANIFEST = Path(__file__).resolve().parent / "fixtures" / "manifest.json"
 QUESTIONS = Path(__file__).resolve().parent / "questions.json"
 HOLDOUT = Path(__file__).resolve().parent / "holdout_questions.json"
@@ -59,6 +61,16 @@ BUILTIN_WORKFLOWS = (
 
 DEFAULT_WORKFLOWS = ("router_rag_agent", "auto_rag_agent")
 
+CATEGORY_LABELS = {
+    "overview": "overview",
+    "fact": "facts",
+    "table": "tables",
+    "method": "method",
+    "multi_doc": "multi_doc",
+    "out_of_scope": "out_of_scope",
+    "results": "results",
+}
+
 
 def _git_sha() -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO).decode().strip()
@@ -77,38 +89,26 @@ def _save_fixture_hashes(mapping: dict[str, str]) -> None:
 
 
 def upload_fixtures(client: httpx.Client, thread_id: str, files: list[str]) -> dict[str, str]:
-    return {
-        name: upload_and_wait(client, thread_id, FIXTURES / name)
-        for name in files
-    }
+    return {name: upload_and_wait(client, thread_id, fixture_path(name)) for name in files}
 
 
-def extract_pages_from_trace(trace: dict[str, Any]) -> set[int]:
-    pages: set[int] = set()
-    for span in trace.get("spans") or []:
-        if not isinstance(span, dict):
-            continue
-        kind = str(span.get("kind") or "").upper()
-        if kind and kind not in {"RETRIEVER", "TOOL"}:
-            continue
-        for blob in (span.get("output"), span.get("attributes"), span.get("raw")):
-            if not isinstance(blob, dict):
-                continue
-            refs = blob.get("references") or blob.get("chunks") or blob.get("document_matches")
-            if isinstance(refs, list):
-                for ref in refs:
-                    if not isinstance(ref, dict):
-                        continue
-                    page = ref.get("page") or ref.get("page_number")
-                    if page is not None:
-                        try:
-                            pages.add(int(page))
-                        except (TypeError, ValueError):
-                            pass
-            preview = json.dumps(blob)
-            for match in re.finditer(r'"page(?:_number)?"\s*:\s*(\d+)', preview):
-                pages.add(int(match.group(1)))
-    return pages
+def _metrics_tokens(detail: dict[str, Any]) -> int:
+    metrics = {}
+    debug = detail.get("debug") if isinstance(detail.get("debug"), dict) else {}
+    trace = debug.get("trace") if isinstance(debug.get("trace"), dict) else {}
+    if isinstance(trace.get("metrics"), dict):
+        metrics = trace["metrics"]
+    elif isinstance(detail.get("metrics_json"), dict):
+        metrics = detail["metrics_json"]
+    return int(metrics.get("llm_token_count_total") or 0)
+
+
+def _run_llm_tokens(client: httpx.Client, thread_id: str, chat_body: dict[str, Any], detail: dict[str, Any]) -> int:
+    total = _metrics_tokens(detail)
+    parent_id = chat_body.get("agent_run_id")
+    if parent_id and str(detail.get("id")) != str(parent_id):
+        total += _metrics_tokens(get_agent_run(client, thread_id, str(parent_id)))
+    return total
 
 
 def numeric_score(answer: str, spec: dict[str, Any] | None) -> bool | None:
@@ -167,19 +167,9 @@ def run_question(
     run_id = body.get("agent_run_id")
     detail = scored_agent_run(client, thread_id, str(run_id)) if run_id else {}
     answer = str(body.get("answer") or answer_from_run(detail) or "")
-    trace = ((detail.get("debug") or {}).get("trace")) if isinstance(detail.get("debug"), dict) else {}
-    if not trace:
-        trace = (detail.get("debug_trace_json") or {}).get("trace") or detail.get("debug_trace_json") or {}
-    pages = extract_pages_from_trace(trace if isinstance(trace, dict) else {})
+    pages = pages_from_document_sources(body.get("document_sources") or [])
     expected = set(case.get("expected_pages") or [])
-    retrieval_hit = (not expected) or bool(pages & expected) or bool(pages and not expected)
-    if expected and not pages:
-        # fall back: document_sources on chat body
-        for src in body.get("document_sources") or []:
-            pn = src.get("page") or src.get("page_number")
-            if pn is not None:
-                pages.add(int(pn))
-        retrieval_hit = bool(pages & expected)
+    retrieval_hit = (not expected) or bool(pages & expected)
     match = case.get("answer_match") or {}
     numeric = numeric_score(answer, case.get("numeric"))
     constrained = string_constraints(answer, match)
@@ -189,32 +179,54 @@ def run_question(
         answer_pass = numeric
     else:
         answer_pass = judge(case["question"], answer, match)
-    metrics = (trace.get("metrics") if isinstance(trace, dict) else {}) or {}
-    if not metrics:
-        metrics = detail.get("metrics_json") or {}
     latency_s = round(time.time() - started, 3)
+    decline_pass = answer_pass if case.get("type") == "out_of_scope" else None
+    category = CATEGORY_LABELS.get(str(case.get("type") or ""), str(case.get("type") or "other"))
     return {
         "question_id": case["id"],
         "type": case.get("type"),
+        "category": category,
         "answer_preview": answer[:500],
         "retrieval_pages": sorted(pages),
         "retrieval_hit": retrieval_hit,
         "answer_pass": answer_pass,
+        "decline_correct": decline_pass,
         "latency_s": latency_s,
-        "llm_tokens_total": metrics.get("llm_token_count_total"),
+        "llm_tokens_total": _run_llm_tokens(client, thread_id, body, detail),
         "run_id": detail.get("id") or run_id,
         "workflow_id": detail.get("workflow_id"),
     }
 
 
+def _rate(rows: list[dict[str, Any]], key: str) -> float | None:
+    values = [r[key] for r in rows if r.get(key) is not None]
+    if not values:
+        return None
+    return round(sum(1 for v in values if v) / len(values), 4)
+
+
 def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     n = len(rows) or 1
+    latencies = sorted(r["latency_s"] for r in rows)
+    by_category: dict[str, Any] = {}
+    for category in sorted({r.get("category") for r in rows if r.get("category")}):
+        subset = [r for r in rows if r.get("category") == category]
+        by_category[category] = {
+            "cases": len(subset),
+            "retrieval_hit_rate": _rate(subset, "retrieval_hit"),
+            "answer_pass_rate": _rate(subset, "answer_pass"),
+            "decline_correct_rate": _rate(subset, "decline_correct"),
+            "median_latency_s": sorted(r["latency_s"] for r in subset)[len(subset) // 2] if subset else 0,
+            "total_llm_tokens": sum(int(r.get("llm_tokens_total") or 0) for r in subset),
+        }
     return {
         "cases": len(rows),
         "retrieval_hit_rate": round(sum(1 for r in rows if r["retrieval_hit"]) / n, 4),
         "answer_pass_rate": round(sum(1 for r in rows if r["answer_pass"]) / n, 4),
-        "median_latency_s": sorted(r["latency_s"] for r in rows)[len(rows) // 2] if rows else 0,
+        "decline_correct_rate": _rate(rows, "decline_correct"),
+        "median_latency_s": latencies[len(latencies) // 2] if latencies else 0,
         "total_llm_tokens": sum(int(r.get("llm_tokens_total") or 0) for r in rows),
+        "by_category": by_category,
     }
 
 
@@ -240,6 +252,19 @@ def write_report(report: dict[str, Any], sha: str) -> tuple[Path, Path]:
             f"| `{wf}` | {agg['cases']} | {agg['retrieval_hit_rate']:.0%} | "
             f"{agg['answer_pass_rate']:.0%} | {agg['median_latency_s']:.1f} | {agg['total_llm_tokens']} |"
         )
+        lines.append("")
+        lines.append(f"### `{wf}` by category")
+        lines.append("")
+        lines.append("| Category | Cases | Retrieval | Answers | Decline | Latency (med s) | Tokens |")
+        lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for cat, block in (agg.get("by_category") or {}).items():
+            decl = block.get("decline_correct_rate")
+            decl_s = f"{decl:.0%}" if decl is not None else "—"
+            lines.append(
+                f"| {cat} | {block['cases']} | {block['retrieval_hit_rate']:.0%} | "
+                f"{block['answer_pass_rate']:.0%} | {decl_s} | {block['median_latency_s']:.1f} | {block['total_llm_tokens']} |"
+            )
+        lines.append("")
     if report.get("holdout"):
         h = report["holdout"]["aggregate"]
         lines += [
@@ -266,6 +291,7 @@ def main() -> int:
     args = parser.parse_args()
     workflows = list(BUILTIN_WORKFLOWS) if args.all_workflows else args.workflows
     admin_token()  # validate before long run
+    ensure_all(include_holdout=args.holdout or args.holdout_only)
     sha = _git_sha()
     main_cases = json.loads(QUESTIONS.read_text(encoding="utf-8"))["questions"]
     if args.limit > 0:

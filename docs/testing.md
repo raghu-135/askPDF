@@ -72,10 +72,11 @@ a separate Hermes runtime-proof job.
 
 ## RAG benchmark (on demand)
 
-Shared arXiv fixtures live in `benchmarks/fixtures/`. Upload them into a running
-dev stack:
+Shared arXiv fixtures are manifest-only under `benchmarks/fixtures/` (PDFs are
+downloaded, not committed). Before upload or benchmark:
 
 ```bash
+./scripts/download_benchmark_pdfs.sh
 ./scripts/upload_benchmark_fixtures.sh
 ```
 

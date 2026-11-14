@@ -167,6 +167,47 @@ def answer_from_run(detail: dict[str, Any]) -> str:
     return ""
 
 
+def pages_from_document_sources(sources: Any) -> set[int]:
+    """Expand page numbers from chat `document_sources` (matches trace refs_from_documents)."""
+    pages: set[int] = set()
+    if not isinstance(sources, list):
+        return pages
+    for item in sources:
+        if not isinstance(item, dict):
+            continue
+        for key in ("page_number", "page", "page_start", "page_end"):
+            value = item.get(key)
+            if value not in (None, ""):
+                try:
+                    pages.add(int(value))
+                except (TypeError, ValueError):
+                    pass
+        raw_pages = item.get("pages")
+        if isinstance(raw_pages, list):
+            for page in raw_pages:
+                try:
+                    pages.add(int(page))
+                except (TypeError, ValueError):
+                    pass
+        elif isinstance(raw_pages, str) and raw_pages.strip():
+            for part in raw_pages.replace("–", "-").split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if "-" in part:
+                    start, end = part.split("-", 1)
+                    try:
+                        pages.update(range(int(start), int(end) + 1))
+                    except ValueError:
+                        continue
+                else:
+                    try:
+                        pages.add(int(part))
+                    except ValueError:
+                        pass
+    return pages
+
+
 def live_client(api_base: Optional[str] = None, **kwargs: Any) -> httpx.Client:
     return httpx.Client(
         base_url=(api_base or DEFAULT_API),

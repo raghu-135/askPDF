@@ -9,4 +9,5 @@ export PYTHONPATH="${REPO_ROOT}/scripts${PYTHONPATH:+:${PYTHONPATH}}"
 export ASKPDF_BENCHMARK_MODEL="${ASKPDF_BENCHMARK_MODEL:-openai/gpt-4.1-mini}"
 export ASKPDF_BENCHMARK_JUDGE_MODEL="${ASKPDF_BENCHMARK_JUDGE_MODEL:-google/gemini-2.5-flash}"
 
+python3 "${REPO_ROOT}/scripts/benchmark_papers.py"
 exec python3 benchmarks/run_benchmark.py --judge "$@"

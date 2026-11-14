@@ -19,7 +19,8 @@ const requireFromFrontend = createRequire(path.join(REPO_ROOT, 'frontend/package
 const { chromium } = requireFromFrontend('@playwright/test');
 
 const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'openai/gpt-4.1-mini';
-const PDF_PATH = process.env.ASKPDF_E2E_PDF || path.join(REPO_ROOT, 'benchmarks/fixtures/pdfs/1706.03762.pdf');
+const PDF_PATH =
+  process.env.ASKPDF_E2E_PDF || path.join(REPO_ROOT, '.benchmark-pdf-cache/1706.03762.pdf');
 
 async function main() {
   fs.mkdirSync(DEFAULT_ART_DIR, { recursive: true });

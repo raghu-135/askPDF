@@ -21,8 +21,9 @@ from live_stack_client import (  # noqa: E402
 )
 from overview_context_probe import probe_row  # noqa: E402
 
+from benchmark_papers import ensure_all, paper_path  # noqa: E402
+
 REPO = SCRIPTS.parent
-PDF = REPO / "benchmarks" / "fixtures" / "pdfs" / "1706.03762.pdf"
 QUESTION = os.getenv("ASKPDF_OVERVIEW_QUESTION", "What does this paper discuss?")
 WORKFLOW = os.getenv("ASKPDF_OVERVIEW_WORKFLOW", "auto_rag_agent")
 OUT = Path(os.getenv("ASKPDF_MODEL_COMPARE_OUT", "/opt/cursor/artifacts/overview-model-compare.json"))
@@ -38,11 +39,14 @@ MODELS = [
 
 
 def main() -> int:
-    report = {"question": QUESTION, "workflow": WORKFLOW, "pdf": PDF.name, "runs": []}
+    report = {"question": QUESTION, "workflow": WORKFLOW, "pdf": "1706.03762.pdf", "runs": []}
+    ensure_all()
+    pdf = paper_path("1706.03762")
+    report["pdf"] = pdf.name
     with live_client() as client:
         thread_id = create_thread(client, f"overview-compare-{int(time.time())}", workflow_id=WORKFLOW)
         report["thread_id"] = thread_id
-        upload_and_wait(client, thread_id, PDF)
+        upload_and_wait(client, thread_id, pdf)
         for model in MODELS:
             started = time.time()
             print(f"running {model}...", flush=True)

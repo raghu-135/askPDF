@@ -156,6 +156,13 @@ local_settings.py
 backend/app/helper.py
 *.db
 
+# Benchmark arXiv PDFs (fetched via scripts/download_benchmark_pdfs.sh)
+.benchmark-pdf-cache/
+benchmarks/fixtures/pdfs/
+benchmarks/reports/*.json
+benchmarks/reports/*.md
+!benchmarks/reports/.gitkeep
+
 # PDFs (uploaded files - optional, uncomment if you don't want to track test PDFs)
 # *.pdf
 build_log.txt
