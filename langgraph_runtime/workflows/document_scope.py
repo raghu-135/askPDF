@@ -13,11 +13,23 @@ DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this ques
 ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE = 0.42
 
 _LEXICAL_PROPER_NOUN_STOPWORDS = frozenset({
+    "attention",
+    "bleu",
+    "decoder",
+    "encoder",
+    "flops",
     "for",
     "from",
     "how",
+    "layer",
+    "layers",
+    "model",
+    "reply",
+    "score",
     "table",
     "the",
+    "training",
+    "transformer",
     "what",
     "when",
     "where",
@@ -102,9 +114,11 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
     worker_scores = worker_document_retrieval_scores(state)
     if doc_packets:
         if worker_scores:
-            if max(worker_scores) < ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
-                return DOCUMENT_SCOPE_DECLINE_ANSWER
-            return None
+            if max(worker_scores) >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+                return None
+            if any(str(packet.get("content") or "").strip() for packet in doc_packets):
+                return None
+            return DOCUMENT_SCOPE_DECLINE_ANSWER
         if any(str(packet.get("content") or "").strip() for packet in doc_packets):
             return None
     prefetch_scores = prefetch_document_retrieval_scores(state)
@@ -149,11 +163,23 @@ def lexical_attachment_scope_decline(state: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _retrieved_document_evidence_is_substantive(state: Mapping[str, Any]) -> bool:
+    doc_packets = document_evidence_packets(state)
+    if not doc_packets:
+        return False
+    worker_scores = worker_document_retrieval_scores(state)
+    if worker_scores and max(worker_scores) >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+        return True
+    return any(str(packet.get("content") or "").strip() for packet in doc_packets)
+
+
 def post_retrieval_attachment_decline(state: Mapping[str, Any]) -> str | None:
     """Score- and evidence-based decline after workers have run."""
 
     if not thread_has_attached_documents(state):
         return None
+    if _retrieved_document_evidence_is_substantive(state):
+        return lexical_attachment_scope_decline(state)
     decline = attachment_retrieval_scope_decline(state)
     if decline:
         return decline
@@ -164,9 +190,4 @@ def workflow_post_retrieval_scope_decline(state: Mapping[str, Any]) -> str | Non
     workflow_id = str(state.get("workflow_id") or "")
     if workflow_id not in {ROUTER_RAG_WORKFLOW_ID, PARALLEL_REFERENCE_WORKFLOW_ID}:
         return None
-    if workflow_id == PARALLEL_REFERENCE_WORKFLOW_ID:
-        from langgraph_runtime.workflows.corrective_nodes import _non_document_evidence_packets
-
-        if _non_document_evidence_packets(state):
-            return None
     return post_retrieval_attachment_decline(state)
