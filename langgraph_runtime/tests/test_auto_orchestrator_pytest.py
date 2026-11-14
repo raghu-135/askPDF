@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from langgraph_runtime.compiler import WorkflowCompiler
-from langgraph_runtime.workflows.auto_nodes import auto_scope_decline
+from langgraph_runtime.workflows.auto_nodes import (
+    DEEP_RESEARCH_WORKFLOW_ID,
+    ROUTER_WORKFLOW_ID,
+    auto_scope_decline,
+)
 from langgraph_runtime.workflows.corrective_nodes import DOCUMENT_SCOPE_DECLINE_ANSWER
 from langgraph_runtime.workflows.graph_validation import WorkflowGraphValidator
 import json
@@ -33,4 +37,15 @@ def test_auto_scope_decline_for_world_fact_without_evidence():
             "document_evidence_text": "",
         },
     }
-    assert auto_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+    assert auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def test_auto_scope_decline_skips_deep_research_delegate():
+    state = {
+        "question": "Please write a literature review of transformer papers.",
+        "pre_fetch_bundle": {
+            "document_sources": [{"file_hash": "a" * 32}],
+            "document_evidence_text": "",
+        },
+    }
+    assert auto_scope_decline(state, workflow_id=DEEP_RESEARCH_WORKFLOW_ID) is None

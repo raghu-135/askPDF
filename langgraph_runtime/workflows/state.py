@@ -334,6 +334,22 @@ class RouterRagState(TypedDict, total=False):
     runtime_artifact_manifest: List[Dict[str, Any]]
     runtime_artifact_contents: Dict[str, str]
     runtime_artifacts: Annotated[List[Dict[str, Any]], merge_parallel_deltas]
+    context_prefetch_seeded: bool
+    available_delegate_workflows: List[Dict[str, Any]]
+    auto_policy: Dict[str, Any]
+    auto_orchestrator_route: str
+    delegate_workflow_id: str
+    delegate_plan_summary: str
+    delegate_requires_approval: bool
+    hitl_plan_preview: str
+    child_run_id: str
+    child_workflow_id: str
+    delegate_child_run_id: str
+    delegate_child_workflow_id: str
+    child_final_answer: str
+    delegate_child_output: Dict[str, Any]
+    document_scope_declined: bool
+    debug_trace: Dict[str, Any]
 
 
 def node_runtime(config: Optional[RunnableConfig]) -> Dict[str, Any]:

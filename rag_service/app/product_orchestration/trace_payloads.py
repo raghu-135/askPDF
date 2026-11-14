@@ -492,6 +492,12 @@ def merge_debug_payloads(
         }
     else:
         visualizations.pop(TRACE_VISUALIZATION_PARALLEL, None)
+    technical_details = {
+        **_as_dict(base_payload.get("technical_details")),
+        **_as_dict(incoming_payload.get("technical_details")),
+        **_as_dict(base_trace.get("technical_details")),
+        **_as_dict(incoming_trace.get("technical_details")),
+    }
     payload = {
         **base_payload,
         "trace": base_trace,
@@ -507,6 +513,9 @@ def merge_debug_payloads(
         "diagnostics": build_trace_diagnostics(diagnostic_events),
         "visualizations": visualizations,
     }
+    if technical_details:
+        payload["technical_details"] = technical_details
+        payload["trace"] = {**base_trace, "technical_details": technical_details}
     summary.pop("nodes", None)
     summary.pop("usedNodeCount", None)
     summary.pop("availableNodeCount", None)

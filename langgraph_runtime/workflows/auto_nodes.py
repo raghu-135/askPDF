@@ -10,8 +10,7 @@ from langchain_core.runnables import RunnableConfig
 
 from langgraph_runtime.control_plane_client import delegate_sync
 from langgraph_runtime.workflows.corrective_nodes import DOCUMENT_SCOPE_DECLINE_ANSWER
-from langgraph_runtime.workflows.enums import AutoOrchestratorRoute, NodeEventStatus, RouterRoute
-from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
+from langgraph_runtime.workflows.enums import AutoOrchestratorRoute, NodeEventStatus
 from langgraph_runtime.workflows.runtime_invocation import append_event, log_node_end
 from langgraph_runtime.workflows.state import RouterRagState
 from langgraph_runtime.workflows.trace import compact_preview
@@ -47,31 +46,66 @@ def _catalog_ids(state: Mapping[str, Any]) -> set[str]:
     }
 
 
-def auto_scope_decline(state: Mapping[str, Any]) -> str | None:
-    """Canonical document-scope decline for Auto (pending shared document_scope module)."""
+_DELEGATE_SKIP_SCOPE_DECLINE = frozenset(
+    {
+        DEEP_RESEARCH_WORKFLOW_ID,
+        ORCHESTRATOR_WORKFLOW_ID,
+        PLAN_EXECUTE_WORKFLOW_ID,
+    }
+)
 
-    direct = router_attachment_scope_decline(state, RouterRoute.DIRECT.value)
-    if direct:
-        return direct
+
+def auto_scope_decline(state: Mapping[str, Any], *, workflow_id: str = "") -> str | None:
+    """Canonical document-scope decline for Auto after delegate choice.
+
+    Out-of-scope world-fact questions with attached documents but no prefetch evidence
+    may decline only when Auto would route to the simple router delegate.
+  Deep Research and multi-document orchestration paths are never pre-empted.
+    """
+
+    if workflow_id in _DELEGATE_SKIP_SCOPE_DECLINE:
+        return None
+    if not workflow_id:
+        return DOCUMENT_SCOPE_DECLINE_ANSWER
     bundle = state.get("pre_fetch_bundle") or {}
-    if not isinstance(bundle, dict):
+    attached = bool(state.get("document_sources"))
+    if isinstance(bundle, dict):
+        documents = bundle.get("documents")
+        if isinstance(documents, list) and documents:
+            attached = True
+        document_sources = bundle.get("document_sources")
+        if isinstance(document_sources, list) and document_sources:
+            attached = True
+    if not attached:
         return None
-    documents = bundle.get("documents")
-    if not (isinstance(documents, list) and documents):
-        return None
-    evidence = str(bundle.get("document_evidence_text") or "").strip()
-    if evidence:
-        return None
+    evidence = ""
+    if isinstance(bundle, dict):
+        for key in ("document_evidence_text", "web_search_evidence_text", "web_evidence_text"):
+            evidence = str(bundle.get(key) or "").strip()
+            if evidence:
+                break
     question = str(state.get("question") or "")
     if _WORLD_FACT_PATTERN.search(question):
         return DOCUMENT_SCOPE_DECLINE_ANSWER
+    if evidence:
+        return None
     return None
 
 
 def _document_count(state: Mapping[str, Any]) -> int:
     bundle = state.get("pre_fetch_bundle") or {}
-    documents = bundle.get("documents") if isinstance(bundle, dict) else []
-    return len(documents) if isinstance(documents, list) else 0
+    counts: list[int] = []
+    if isinstance(bundle, dict):
+        documents = bundle.get("documents")
+        if isinstance(documents, list):
+            counts.append(len(documents))
+        document_sources = bundle.get("document_sources")
+        if isinstance(document_sources, list):
+            counts.append(len(document_sources))
+    sources = state.get("document_sources")
+    if isinstance(sources, list):
+        counts.append(len(sources))
+    return max(counts) if counts else 0
 
 
 def _choose_delegate_workflow(state: Mapping[str, Any], *, catalog_ids: set[str]) -> tuple[str, str]:
@@ -99,8 +133,25 @@ def _auto_policy(state: Mapping[str, Any]) -> Dict[str, Any]:
 
 async def auto_orchestrator_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
-    decline = auto_scope_decline(state)
     catalog_ids = _catalog_ids(state)
+    world_fact_decline = auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID)
+    if world_fact_decline:
+        data = {
+            "status": NodeEventStatus.COMPLETED.value,
+            "auto_orchestrator_route": AutoOrchestratorRoute.DECLINE.value,
+            "delegate_workflow_id": "",
+            "output_preview": {"final_answer": compact_preview(world_fact_decline)},
+        }
+        log_node_end(state, "auto_orchestrator", started, data)
+        return {
+            "auto_orchestrator_route": AutoOrchestratorRoute.DECLINE.value,
+            "final_answer": world_fact_decline,
+            "document_scope_declined": True,
+            "node_events": append_event(state, "auto_orchestrator", data, started=started, config=config),
+        }
+
+    workflow_id, rationale = _choose_delegate_workflow(state, catalog_ids=catalog_ids)
+    decline = auto_scope_decline(state, workflow_id=workflow_id)
     if decline:
         data = {
             "status": NodeEventStatus.COMPLETED.value,
@@ -116,16 +167,13 @@ async def auto_orchestrator_node(state: RouterRagState, config: RunnableConfig) 
             "node_events": append_event(state, "auto_orchestrator", data, started=started, config=config),
         }
 
-    workflow_id, rationale = _choose_delegate_workflow(state, catalog_ids=catalog_ids)
     if not workflow_id:
         route = AutoOrchestratorRoute.DECLINE.value
-        final = DOCUMENT_SCOPE_DECLINE_ANSWER
     else:
         require_approval = workflow_id == DEEP_RESEARCH_WORKFLOW_ID or (
             _COMPLEX_PATTERN.search(str(state.get("question") or "")) or _document_count(state) >= 2
         )
         route = AutoOrchestratorRoute.PLAN_APPROVAL.value if require_approval else AutoOrchestratorRoute.DELEGATE.value
-        final = ""
 
     plan_summary = f"Delegate to `{workflow_id}`: {rationale}" if workflow_id else rationale
     data = {
@@ -177,6 +225,8 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         "status": NodeEventStatus.COMPLETED.value,
         "child_run_id": child_run_id,
         "child_workflow_id": child_workflow_id,
+        "delegate_child_run_id": child_run_id,
+        "delegate_child_workflow_id": child_workflow_id,
         "agent_task_id": agent_task_id,
         "output_preview": {"answer": compact_preview(child_final_answer)},
     }
@@ -184,6 +234,8 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
     update: Dict[str, Any] = {
         "child_run_id": child_run_id,
         "child_workflow_id": child_workflow_id,
+        "delegate_child_run_id": child_run_id,
+        "delegate_child_workflow_id": child_workflow_id,
         "child_final_answer": child_final_answer,
         "delegate_child_output": response,
         "node_events": append_event(state, "workflow_delegate", data, started=started, config=config),

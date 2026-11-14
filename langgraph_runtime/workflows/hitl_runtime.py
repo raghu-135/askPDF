@@ -203,6 +203,8 @@ async def hitl_gate_node(
         "web_source_count": len(state.get("web_sources") or []),
         "used_chat_id_count": len(state.get("used_chat_ids") or []),
         "evidence": compact_preview(state.get("evidence")),
+        "delegate_plan_summary": compact_preview(state.get("hitl_plan_preview") or state.get("delegate_plan_summary")),
+        "delegate_workflow_id": state.get("delegate_workflow_id"),
     }
     decision = _interrupt(
         {
