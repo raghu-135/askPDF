@@ -520,11 +520,7 @@ async def list_stale_cancelling_tasks(*, limit: int = 100) -> list[AgentTask]:
     stale: list[AgentTask] = []
     for task in candidates:
         run = await get_task_run(task.id) if task.active_run_id else None
-        terminal_mismatch = (
-            run is not None
-            and str(run.status) in TERMINAL_TASK_RUN_STATUSES
-            and str(task.status) == AgentTaskStatus.CANCELLING.value
-        )
+        terminal_mismatch = run is not None and str(run.status) in TERMINAL_TASK_RUN_STATUSES
         if cancellation_confirm_deadline_elapsed(task, run) or terminal_mismatch:
             stale.append(task)
         if len(stale) >= bounded:
