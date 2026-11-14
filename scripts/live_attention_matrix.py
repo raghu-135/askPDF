@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live verification matrix for Attention PDF (router + orchestrator)."""
+"""Live verification matrix for Attention PDF (router + orchestrator + corrective)."""
 from __future__ import annotations
 
 import json
@@ -16,7 +16,12 @@ REPO = Path(__file__).resolve().parents[1]
 ART = Path(os.environ.get("ASKPDF_E2E_ARTIFACTS", "/opt/cursor/artifacts"))
 ART.mkdir(parents=True, exist_ok=True)
 API = os.environ.get("ASKPDF_E2E_API_URL", "http://127.0.0.1:8000")
-MODEL = os.environ.get("ASKPDF_E2E_LLM_MODEL", "openai/gpt-4.1-mini")
+DEFAULT_MODEL = os.environ.get("ASKPDF_E2E_LLM_MODEL", "openai/gpt-4.1-mini")
+MODELS = [
+    item.strip()
+    for item in os.environ.get("ASKPDF_E2E_LLM_MODELS", DEFAULT_MODEL).split(",")
+    if item.strip()
+]
 PDF = Path(os.environ.get("ASKPDF_E2E_PDF", "/tmp/attention.pdf"))
 DECLINE = "The attached documents do not address this question."
 
@@ -49,7 +54,7 @@ def indexing_ready(status_body: dict) -> bool:
         return True
     projection = (status_body.get("document_processing") or {}).get("projection") or {}
     vectors = str(projection.get("vector_status") or "")
-    if str(projection.get("status") or "") == "completed" and vectors in {"ready", "indexed"}:
+    if str(projection.get("status") or "") == "completed" and vectors in {"ready", "indexed", "completed"}:
         return True
     return str(status_body.get("status") or "") == "ready"
 
@@ -87,7 +92,7 @@ def set_workflow(thread_id: str, workflow_id: str) -> None:
     http_json("PUT", f"/api/threads/{thread_id}/settings", {"agent_workflow": {"workflow_id": workflow_id}})
 
 
-def chat(thread_id: str, question: str) -> tuple[int, str, dict]:
+def chat(thread_id: str, question: str, model: str) -> tuple[int, str, dict]:
     t0 = time.perf_counter()
     body = http_json(
         "POST",
@@ -95,7 +100,7 @@ def chat(thread_id: str, question: str) -> tuple[int, str, dict]:
         {
             "thread_id": thread_id,
             "question": question,
-            "llm_model": MODEL,
+            "llm_model": model,
             "use_web_search": False,
             "use_reranker": True,
             "context_window": 64000,
@@ -138,6 +143,11 @@ def chat(thread_id: str, question: str) -> tuple[int, str, dict]:
     return ms, answer, body
 
 
+def _model_slug(model: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", model).strip("-").lower()
+    return slug or "model"
+
+
 def _write_screenshot(
     path: Path,
     workflow: str,
@@ -145,8 +155,10 @@ def _write_screenshot(
     question: str,
     answer: str,
     passed: bool,
+    model: str,
 ) -> None:
     lines = [
+        f"model: {model}",
         f"workflow: {workflow}",
         f"scenario: {scenario}",
         f"pass: {passed}",
@@ -159,7 +171,7 @@ def _write_screenshot(
     try:
         from PIL import Image, ImageDraw, ImageFont
 
-        img = Image.new("RGB", (900, 420), color=(248, 249, 251))
+        img = Image.new("RGB", (900, 440), color=(248, 249, 251))
         draw = ImageDraw.Draw(img)
         font = ImageFont.load_default()
         y = 12
@@ -188,6 +200,19 @@ def export_trace_scores(thread_id: str, run_id: str) -> list[dict]:
     return scores
 
 
+def encoder_pass(answer: str) -> bool:
+    return (
+        DECLINE not in answer
+        and "does not specify" not in answer.casefold()
+        and "provided context" not in answer.casefold()
+        and re.search(r"\b6\b", answer or "") is not None
+    )
+
+
+def tokyo_pass(answer: str) -> bool:
+    return answer.strip() == DECLINE
+
+
 EXTRA_SCENARIOS_BY_WORKFLOW = {
     "router_rag_agent": [
         (
@@ -198,6 +223,11 @@ EXTRA_SCENARIOS_BY_WORKFLOW = {
                 and "does not specify" not in a.casefold()
                 and re.search(r"\btransformer\b", a or "", re.I) is not None
             ),
+        ),
+        (
+            "encoder_natural",
+            "How many encoder layers does the Transformer architecture use in the Attention paper?",
+            encoder_pass,
         ),
     ],
     "corrective_self_rag_agent": [
@@ -211,16 +241,21 @@ EXTRA_SCENARIOS_BY_WORKFLOW = {
                 and "attention is all you need" in (a or "").casefold()
             ),
         ),
+        (
+            "encoder_natural",
+            "How many encoder layers does the Transformer architecture use in the Attention paper?",
+            encoder_pass,
+        ),
     ],
 }
 
 
 SCENARIOS = [
-    ("tokyo", "What is the population of Tokyo?", lambda a: a.strip() == DECLINE),
+    ("tokyo", "What is the population of Tokyo?", tokyo_pass),
     (
         "encoder",
         "How many encoder layers does the base Transformer use? Reply with the number only.",
-        lambda a: DECLINE not in a and re.search(r"\b6\b", a or "") is not None,
+        encoder_pass,
     ),
     (
         "table2_big_enfr",
@@ -240,10 +275,10 @@ SCENARIOS = [
 ]
 
 
-def main() -> int:
-    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
-    project = http_json("POST", "/api/projects", {"name": "live-matrix", "description": "attention", "embedding_model": "BAAI/bge-m3"})
-    thread = http_json("POST", f"/api/projects/{project['id']}/threads", {"name": "matrix"})
+def run_matrix(model: str, sha: str) -> tuple[list[dict], str]:
+    slug = _model_slug(model)
+    project = http_json("POST", "/api/projects", {"name": f"live-matrix-{slug}", "description": "attention", "embedding_model": "BAAI/bge-m3"})
+    thread = http_json("POST", f"/api/projects/{project['id']}/threads", {"name": f"matrix-{slug}"})
     thread_id = thread["id"]
     upload_and_index(thread_id)
 
@@ -260,13 +295,14 @@ def main() -> int:
             *EXTRA_SCENARIOS_BY_WORKFLOW.get(workflow, []),
         ]
         for key, question, pred in scenario_list:
-            print(f"RUN {workflow}/{key} ...", flush=True)
-            ms, answer, body = chat(thread_id, question)
-            print(f"DONE {workflow}/{key} pass={bool(pred(answer))} ms={ms}", flush=True)
+            print(f"RUN [{model}] {workflow}/{key} ...", flush=True)
+            ms, answer, body = chat(thread_id, question, model)
+            passed = bool(pred(answer))
+            print(f"DONE [{model}] {workflow}/{key} pass={passed} ms={ms}", flush=True)
             run_id = str(body.get("run_id") or body.get("agent_run_id") or "")
             scores = export_trace_scores(thread_id, run_id) if run_id else []
-            passed = bool(pred(answer))
             row = {
+                "model": model,
                 "workflow": workflow,
                 "scenario": key,
                 "pass": passed,
@@ -279,14 +315,28 @@ def main() -> int:
                 ),
             }
             rows.append(row)
-            shot = ART / f"live-{workflow}-{key}.json"
-            shot.write_text(json.dumps({"answer": answer, "row": row}, indent=2), encoding="utf-8")
-            _write_screenshot(ART / f"live-{workflow}-{key}.png", workflow, key, question, answer, passed)
+            prefix = f"live-{_model_slug(model)}-{workflow}-{key}"
+            (ART / f"{prefix}.json").write_text(json.dumps({"answer": answer, "row": row}, indent=2), encoding="utf-8")
+            _write_screenshot(ART / f"{prefix}.png", workflow, key, question, answer, passed, model)
 
-    out = {"sha": sha, "model": MODEL, "thread_id": thread_id, "rows": rows}
-    (ART / "live-attention-matrix.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
-    print(json.dumps(out, indent=2))
-    return 0 if all(r["pass"] for r in rows) else 1
+    out = {"sha": sha, "model": model, "thread_id": thread_id, "rows": rows}
+    (ART / f"live-attention-matrix-{_model_slug(model)}.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
+    return rows, thread_id
+
+
+def main() -> int:
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
+    all_rows: list[dict] = []
+    thread_ids: dict[str, str] = {}
+    for model in MODELS:
+        rows, thread_id = run_matrix(model, sha)
+        all_rows.extend(rows)
+        thread_ids[model] = thread_id
+
+    combined = {"sha": sha, "models": MODELS, "thread_ids": thread_ids, "rows": all_rows}
+    (ART / "live-attention-matrix.json").write_text(json.dumps(combined, indent=2), encoding="utf-8")
+    print(json.dumps(combined, indent=2))
+    return 0 if all(r["pass"] for r in all_rows) else 1
 
 
 if __name__ == "__main__":
