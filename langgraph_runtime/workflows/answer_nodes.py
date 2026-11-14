@@ -22,8 +22,10 @@ from langgraph_runtime.agent.evidence_contract import normalized_canonical_sourc
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_BUDGET_REASONS, CORRECTIVE_WORKFLOW_ID
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.corrective_nodes import (
+    DOCUMENT_SCOPE_DECLINE_ANSWER,
     corrective_document_scope_decline,
     document_scope_decline,
+    explicit_corrective_document_fact_fallback,
     synthesized_answer_grounded_in_corrective_evidence,
 )
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
@@ -68,7 +70,10 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         decline = document_scope_decline(state)
         if decline:
             document_scope_declined = True
-    if decline is None and state.get("workflow_id") != PARALLEL_REFERENCE_WORKFLOW_ID:
+    if decline is None and state.get("workflow_id") not in {
+        PARALLEL_REFERENCE_WORKFLOW_ID,
+        CORRECTIVE_WORKFLOW_ID,
+    }:
         decline = state.get("attachment_scope_decline") or router_attachment_scope_decline(
             state, str(state.get("route") or "")
         )
@@ -264,6 +269,9 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         elif prose_grounded:
             answer = prose_answer
             gaps = []
+        elif (fact := explicit_corrective_document_fact_fallback(state)):
+            answer = fact
+            gaps = []
         else:
             answer = (
                 corrective_document_scope_decline(state)
@@ -278,7 +286,7 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         if gaps:
             answer += "\n\nUnresolved evidence gaps:\n" + "\n".join(f"- {gap}" for gap in gaps)
         reason = str(state.get("corrective_budget_exhausted_reason") or "")
-        if reason in CORRECTIVE_BUDGET_REASONS:
+        if reason in CORRECTIVE_BUDGET_REASONS and answer != DOCUMENT_SCOPE_DECLINE_ANSWER:
             answer += f"\n\nCorrection stopped because the {reason.replace('_', ' ')} budget was exhausted."
         data = {
             "status": NodeEventStatus.COMPLETED.value,
