@@ -11,6 +11,8 @@ from langgraph_runtime.workflows.parallel_contracts import (
 ROUTER_RAG_WORKFLOW_ID = "router_rag_agent"
 DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this question."
 ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE = 0.42
+# Auto orchestrator uses the same relevance floor when deciding router declines.
+ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE = ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE
 
 _LEXICAL_PROPER_NOUN_STOPWORDS = frozenset({
     "attention",

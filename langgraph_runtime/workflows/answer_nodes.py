@@ -182,7 +182,23 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         "output_refs": state_evidence_refs(state) or prefetch_refs(state.get("pre_fetch_bundle") or {}),
         "output_preview": {"answer": compact_preview(published["answer"])},
         "canvas_published": published["published"],
-        "evidence_packet_scores": _evidence_packet_scores_for_trace(evidence_packets(state), {}),
+        "evidence_packet_scores": _evidence_packet_scores_for_trace(
+            evidence_packets(state),
+            {
+                "document_sources": [
+                    *(
+                        item
+                        for item in (state.get("document_sources") or [])
+                        if isinstance(item, dict)
+                    ),
+                    *(
+                        item
+                        for item in ((state.get("pre_fetch_bundle") or {}).get("document_sources") or [])
+                        if isinstance(item, dict)
+                    ),
+                ],
+            },
+        ),
         "synthesizer_context_source": context_source,
         "synthesizer_context_chars": len(str(context or "")),
     }

@@ -9,7 +9,7 @@ from typing import Any, Dict, Mapping
 from langchain_core.runnables import RunnableConfig
 
 from langgraph_runtime.control_plane_client import delegate_sync
-from langgraph_runtime.workflows.corrective_nodes import (
+from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE,
 )

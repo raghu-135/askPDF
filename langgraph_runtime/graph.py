@@ -43,6 +43,7 @@ from langgraph_runtime.workflows.decision_nodes import (
 from langgraph_runtime.workflows.evidence import (
     append_evidence_packet as _append_evidence_packet,
     combine_evidence as _combine_evidence,
+    evidence_packets,
     evidence_text_limit as _evidence_text_limit,
     format_prefetch_summary as _format_prefetch_summary,
     prefetch_refs as _prefetch_refs,
@@ -123,7 +124,11 @@ from langgraph_runtime.workflows.runtime_invocation import (
     tool_config as _tool_config,
     tool_config_for_node as _tool_config_for_node,
 )
-from langgraph_runtime.workflows.workers import run_tool_worker, tool_worker_spec
+from langgraph_runtime.workflows.workers import (
+    _evidence_packet_scores_for_trace,
+    run_tool_worker,
+    tool_worker_spec,
+)
 from langgraph_runtime.workflows.routes import (
     evaluator_route,
     hitl_gate_route,
@@ -654,6 +659,10 @@ class NodeRegistry:
         except Exception as exc:
             _append_failed_node_event(state, config, WorkflowNodeType.CONTEXT_LOADER.value, started, exc)
             raise
+        prefetch_packet_scores = _evidence_packet_scores_for_trace(
+            evidence_packets(state) if state.get("evidence_packets") else [],
+            bundle,
+        )
         data = {
             "status": NodeEventStatus.COMPLETED.value,
             "document_source_count": len(bundle.get("document_sources", [])),
@@ -661,6 +670,7 @@ class NodeRegistry:
             "used_chat_id_count": len(bundle.get("used_chat_ids", [])),
             "used_memory_id_count": len(bundle.get("durable_memory_refs", [])),
             "memory_retrieval": bundle.get("durable_memory_retrieval_debug", {}),
+            "evidence_packet_scores": prefetch_packet_scores,
             "input_preview": {
                 "question": compact_preview(state.get("question")),
                 "settings": {
@@ -675,6 +685,7 @@ class NodeRegistry:
                 "semantic_history": compact_preview(bundle.get("semantic_history_text")),
                 "document_evidence": compact_preview(bundle.get("document_evidence_text")),
                 "durable_memory": compact_preview(bundle.get("durable_memory_text")),
+                "evidence_packet_scores": prefetch_packet_scores,
             },
         }
         _log_node_end(state, WorkflowNodeType.CONTEXT_LOADER.value, started, data)
