@@ -86,6 +86,21 @@ def test_orchestrator_keeps_in_scope_when_assessment_marks_doc_packet_relevant()
     assert orchestrator_document_scope_decline(state) is None
 
 
+def test_orchestrator_tokyo_canonical_decline_when_context_loader_has_document_hits():
+    state = {
+        "workflow_id": PARALLEL_REFERENCE_WORKFLOW_ID,
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "abc" * 8}],
+            "document_evidence_text": "Attention paper discusses transformer encoder layers.",
+            "document_sources": [{"file_hash": "abc" * 8, "score": 0.55}],
+        },
+        "document_sources": [{"file_hash": "abc" * 8, "score": 0.55}],
+        "question": "What is the population of Tokyo?",
+        "evidence_packets": [],
+    }
+    assert orchestrator_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
 def test_orchestrator_tokyo_declines_canonical_despite_non_document_packets():
     state = {
         "workflow_id": PARALLEL_REFERENCE_WORKFLOW_ID,
