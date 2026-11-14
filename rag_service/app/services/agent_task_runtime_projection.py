@@ -8,7 +8,7 @@ import uuid
 from contextvars import ContextVar
 from functools import wraps
 from datetime import timedelta
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from sqlalchemy import func
 from sqlalchemy.future import select
@@ -319,6 +319,30 @@ def _enrich_gap_label(gap: str, todo_titles: Mapping[str, str]) -> str:
     return text
 
 
+def _canonical_gap_lines(gaps: Iterable[Any]) -> list[str]:
+    return list(dict.fromkeys(
+        gap_display_line(value)
+        for value in gaps
+        if gap_display_line(value)
+    ))
+
+
+def _merge_review_display_gaps(gaps: list[str], warnings: list[dict[str, Any]]) -> list[str]:
+    merged = list(dict.fromkeys(gap_display_line(value) for value in gaps if gap_display_line(value)))
+    for entry in warnings:
+        if str(entry.get("code") or "") != "evidence_critic_issues":
+            continue
+        details = entry.get("details") if isinstance(entry.get("details"), Mapping) else {}
+        issues = details.get("issues") if isinstance(details, Mapping) else []
+        if not isinstance(issues, list):
+            continue
+        for issue in issues:
+            line = gap_display_line(issue)
+            if line and line not in merged:
+                merged.append(line)
+    return list(dict.fromkeys(merged))
+
+
 def _filter_interrupt_gaps(gaps: list[str], provisional_answer: str, task_result: Mapping[str, Any]) -> list[str]:
     manifest: list[Any] = []
     for key in ("task_evidence_manifest", "evidence_manifest", "artifact_manifest"):
@@ -604,6 +628,7 @@ async def apply_neutral_task_completion(
                 task_result,
             )
             warnings = _scrub_review_warnings(warnings, gaps)
+            display_gaps = _merge_review_display_gaps(gaps, warnings)
             disposition = runtime_status
             pending: dict[str, Any] | None = None
             if runtime_status == "completed" and dimensions:
@@ -619,7 +644,7 @@ async def apply_neutral_task_completion(
                     "continuation_binding_present": bool(run.runtime_binding_json),
                     "provisional_artifact_id": final_artifact_id,
                     "provisional_answer": str(task_result.get("text") or ""),
-                    "warnings": warnings, "gaps": gaps,
+                    "warnings": warnings, "gaps": display_gaps,
                     "usage": {**budget, "exhausted_dimensions": dimensions},
                 }
                 event_type = "task.budget_review_requested"
@@ -639,7 +664,7 @@ async def apply_neutral_task_completion(
                         "allowed_actions": ["accept", "retry_with_input"],
                         "provisional_artifact_id": final_artifact_id,
                         "provisional_answer": str(task_result.get("text") or ""),
-                        "warnings": warnings, "gaps": gaps,
+                        "warnings": warnings, "gaps": _merge_review_display_gaps(gaps, warnings),
                         "usage": _budget_usage_payload(budget),
                         "review_round": review_round, "max_review_rounds": max_rounds,
                     }
@@ -728,10 +753,11 @@ async def apply_runtime_task_delta(
     task_result = dict(result_envelope.get("task_result") or {}) if isinstance(result_envelope.get("task_result"), Mapping) else {}
     if task_result:
         outer_warnings = [dict(value) for value in result_envelope.get("warnings") or [] if isinstance(value, Mapping)]
-        outer_gaps = [str(value) for value in result_envelope.get("incomplete_reasons") or []]
+        outer_gaps = _canonical_gap_lines(result_envelope.get("incomplete_reasons") or [])
+        task_gaps = _canonical_gap_lines(task_result.get("gaps") or [])
         if outer_warnings != [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)]:
             raise RuntimeTaskProjectionConflict("runtime result warnings disagree with the canonical task result")
-        if outer_gaps != [str(value) for value in task_result.get("gaps") or []]:
+        if outer_gaps != task_gaps:
             raise RuntimeTaskProjectionConflict("runtime result gaps disagree with the canonical task result")
         if result_envelope.get("result_outcome") != task_result.get("status"):
             raise RuntimeTaskProjectionConflict("runtime result outcome disagrees with the canonical task result")
@@ -1038,8 +1064,35 @@ async def apply_runtime_task_delta(
             if delta.pending_interrupt is not None:
                 operation = str(delta.pending_interrupt.get("operation") or "")
                 if operation == "set" and isinstance(delta.pending_interrupt.get("value"), Mapping):
+                    interrupt_value = dict(translated_value(delta.pending_interrupt["value"]))
+                    interrupt_warnings = [
+                        dict(value) for value in interrupt_value.get("warnings") or []
+                        if isinstance(value, Mapping)
+                    ]
+                    interrupt_gaps = _canonical_gap_lines(interrupt_value.get("gaps") or [])
+                    if task_result:
+                        enriched_gaps = _filter_interrupt_gaps(
+                            _enrich_result_gaps(
+                                task.budgets_json if isinstance(task.budgets_json, Mapping) else {},
+                                _canonical_gap_lines(task_result.get("gaps") or []),
+                                task_result,
+                                guidance_texts=_task_guidance_texts(task.config_json),
+                            ),
+                            str(task_result.get("text") or ""),
+                            task_result,
+                        )
+                        enriched_warnings = _scrub_review_warnings(
+                            [dict(value) for value in task_result.get("warnings") or [] if isinstance(value, Mapping)],
+                            enriched_gaps,
+                        )
+                        interrupt_gaps = _merge_review_display_gaps(enriched_gaps, enriched_warnings)
+                        interrupt_warnings = enriched_warnings
+                    elif interrupt_warnings:
+                        interrupt_gaps = _merge_review_display_gaps(interrupt_gaps, interrupt_warnings)
+                    interrupt_value["gaps"] = interrupt_gaps
+                    interrupt_value["warnings"] = interrupt_warnings
                     pending = normalize_pending_interrupt_payload({
-                        **translated_value(delta.pending_interrupt["value"]),
+                        **interrupt_value,
                         "resume_guard": run_interrupt_resume_guard(run),
                     })
                     replace_jsonb_field(run, "pending_interrupt_json", pending)
@@ -1126,7 +1179,7 @@ async def apply_runtime_task_delta(
                             "provisional_artifact_id": final_artifact_id,
                             "provisional_answer": str(task_result.get("text") or ""),
                             "warnings": warnings,
-                            "gaps": gaps,
+                            "gaps": _merge_review_display_gaps(gaps, warnings),
                             "usage": _budget_usage_payload(task.budgets_json if isinstance(task.budgets_json, Mapping) else {}),
                         }
                         replace_jsonb_field(run, "pending_interrupt_json", pending)
@@ -1144,7 +1197,7 @@ async def apply_runtime_task_delta(
                             causal_key=f"run:{agent_run_id}:result-review:{review_round}",
                             payload={
                                 "interrupt_id": pending["interrupt_id"], "result_outcome": "completed_with_warnings",
-                                "warnings": warnings, "gaps": gaps, "review_round": review_round,
+                                "warnings": warnings, "gaps": pending["gaps"], "review_round": review_round,
                             },
                         )
                     else:
