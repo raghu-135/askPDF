@@ -1,12 +1,22 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Typography, type SxProps, type Theme } from '@mui/material';
 import dynamic from 'next/dynamic';
-import remarkGfm from 'remark-gfm';
+import 'katex/dist/katex.min.css';
+import {
+  conversationRehypePlugins,
+  conversationRemarkPlugins,
+  prepareConversationMarkdown,
+} from '../../lib/conversation-markdown-plugins';
 
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 
 const MarkdownContent = React.memo(function MarkdownContent({ content }: { content: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>;
+  const prepared = useMemo(() => prepareConversationMarkdown(content), [content]);
+  return (
+    <ReactMarkdown remarkPlugins={conversationRemarkPlugins} rehypePlugins={conversationRehypePlugins}>
+      {prepared}
+    </ReactMarkdown>
+  );
 });
 
 export const conversationMarkdownSx: SxProps<Theme> = {
@@ -24,6 +34,7 @@ export const conversationMarkdownSx: SxProps<Theme> = {
   '& pre code': { overflowWrap: 'normal', wordBreak: 'normal' },
   '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', mb: 1 },
   '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.5 },
+  '& .katex-display': { display: 'block', maxWidth: '100%', overflowX: 'auto', mb: 1 },
 };
 
 export function ConversationMarkdown({
