@@ -231,13 +231,8 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         return None
     doc_packets = _document_evidence_packets(state)
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
-    if (bundle.get("document_sources") or state.get("document_sources")) and str(
-        bundle.get("document_evidence_text") or ""
-    ).strip():
-        lexical_decline = lexical_attachment_scope_decline(state)
-        if lexical_decline is not None:
-            return lexical_decline
-        return None
+    if bundle.get("document_sources") or state.get("document_sources"):
+        return lexical_attachment_scope_decline(state)
     score_decline = post_retrieval_attachment_decline(state)
     if score_decline:
         return score_decline
