@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from langgraph_runtime.workflows.enums import (
     AnswerQualityRoute,
+    AutoOrchestratorRoute,
     CorrectiveRetrievalRoute,
     EvaluatorRoute,
     GroundedAnswerRoute,
@@ -139,6 +140,20 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
             "accept_partial": [WorkflowNodeType.FINALIZER.value],
         },
     },
+    RouteFunctionId.AUTO_ORCHESTRATOR.value: {
+        "route_kind": "conditional",
+        "allowed_source_types": [WorkflowNodeType.AUTO_ORCHESTRATOR.value],
+        "route_labels": [route.value for route in AutoOrchestratorRoute],
+        "target_types_by_label": {
+            AutoOrchestratorRoute.DELEGATE.value: [WorkflowNodeType.WORKFLOW_DELEGATE.value],
+            AutoOrchestratorRoute.PLAN_APPROVAL.value: [
+                WorkflowNodeType.HITL_GATE.value,
+                WorkflowNodeType.WORKFLOW_DELEGATE.value,
+                WorkflowNodeType.FINALIZER.value,
+            ],
+            AutoOrchestratorRoute.DECLINE.value: [WorkflowNodeType.FINALIZER.value],
+        },
+    },
 }
 
 ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
@@ -189,6 +204,23 @@ ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
         "continue": {"display_name": "Continue research", "description": "Grant another budget tranche.", "order": 0},
         "steer": {"display_name": "Steer and continue", "description": "Apply guidance and grant another tranche.", "order": 1},
         "accept_partial": {"display_name": "Accept partial", "description": "Complete with the provisional answer.", "order": 2},
+    },
+    RouteFunctionId.AUTO_ORCHESTRATOR.value: {
+        AutoOrchestratorRoute.DELEGATE.value: {
+            "display_name": "Delegate",
+            "description": "Run the selected child workflow.",
+            "order": 0,
+        },
+        AutoOrchestratorRoute.PLAN_APPROVAL.value: {
+            "display_name": "Plan approval",
+            "description": "Pause for human approval of the delegation plan.",
+            "order": 1,
+        },
+        AutoOrchestratorRoute.DECLINE.value: {
+            "display_name": "Decline",
+            "description": "Finalize without delegating.",
+            "order": 2,
+        },
     },
 }
 

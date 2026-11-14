@@ -131,8 +131,14 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
             ttl_seconds=ttl_seconds,
             runtime="langgraph",
         )
+        scrubbed_options = {
+            key: value
+            for key, value in dict(request.options or {}).items()
+            if key != "mcp_execution_context_token"
+        }
         return replace(
             request,
+            options=scrubbed_options,
             input={
                 **dict(request.input),
                 "mcp_execution_context_token": token,

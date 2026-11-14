@@ -5,12 +5,14 @@ from typing import Any, Callable, Dict
 from langgraph_runtime.workflows.enums import (
     AgentRunResumeAction,
     AnswerQualityRoute,
+    AutoOrchestratorRoute,
     CorrectiveRetrievalRoute,
     EvaluatorRoute,
     GroundedAnswerRoute,
     PlannerRoute,
     RouteFunctionId,
     RouterRoute,
+    AUTO_ORCHESTRATOR_ROUTES,
     EVALUATOR_ROUTES,
     PLANNER_ROUTES,
     ROUTER_ROUTES,
@@ -51,6 +53,11 @@ def corrective_retrieval_route(state: Dict[str, Any]) -> str:
 def grounded_answer_route(state: Dict[str, Any]) -> str:
     route = state.get("grounded_answer_route")
     return route if route in GROUNDED_ANSWER_ROUTES else GroundedAnswerRoute.FINALIZE_CAUTIOUS.value
+
+
+def auto_orchestrator_route(state: Dict[str, Any]) -> str:
+    route = state.get("auto_orchestrator_route")
+    return route if route in AUTO_ORCHESTRATOR_ROUTES else AutoOrchestratorRoute.DECLINE.value
 
 
 def hitl_gate_route(state: Dict[str, Any]) -> str:
@@ -102,6 +109,8 @@ def route_function_for_edge(
             return deep_task_route
         if route_fn_id == RouteFunctionId.BUDGET_REVIEW.value:
             return budget_review_route
+        if route_fn_id == RouteFunctionId.AUTO_ORCHESTRATOR.value:
+            return auto_orchestrator_route
         raise ValueError(f"Unknown route function: {route_fn_id}")
 
     raise ValueError(f"Conditional edge from {source} must declare route_fn")

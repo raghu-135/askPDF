@@ -131,6 +131,9 @@ class WorkflowNodeType(str, Enum):
     DEEP_COORDINATOR = "deep_coordinator"
     DEEP_TASK_SYNTHESIZER = "deep_task_synthesizer"
     EVIDENCE_CRITIC = "evidence_critic"
+    AUTO_ORCHESTRATOR = "auto_orchestrator"
+    WORKFLOW_DELEGATE = "workflow_delegate"
+    DELEGATE_SYNTHESIZER = "delegate_synthesizer"
 
 
 class ToolName(str, Enum):

@@ -216,12 +216,16 @@ def _context(
         # neutral context field rather than relying on ORM serialization.
         run_context["run"].resolved_spec_json = resolved_spec
     request_payload = value.get("request_payload")
+    # Prepared MCP grants live on request.input; options may still carry the parent
+    # delegation token and must not replace the child grant.
     request_values = {
         **(dict(request_payload) if isinstance(request_payload, Mapping) else {}),
-        **dict(request.input or {}),
         **dict(request.options or {}),
+        **dict(request.input or {}),
     }
-    mcp_token = request_values.get("mcp_execution_context_token")
+    mcp_token = (request.input or {}).get("mcp_execution_context_token") or request_values.get(
+        "mcp_execution_context_token"
+    )
     if mcp_token:
         run_context["mcp_execution_context_token"] = str(mcp_token)
     # Only the top-level request needs attribute access for graph execution.

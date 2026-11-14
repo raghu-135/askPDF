@@ -66,6 +66,39 @@ from app.time_utils import iso_utc_z
 TRACE_SCHEMA_VERSION = 1
 
 
+def _delegation_technical_details(result: Any) -> Dict[str, Any]:
+    """Surface child delegation identifiers on the persisted debug trace."""
+
+    if not isinstance(result, Mapping):
+        return {}
+    details: Dict[str, Any] = {}
+    for key in (
+        "child_run_id",
+        "child_workflow_id",
+        "delegate_child_run_id",
+        "delegate_child_workflow_id",
+        "agent_task_id",
+    ):
+        value = result.get(key)
+        if value not in (None, ""):
+            details[key] = value
+    nested = result.get("debug_trace")
+    if isinstance(nested, Mapping):
+        technical = nested.get("technical_details")
+        if isinstance(technical, Mapping):
+            for key, value in technical.items():
+                if value not in (None, "") and key not in details:
+                    details[key] = value
+    for event in reversed(_as_list(result.get("node_events"))):
+        if not isinstance(event, Mapping):
+            continue
+        for key in ("child_run_id", "child_workflow_id", "delegate_child_run_id", "delegate_child_workflow_id"):
+            value = event.get(key)
+            if value not in (None, "") and key not in details:
+                details[key] = value
+    return details
+
+
 class AgentTraceRecorder:
     """Small local OpenTelemetry wrapper for one agent run."""
 
@@ -476,6 +509,8 @@ class AgentTraceRecorder:
                 "askpdf.evidence_chars": event.get("evidence_chars"),
                 "askpdf.answer_chars": event.get("answer_chars"),
                 "askpdf.document_source_count": event.get("document_source_count"),
+                "askpdf.delegate.child_run_id": event.get("delegate_child_run_id") or event.get("child_run_id"),
+                "askpdf.delegate.child_workflow_id": event.get("delegate_child_workflow_id") or event.get("child_workflow_id"),
                 "askpdf.web_source_count": event.get("web_source_count"),
                 "askpdf.used_chat_id_count": event.get("used_chat_id_count"),
                 "askpdf.used_memory_id_count": event.get("used_memory_id_count"),
@@ -915,6 +950,12 @@ class AgentTraceRecorder:
         }
         if final_output:
             payload["final_output"] = final_output
+        technical_details = _delegation_technical_details(result)
+        if technical_details:
+            payload["technical_details"] = technical_details
+            trace_block = payload.get("trace")
+            if isinstance(trace_block, dict):
+                payload["trace"] = {**trace_block, "technical_details": technical_details}
         return payload
 
     def _span_to_dict(self, span: ReadableSpan) -> Dict[str, Any]:
