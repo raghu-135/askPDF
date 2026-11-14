@@ -17,11 +17,22 @@ ART = Path(os.environ.get("ASKPDF_E2E_ARTIFACTS", "/opt/cursor/artifacts"))
 ART.mkdir(parents=True, exist_ok=True)
 API = os.environ.get("ASKPDF_E2E_API_URL", "http://127.0.0.1:8000")
 DEFAULT_MODEL = os.environ.get("ASKPDF_E2E_LLM_MODEL", "openai/gpt-4.1-mini")
+DEFAULT_MODELS = f"{DEFAULT_MODEL},nvidia/nemotron-3.5-super"
 MODELS = [
     item.strip()
-    for item in os.environ.get("ASKPDF_E2E_LLM_MODELS", DEFAULT_MODEL).split(",")
+    for item in os.environ.get("ASKPDF_E2E_LLM_MODELS", DEFAULT_MODELS).split(",")
     if item.strip()
 ]
+RUNTIME_MODEL_ALIASES = {
+    "nvidia/nemotron-3.5-super": os.environ.get(
+        "ASKPDF_E2E_NEMOTRON_RUNTIME_MODEL",
+        "nvidia/nemotron-3-super-120b-a12b",
+    ),
+}
+
+
+def runtime_model_id(model: str) -> str:
+    return RUNTIME_MODEL_ALIASES.get(model, model)
 PDF = Path(os.environ.get("ASKPDF_E2E_PDF", "/tmp/attention.pdf"))
 DECLINE = "The attached documents do not address this question."
 
@@ -100,7 +111,7 @@ def chat(thread_id: str, question: str, model: str) -> tuple[int, str, dict]:
         {
             "thread_id": thread_id,
             "question": question,
-            "llm_model": model,
+            "llm_model": runtime_model_id(model),
             "use_web_search": False,
             "use_reranker": True,
             "context_window": 64000,

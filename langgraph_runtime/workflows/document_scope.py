@@ -288,6 +288,8 @@ def postprocess_grounded_document_answer(state: Mapping[str, Any], answer: str) 
     text = str(answer or "").strip()
     if not text or not thread_has_attached_documents(state):
         return text
+    if text.strip() == DOCUMENT_SCOPE_DECLINE_ANSWER or text.startswith(DOCUMENT_SCOPE_DECLINE_ANSWER + "\n"):
+        return DOCUMENT_SCOPE_DECLINE_ANSWER
     lexical = lexical_attachment_scope_decline(state)
     if lexical and text != lexical:
         return lexical
