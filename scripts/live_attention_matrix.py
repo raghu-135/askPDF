@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -159,7 +160,11 @@ def export_trace_scores(thread_id: str, run_id: str) -> list[dict]:
 
 SCENARIOS = [
     ("tokyo", "What is the population of Tokyo?", lambda a: a.strip() == DECLINE),
-    ("encoder", "How many encoder layers does the base Transformer use? Reply with the number only.", lambda a: "6" in a),
+    (
+        "encoder",
+        "How many encoder layers does the base Transformer use? Reply with the number only.",
+        lambda a: DECLINE not in a and re.search(r"\b6\b", a or "") is not None,
+    ),
     (
         "table2_big_enfr",
         "For the Transformer (big model) in Table 2, what is the EN-FR training cost in FLOPs? Reply with the value only.",
