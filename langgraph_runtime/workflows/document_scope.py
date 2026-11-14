@@ -12,6 +12,20 @@ ROUTER_RAG_WORKFLOW_ID = "router_rag_agent"
 DOCUMENT_SCOPE_DECLINE_ANSWER = "The attached documents do not address this question."
 ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE = 0.42
 
+_LEXICAL_PROPER_NOUN_STOPWORDS = frozenset({
+    "for",
+    "from",
+    "how",
+    "table",
+    "the",
+    "what",
+    "when",
+    "where",
+    "which",
+    "why",
+    "with",
+})
+
 def thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
     documents = bundle.get("documents")
@@ -30,9 +44,33 @@ def _score_from_mapping(source: Mapping[str, Any]) -> float | None:
     return None
 
 
-def document_retrieval_scores(state: Mapping[str, Any]) -> list[float]:
-    """Collect best-known document retrieval scores from prefetch and worker evidence."""
+def document_evidence_packets(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return [
+        packet
+        for packet in evidence_packets(dict(state))
+        if isinstance(packet, Mapping)
+        and any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or []))
+    ]
 
+
+def _packet_retrieval_score(packet: Mapping[str, Any]) -> float | None:
+    raw = packet.get("raw_retriever_score")
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    refs = packet.get("refs") if isinstance(packet.get("refs"), Mapping) else {}
+    source = refs.get("source") if isinstance(refs.get("source"), Mapping) else {}
+    return _score_from_mapping(source)
+
+
+def worker_document_retrieval_scores(state: Mapping[str, Any]) -> list[float]:
+    return [
+        score
+        for packet in document_evidence_packets(state)
+        if (score := _packet_retrieval_score(packet)) is not None
+    ]
+
+
+def prefetch_document_retrieval_scores(state: Mapping[str, Any]) -> list[float]:
     scores: list[float] = []
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
     for container in (
@@ -46,21 +84,13 @@ def document_retrieval_scores(state: Mapping[str, Any]) -> list[float]:
             score = _score_from_mapping(item)
             if score is not None:
                 scores.append(score)
-    for packet in state.get("evidence_packets") or []:
-        if not isinstance(packet, Mapping):
-            continue
-        if not any(str(source_id).startswith("doc:") for source_id in (packet.get("source_ids") or [])):
-            continue
-        raw = packet.get("raw_retriever_score")
-        if isinstance(raw, (int, float)):
-            scores.append(float(raw))
-            continue
-        refs = packet.get("refs") if isinstance(packet.get("refs"), Mapping) else {}
-        source = refs.get("source") if isinstance(refs.get("source"), Mapping) else {}
-        score = _score_from_mapping(source)
-        if score is not None:
-            scores.append(score)
     return scores
+
+
+def document_retrieval_scores(state: Mapping[str, Any]) -> list[float]:
+    """Collect best-known document retrieval scores from prefetch and worker evidence."""
+
+    return [*prefetch_document_retrieval_scores(state), *worker_document_retrieval_scores(state)]
 
 
 def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
@@ -68,16 +98,26 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
 
     if not thread_has_attached_documents(state):
         return None
-    scores = document_retrieval_scores(state)
-    if scores and max(scores) < ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+    doc_packets = document_evidence_packets(state)
+    worker_scores = worker_document_retrieval_scores(state)
+    if doc_packets:
+        if worker_scores:
+            if max(worker_scores) < ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+                return DOCUMENT_SCOPE_DECLINE_ANSWER
+            return None
+        if any(str(packet.get("content") or "").strip() for packet in doc_packets):
+            return None
+    prefetch_scores = prefetch_document_retrieval_scores(state)
+    if prefetch_scores and max(prefetch_scores) < ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
         return DOCUMENT_SCOPE_DECLINE_ANSWER
     return None
 
 
 def _salient_proper_nouns(question: str) -> list[str]:
     return [
-        match.group(0).lower()
+        term
         for match in re.finditer(r"\b[A-Z][a-z]{2,}\b", str(question or ""))
+        if (term := match.group(0).lower()) not in _LEXICAL_PROPER_NOUN_STOPWORDS
     ]
 
 
