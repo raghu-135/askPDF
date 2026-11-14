@@ -107,7 +107,7 @@ def chat(thread_id: str, question: str) -> tuple[int, str, dict]:
         answer = str(body["assistant_message"].get("content") or "")
     run_id = str(body.get("run_id") or body.get("agent_run_id") or "")
     if not answer.strip() and run_id:
-        deadline = time.time() + 120
+        deadline = time.time() + 300
         while time.time() < deadline:
             try:
                 payload = http_json("GET", f"/api/agent-runs/{run_id}?thread_id={thread_id}")
@@ -121,9 +121,20 @@ def chat(thread_id: str, question: str) -> tuple[int, str, dict]:
                     or (agent_run.get("result") if isinstance(agent_run.get("result"), dict) else {}).get("final_answer")
                     or answer
                 )
-                if answer.strip():
+                status = str(agent_run.get("status") or "").casefold()
+                if answer.strip() or status in {"completed", "failed", "cancelled"}:
                     break
-            time.sleep(1)
+            time.sleep(2)
+    if not answer.strip():
+        try:
+            msgs = http_json("GET", f"/api/threads/{thread_id}/messages?limit=5")
+            for item in reversed(msgs if isinstance(msgs, list) else msgs.get("messages") or []):
+                if isinstance(item, dict) and str(item.get("role") or "") == "assistant":
+                    answer = str(item.get("content") or answer)
+                    if answer.strip():
+                        break
+        except urllib.error.HTTPError:
+            pass
     return ms, answer, body
 
 
