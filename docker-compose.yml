@@ -413,7 +413,9 @@ services:
     build:
       context: .
       dockerfile: langgraph_runtime/Dockerfile
-    command: ["python", "-m", "langgraph_runtime.migrate"]
+    command: ["/bin/sh", "/opt/askpdf/docker_compose_db_migrate.sh", "langgraph_runtime.migrate"]
+    volumes:
+      - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
@@ -428,7 +430,7 @@ services:
     build:
       context: .
       dockerfile: rag_service/Dockerfile
-    command: ["python", "-m", "app.db.migrate"]
+    command: ["/bin/sh", "/opt/askpdf/docker_compose_db_migrate.sh", "app.db.migrate"]
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
       - TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/test_askpdf
@@ -446,6 +448,7 @@ services:
         condition: service_healthy
     volumes:
       - ./rag_service:/app
+      - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
 
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.36.2
@@ -483,6 +486,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   browser-capture:
     build:

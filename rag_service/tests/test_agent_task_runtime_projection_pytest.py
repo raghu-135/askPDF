@@ -415,6 +415,42 @@ async def test_warning_result_enters_review_in_the_delta_transaction(
 
 
 @pytest.mark.asyncio
+async def test_result_gap_projection_accepts_structured_gap_messages(
+    test_session_maker, sample_thread,
+):
+    """Structured gap objects must normalize to the same lines as incomplete_reasons."""
+    task, run = await _task_and_run(test_session_maker, sample_thread)
+    message = "Sales figures were not found in the document."
+    delta = _delta(
+        run_id=run.id,
+        operation_id="structured-gap",
+        event_id=f"{run.id}:attempt:1:operation:structured-gap:result",
+        task_version=task.version,
+        plan_revision=0,
+        plan=_plan("evidence-a"),
+        todos=({"id": "evidence-a", "status": "completed", "progress": 100},),
+        budget_calls=1,
+        interrupt={"operation": "clear"},
+    )
+    delta = replace(delta, result={
+        "status": "completed",
+        "result_outcome": "completed_with_warnings",
+        "warnings": [],
+        "incomplete_reasons": [message],
+        "task_result": {
+            "status": "completed_with_warnings",
+            "text": "Provisional report.",
+            "warnings": [],
+            "gaps": [{"code": "MISSING_SALES_FIGURES", "message": message}],
+            "usage": {},
+        },
+    })
+    await apply_runtime_task_delta(task_id=task.id, agent_run_id=run.id, delta=delta)
+    stored_run = await repository.get_task_run(task.id)
+    assert stored_run.pending_interrupt_json["gaps"] == [message]
+
+
+@pytest.mark.asyncio
 async def test_warning_result_honors_product_cancel_over_result_review(
     test_session_maker, sample_thread,
 ):

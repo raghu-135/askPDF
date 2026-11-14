@@ -10,8 +10,7 @@ import TimerOutlinedIcon from '@mui/icons-material/TimerOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Chip, CircularProgress, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { ConversationMarkdown } from '../conversation/ConversationMarkdown';
 import { getAgentRunOperationDetails, type AgentRunOperationDetail } from '../../lib/api';
 import type { TraceOperationView, TraceRunView } from '../agent-debug/agent-trace-projection';
 import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from './agent-graph-types';
@@ -557,7 +556,7 @@ function AgentExecutionView({
                   <Tooltip title="Copy answer"><IconButton size="small" onClick={() => void copyAnswer()}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
                 </Stack>
                 <Box sx={{ minWidth: 0, maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', '& pre': { maxWidth: '100%', overflowX: 'auto' }, '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto' }, '& a': { overflowWrap: 'anywhere' } }}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalOutput.answer}</ReactMarkdown>
+                  <ConversationMarkdown content={finalOutput.answer} />
                 </Box>
               </Box>
             )}

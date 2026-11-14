@@ -34,6 +34,7 @@ from app.services.agent_task_runtime_projection import (
 )
 from app.services.agent_task_maintenance import task_maintenance_interval_seconds, run_task_maintenance
 from app.runtime.adapter import RuntimeInvocationContext
+from runtime_protocol.research_gaps import gap_display_line
 from runtime_protocol.contracts import (
     AgentRuntimeRequest,
     AgentRuntimeResult,
@@ -986,7 +987,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                     delta_result["task_result"] = dict(canonical_task_result)
                     delta_result["result_outcome"] = canonical_task_result["status"]
                     delta_result["incomplete_reasons"] = list(
-                        dict.fromkeys(str(value) for value in canonical_task_result.get("gaps") or [])
+                        dict.fromkeys(
+                            gap_display_line(value)
+                            for value in canonical_task_result.get("gaps") or []
+                            if gap_display_line(value)
+                        )
                     )[:50]
                     delta_result["warnings"] = [
                         dict(value) for value in canonical_task_result.get("warnings") or []
@@ -1007,7 +1012,11 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             delta_result["task_result"] = dict(canonical_task_result)
             delta_result["result_outcome"] = str(canonical_task_result.get("status") or delta_result.get("result_outcome") or runtime_result.status)
             delta_result["incomplete_reasons"] = list(
-                dict.fromkeys(str(value) for value in canonical_task_result.get("gaps") or [])
+                dict.fromkeys(
+                    gap_display_line(value)
+                    for value in canonical_task_result.get("gaps") or []
+                    if gap_display_line(value)
+                )
             )[:50]
             delta_result["warnings"] = [
                 dict(value) for value in canonical_task_result.get("warnings") or []
