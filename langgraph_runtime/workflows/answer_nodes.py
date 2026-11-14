@@ -209,6 +209,22 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
         state.get("grounded_answer_route") == "finalize_cautious"
         or state.get("corrective_retrieval_route") == "insufficient"
     ):
+        scope = corrective_document_scope_decline(state)
+        if scope:
+            data = {
+                "status": NodeEventStatus.COMPLETED.value,
+                "event_name": "document_scope_declined",
+                "answer_chars": len(scope),
+                "output_preview": {"answer": compact_preview(scope)},
+            }
+            log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
+            return {
+                "final_answer": scope,
+                "reasoning": "",
+                "reasoning_available": False,
+                "reasoning_format": "none",
+                "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
+            }
         valid_source_ids = {
             normalized
             for packet in corrective_evidence_packets(state)
