@@ -119,6 +119,10 @@ import {
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
+import {
+    REVIEW_DECISION_COLUMN_MIN_HEIGHT,
+    REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT,
+} from '../lib/deep-research-review-panel-layout';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
 import type { DocumentSource } from '../lib/api';
 
@@ -1345,8 +1349,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     };
 
     useEffect(() => {
+        if (pendingHumanReview) return;
         scrollToBottom();
-    }, [messages.length, autoScroll]);
+    }, [messages.length, autoScroll, pendingHumanReview]);
 
     // Fetch available LLM models
     useEffect(() => {
@@ -1971,6 +1976,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     }
                     if (isLiveTraceTerminalEvent(event.event)) {
                         if (event.data?.response) response = event.data.response as ThreadChatResponse;
+                        if (
+                            event.event === 'interrupt.requested'
+                            && response?.status === 'awaiting_human'
+                            && response.agent_run_id
+                            && response.pending_interrupt
+                        ) {
+                            setPendingHumanReview({
+                                runId: response.agent_run_id,
+                                interrupt: response.pending_interrupt,
+                                localUserMessageId: response.user_message_id || tempUserMsg.id,
+                                localAssistantMessageId: response.assistant_message_id || tempAssistantMsg.id,
+                            });
+                            setHumanReviewError(null);
+                            setHumanReviewEditText(response.pending_interrupt.proposed_final_answer || response.answer || '');
+                            setLoading(false);
+                        }
                         const rawError = event.data?.error;
                         if (event.event === 'run.failed' && !event.data?.response) {
                             const formatted = formatContextLengthUserMessage(rawError);
@@ -2764,10 +2785,28 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const pendingReviewAvailability = pendingReviewOperation
         ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
         : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
+    const chatHumanReviewOpen = Boolean(pendingReviewInterrupt);
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
-            sx={{ p: 1, cursor: 'default' }}
+            sx={{
+                p: 1,
+                cursor: 'default',
+                ...(chatHumanReviewOpen ? { overflow: 'hidden', overflowX: 'hidden' } : {}),
+            }}
+            decisionBeforeTranscript={chatHumanReviewOpen}
+            transcriptSx={chatHumanReviewOpen ? {
+                flex: '0 0 auto',
+                maxHeight: REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT,
+                minHeight: 0,
+            } : undefined}
+            decisionSx={chatHumanReviewOpen ? {
+                flex: '1 1 0',
+                minHeight: REVIEW_DECISION_COLUMN_MIN_HEIGHT,
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+            } : undefined}
             header={(
             <ConversationHeader
                 models={availableModels}
