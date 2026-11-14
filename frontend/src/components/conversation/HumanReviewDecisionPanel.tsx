@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Button, Checkbox, FormControlLabel, TextField, Typography } from '@mui/material';
+import { Box, Button, Checkbox, Collapse, FormControlLabel, TextField, Typography } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import EditIcon from '@mui/icons-material/Edit';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { AgentRunPendingInterrupt, AgentRunResumeAction } from '../../lib/api';
 import { AgentRunResumeAction as ResumeAction, HitlSelectionMode } from '../../lib/enums';
+import type { ToolDisplayCatalog } from '../../lib/tool-approval-presentation';
+import { toolApprovalDisplayName, toolApprovalSummaryLine } from '../../lib/tool-approval-presentation';
 import { ResizableDecisionPanel } from './ResizableDecisionPanel';
 
 export type HumanReviewScopeOption = {
@@ -19,6 +22,7 @@ export function HumanReviewDecisionPanel({
   error,
   editText = '',
   scopeOptions = [],
+  toolCatalog,
   rootRef,
   onEditTextChange,
   onAction,
@@ -30,6 +34,7 @@ export function HumanReviewDecisionPanel({
   error?: string | null;
   editText?: string;
   scopeOptions?: HumanReviewScopeOption[];
+  toolCatalog?: ToolDisplayCatalog;
   rootRef?: React.RefObject<HTMLElement | null>;
   onEditTextChange?: (value: string) => void;
   onAction: (
@@ -53,6 +58,7 @@ export function HumanReviewDecisionPanel({
   );
   const selectableOptions = scopeOptions.length ? scopeOptions : interruptOptions;
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [argumentsExpanded, setArgumentsExpanded] = useState(false);
   const selectionMode = String(interrupt.selection_mode || HitlSelectionMode.Single);
   const multiSelect = selectionMode === HitlSelectionMode.Multi || selectionMode === HitlSelectionMode.SingleOrMulti || scopeOptions.length > 0;
   const editingScope = actions.has(ResumeAction.Edit) && scopeOptions.length > 0;
@@ -60,6 +66,11 @@ export function HumanReviewDecisionPanel({
     ? interrupt.proposed_tool : null;
   const isToolApproval = interrupt.type === 'tool_approval';
   const approvalScopeKind = String(interrupt.approval_scope_kind || 'run');
+  const toolSummary = useMemo(() => {
+    if (!isToolApproval || !proposedTool?.name) return null;
+    const args = proposedTool.arguments as Record<string, unknown> | undefined;
+    return toolApprovalSummaryLine(String(proposedTool.name), args, toolCatalog);
+  }, [isToolApproval, proposedTool, toolCatalog]);
 
   useEffect(() => {
     setSelectedIds(selectableOptions.map((option) => option.id));
@@ -81,46 +92,85 @@ export function HumanReviewDecisionPanel({
     return onAction(action, options);
   };
 
+  const approveOnceLabel = submitting === ResumeAction.Approve
+    ? (isToolApproval ? 'Approved, continuing...' : 'Approving...')
+    : (isToolApproval ? 'Approve once' : 'Approve');
+
   const actionButtons = (
     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-      {actions.has(ResumeAction.Approve) && <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>{submitting === ResumeAction.Approve ? 'Approving...' : isToolApproval ? 'Approve once' : 'Approve'}</Button>}
-      {actions.has(ResumeAction.ApproveForScope) && <Button size="small" variant="contained" color="secondary" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ApproveForScope)}>{submitting === ResumeAction.ApproveForScope ? 'Approving...' : `Approve for this ${approvalScopeKind}`}</Button>}
-      {actions.has(ResumeAction.ApproveSelected) && <Button size="small" variant="contained" disabled={disabled || Boolean(submitting) || selectedIds.length === 0} onClick={() => void submit(ResumeAction.ApproveSelected)}>{submitting === ResumeAction.ApproveSelected ? 'Approving...' : 'Approve selected'}</Button>}
-      {actions.has(ResumeAction.Edit) && <Button size="small" variant="contained" color="secondary" startIcon={<EditIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting) || (editingScope ? selectedIds.length === 0 : !editText.trim())} onClick={() => void submit(ResumeAction.Edit)}>{submitting === ResumeAction.Edit ? 'Saving...' : editingScope ? 'Approve selected scope' : 'Save edit'}</Button>}
-      {actions.has(ResumeAction.ContinueWithout) && <Button size="small" variant="outlined" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>{submitting === ResumeAction.ContinueWithout ? 'Continuing...' : isToolApproval ? `Skip this tool for this ${approvalScopeKind}` : 'Continue'}</Button>}
-      {actions.has(ResumeAction.Reject) && <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>{submitting === ResumeAction.Reject ? 'Rejecting...' : 'Reject'}</Button>}
+      {actions.has(ResumeAction.Approve) && (
+        <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>
+          {approveOnceLabel}
+        </Button>
+      )}
+      {actions.has(ResumeAction.ApproveForScope) && (
+        <Button size="small" variant="contained" color="secondary" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ApproveForScope)}>
+          {submitting === ResumeAction.ApproveForScope ? 'Approved, continuing...' : `Approve for this ${approvalScopeKind}`}
+        </Button>
+      )}
+      {actions.has(ResumeAction.ApproveSelected) && (
+        <Button size="small" variant="contained" disabled={disabled || Boolean(submitting) || selectedIds.length === 0} onClick={() => void submit(ResumeAction.ApproveSelected)}>
+          {submitting === ResumeAction.ApproveSelected ? 'Approving...' : 'Approve selected'}
+        </Button>
+      )}
+      {actions.has(ResumeAction.Edit) && (
+        <Button size="small" variant="contained" color="secondary" startIcon={<EditIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting) || (editingScope ? selectedIds.length === 0 : !editText.trim())} onClick={() => void submit(ResumeAction.Edit)}>
+          {submitting === ResumeAction.Edit ? 'Saving...' : editingScope ? 'Approve selected scope' : 'Save edit'}
+        </Button>
+      )}
+      {actions.has(ResumeAction.ContinueWithout) && (
+        <Button size="small" variant="outlined" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>
+          {submitting === ResumeAction.ContinueWithout ? 'Continuing...' : (isToolApproval ? `Skip this tool for this ${approvalScopeKind}` : 'Continue')}
+        </Button>
+      )}
+      {actions.has(ResumeAction.Reject) && (
+        <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>
+          {submitting === ResumeAction.Reject ? 'Rejecting...' : 'Reject'}
+        </Button>
+      )}
     </Box>
   );
 
-  const stickyFooterLayout = isToolApproval;
+  const panelTitle = isToolApproval && proposedTool?.name
+    ? `Approve ${toolApprovalDisplayName(String(proposedTool.name), toolCatalog)}?`
+    : (interrupt.title || (interrupt.proposed_tool ? 'Approve tool use?' : 'Human review required'));
 
   return (
     <ResizableDecisionPanel
-      title={interrupt.title || (interrupt.proposed_tool ? 'Approve tool use?' : 'Human review required')}
+      title={interrupt.title || panelTitle}
       variant="approval"
       rootRef={rootRef}
       horizontalInset={1}
-      fillColumn={stickyFooterLayout}
-      defaultRatio={stickyFooterLayout ? 0.42 : 0.3}
-      narrowDefaultRatio={stickyFooterLayout ? 0.46 : 0.32}
-      showResizeHandle={!stickyFooterLayout}
-      footer={stickyFooterLayout ? (
-        <>
-          {actionButtons}
-          {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
-          {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
-        </>
-      ) : undefined}
+      defaultRatio={isToolApproval ? 0.22 : 0.3}
+      narrowDefaultRatio={isToolApproval ? 0.26 : 0.32}
     >
-      <Box data-testid="chat-human-review-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minWidth: 0 }}>
-        {(interrupt.prompt || interrupt.body) && (
+      <Box data-testid="chat-human-review-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+        {isToolApproval && toolSummary && (
+          <Typography variant="body2" sx={{ wordBreak: 'break-word' }}>
+            {toolSummary}
+          </Typography>
+        )}
+        {!isToolApproval && (interrupt.prompt || interrupt.body) && (
           <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {interrupt.prompt || interrupt.body}
           </Typography>
         )}
         {isToolApproval && proposedTool?.arguments && (
-          <Box component="pre" sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem', maxHeight: 200, overflow: 'auto' }}>
-            {JSON.stringify(proposedTool.arguments, null, 2)}
+          <Box>
+            <Button
+              size="small"
+              color="inherit"
+              onClick={() => setArgumentsExpanded((open) => !open)}
+              endIcon={<ExpandMoreIcon sx={{ transform: argumentsExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />}
+              sx={{ textTransform: 'none', px: 0.5, minHeight: 28 }}
+            >
+              {argumentsExpanded ? 'Hide' : 'Show'} technical details
+            </Button>
+            <Collapse in={argumentsExpanded}>
+              <Box component="pre" sx={{ m: 0, mt: 0.5, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem', maxHeight: 160, overflow: 'auto' }}>
+                {JSON.stringify(proposedTool.arguments, null, 2)}
+              </Box>
+            </Collapse>
           </Box>
         )}
         {selectableOptions.length > 0 && (actions.has(ResumeAction.ApproveSelected) || editingScope) && (
@@ -150,13 +200,11 @@ export function HumanReviewDecisionPanel({
             sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'action.hover' } }}
           />
         )}
-        {!stickyFooterLayout ? (
-          <>
-            {actionButtons}
-            {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
-            {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
-          </>
+        {actionButtons}
+        {!submitting && disabled && disabledReason ? (
+          <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography>
         ) : null}
+        {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
       </Box>
     </ResizableDecisionPanel>
   );

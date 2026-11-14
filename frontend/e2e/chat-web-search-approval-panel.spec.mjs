@@ -11,51 +11,41 @@ test.beforeAll(() => {
   execFileSync(process.execPath, [buildScript], { cwd: path.join(__dirname, '..') });
 });
 
-async function assertApprovalButtonsFullyVisible(page) {
+async function assertCompactToolApprovalLayout(page) {
   const panel = page.getByTestId('chat-human-review-panel');
-  const footer = page.getByTestId('review-decision-footer');
   const approve = page.getByRole('button', { name: /Approve once/i });
-  const deny = page.getByRole('button', { name: /Skip this tool/i });
+  const composer = page.getByTestId('chat-composer');
+  const transcript = page.getByTestId('chat-transcript-frame');
 
   await expect(panel).toBeVisible();
-  await expect(footer).toBeVisible();
   await expect(approve).toBeVisible();
-  await expect(deny).toBeVisible();
+  await expect(composer).toBeVisible();
+  await expect(transcript).toBeVisible();
+  await expect(panel).toContainText(/Search the web for:/i);
 
   const viewport = page.viewportSize();
   const approveBox = await approve.boundingBox();
-  const denyBox = await deny.boundingBox();
-  const footerBox = await footer.boundingBox();
+  const composerBox = await composer.boundingBox();
+  const transcriptBox = await transcript.boundingBox();
   expect(approveBox).not.toBeNull();
-  expect(denyBox).not.toBeNull();
-  expect(footerBox).not.toBeNull();
-
-  for (const box of [approveBox, denyBox]) {
-    expect(box.y + box.height).toBeLessThanOrEqual((viewport?.height || 800) + 0.5);
-    expect(box.y).toBeGreaterThanOrEqual(0);
-  }
-
-  const overlap = await page.evaluate(() => {
-    const scroll = document.querySelector('[data-testid="chat-human-review-panel"]');
-    const foot = document.querySelector('[data-testid="review-decision-footer"]');
-    if (!scroll || !foot) return null;
-    return scroll.getBoundingClientRect().bottom - foot.getBoundingClientRect().top;
-  });
-  expect(overlap).not.toBeNull();
-  expect(overlap).toBeLessThanOrEqual(0.5);
+  expect(composerBox).not.toBeNull();
+  expect(transcriptBox).not.toBeNull();
+  expect(transcriptBox.height).toBeGreaterThan(80);
+  expect(composerBox.y).toBeGreaterThan(approveBox.y);
+  expect(composerBox.y + composerBox.height).toBeLessThanOrEqual((viewport?.height || 900) + 1);
 }
 
 const viewports = [
-  { name: '1280x800', width: 1280, height: 800 },
+  { name: '1440x900', width: 1440, height: 900 },
   { name: '1024x768', width: 1024, height: 768 },
 ];
 
-test.describe('Chat web search approval panel layout', () => {
+test.describe('Chat web search approval compact card', () => {
   for (const viewport of viewports) {
     test(viewport.name, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto(`file://${fixture}`);
-      await assertApprovalButtonsFullyVisible(page);
+      await assertCompactToolApprovalLayout(page);
     });
   }
 });

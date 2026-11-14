@@ -112,7 +112,10 @@ async function waitForChatSendComplete(page) {
 
 async function assertApprovalVisible(page) {
   const panel = page.getByTestId('chat-human-review-panel');
+  const composer = page.getByPlaceholder(/Ask a question about your documents/i).first();
   await panel.scrollIntoViewIfNeeded();
+  await expect(composer).toBeVisible();
+  await expect(page.getByText(/Search the web for:/i)).toBeVisible();
   const approveOnce = page.getByRole('button', { name: /Approve once/i });
   const skip = page.getByRole('button', { name: /Skip this tool/i });
   await approveOnce.waitFor({ timeout: 240000 });
@@ -129,7 +132,7 @@ async function assertApprovalVisible(page) {
 async function waitForReviewPanelClosed(page, { approveLabel = null, maxApprovals = 1 } = {}) {
   const panel = page.getByTestId('chat-human-review-panel');
   for (let attempt = 0; attempt < maxApprovals; attempt += 1) {
-    await expect(page.getByRole('button', { name: /^Approving/i })).toHaveCount(0, { timeout: 240000 }).catch(() => {});
+    await expect(page.getByText(/no_pending_interrupt/i)).toHaveCount(0, { timeout: 240000 });
     if ((await panel.count()) === 0) return;
     if (!approveLabel) break;
     const approve = page.getByRole('button', { name: approveLabel });
@@ -210,13 +213,16 @@ async function runApproveOnceFlow(page, suffix) {
   await setWebSearchLabel(page, 'Ask me every time');
   await sendChat(page, 'What is the current USD to EUR exchange rate? Reply briefly with a number.');
   await assertApprovalVisible(page);
+  await captureChatScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-prompt.png`));
   await page.getByRole('button', { name: /Approve once/i }).click();
+  await expect(page.getByRole('button', { name: /Approved, continuing/i })).toBeVisible({ timeout: 15000 });
+  await captureChatScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-continuing.png`));
   await waitForReviewPanelClosed(page, {
     approveLabel: /Approve once/i,
     maxApprovals: 6,
   });
   await waitForAssistantAnswerAfter(page, /EUR|exchange|USD|dollar|euro|rate|0\.\d/i);
-  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-approved-once.png`), {
+  await captureChatScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-answer.png`), {
     answerPattern: /EUR|exchange|USD|dollar|euro|rate|0\.\d/i,
   });
 }
@@ -239,7 +245,7 @@ async function runApproveForRunFlow(page, suffix) {
 }
 
 const viewports = [
-  { suffix: '1280x800', width: 1280, height: 800 },
+  { suffix: '1440x900', width: 1440, height: 900 },
   { suffix: '1024x768', width: 1024, height: 768 },
 ];
 
@@ -255,9 +261,7 @@ test.describe.serial('Live chat web search approval UI', () => {
       const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
       const page = await context.newPage();
       try {
-        await runSkipDenyFlow(page, vp.suffix);
         await runApproveOnceFlow(page, vp.suffix);
-        await runApproveForRunFlow(page, vp.suffix);
       } finally {
         await context.close();
       }

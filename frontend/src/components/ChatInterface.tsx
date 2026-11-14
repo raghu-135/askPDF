@@ -10,7 +10,6 @@ import {
     Chip,
     CircularProgress,
     Alert,
-    useMediaQuery,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -120,15 +119,9 @@ import {
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
-import {
-    DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
-    REVIEW_DECISION_COLUMN_MIN_HEIGHT,
-    REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT,
-    REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT,
-    REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT,
-    WORKBENCH_AUTO_SIDE_MIN_WIDTH,
-} from '../lib/deep-research-review-panel-layout';
 import { shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
+import { parseAgentRunResumeStreamEvent } from '../lib/agent-run-resume-stream';
+import type { ToolDisplayCatalog } from '../lib/tool-approval-presentation';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
 import type { DocumentSource } from '../lib/api';
 
@@ -878,6 +871,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
     const [humanReviewEditText, setHumanReviewEditText] = useState('');
     const [humanReviewCapabilityRevision, setHumanReviewCapabilityRevision] = useState(0);
+    const [toolDisplayCatalog, setToolDisplayCatalog] = useState<ToolDisplayCatalog>({});
     const { capabilities: humanReviewCapabilities, refresh: refreshHumanReviewCapabilities } = useAgentRunCapabilities(
         pendingHumanReview?.runId,
         activeThread?.id,
@@ -907,15 +901,16 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         getItemKey: (index) => visibleMessages[index]?.id ?? index,
     });
 
-    const stackedWorkbench = useMediaQuery(`(max-width:${WORKBENCH_AUTO_SIDE_MIN_WIDTH - 1}px)`);
-
     useEffect(() => {
-        if (!pendingHumanReview?.interrupt || !stackedWorkbench) return undefined;
-        window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: true } }));
-        return () => {
-            window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: false } }));
-        };
-    }, [pendingHumanReview?.interrupt?.interrupt_id, stackedWorkbench]);
+        let cancelled = false;
+        void getPromptTools().then(({ tools }) => {
+            if (cancelled) return;
+            setToolDisplayCatalog(Object.fromEntries(
+                (tools || []).map((tool: PromptToolDefinition) => [tool.id, { display_name: tool.display_name, description: tool.description }]),
+            ));
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, []);
 
     const setComposerText = useCallback((text: string) => {
         setComposerSeed(text);
@@ -1841,67 +1836,29 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 client_metadata: { source: 'chat_pending_review_panel' },
             }, (event) => {
                 if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
-                if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
+                if (
+                    humanReviewSubmissionKeyRef.current !== submissionKey
+                    && /^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)
+                ) {
                     setHumanReviewCapabilityRevision((revision) => revision + 1);
                     void refreshHumanReviewCapabilities();
                 }
-                if (event.event === '__result__' && event.data?.response) {
-                    const envelope = event.data.response as Record<string, unknown>;
-                    const agentRun = envelope.agent_run as Record<string, unknown> | undefined;
-                    const outcome = envelope.outcome as Record<string, unknown> | undefined;
-                    const resultJson = agentRun?.result_json as { answer?: string; final_answer?: string } | undefined;
-                    response = {
-                        ...envelope,
-                        agent_run: agentRun,
-                        answer: String(
-                            outcome?.answer
-                            || outcome?.final_answer
-                            || resultJson?.answer
-                            || resultJson?.final_answer
-                            || '',
-                        ),
-                    };
-                    setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: undefined }
-                        : current);
-                    return;
+                const terminalEvents = ['__result__', '__error__', 'run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'];
+                if (!terminalEvents.includes(event.event)) return;
+                const parsed = parseAgentRunResumeStreamEvent(event.event, event.data as Record<string, unknown> | undefined);
+                if (!parsed) return;
+                if (parsed.errorMessage) {
+                    terminalError = parsed.errorMessage;
+                } else if (Object.keys(parsed.response).length > 0) {
+                    response = parsed.response;
                 }
-                if (event.event === '__error__') {
-                    const rawError = event.data?.error;
-                    terminalError = String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.');
-                    setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: terminalError }
-                        : current);
-                    return;
+                const isFailure = ['__error__', 'run.failed', 'stream.error'].includes(event.event) && !response;
+                if (isFailure && !terminalError) {
+                    terminalError = 'Unable to resume the agent run.';
                 }
-                if (['run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'].includes(event.event)) {
-                    if (event.data?.response) {
-                        response = event.data.response;
-                    } else if (event.data?.agent_run) {
-                        const envelope = event.data as Record<string, unknown>;
-                        const agentRun = envelope.agent_run as Record<string, unknown> | undefined;
-                        const outcome = envelope.outcome as Record<string, unknown> | undefined;
-                        const resultJson = agentRun?.result_json as { answer?: string; final_answer?: string } | undefined;
-                        response = {
-                            ...envelope,
-                            agent_run: agentRun,
-                            answer: String(
-                                outcome?.answer
-                                || outcome?.final_answer
-                                || resultJson?.answer
-                                || resultJson?.final_answer
-                                || '',
-                            ),
-                        };
-                    }
-                    const rawError = event.data?.error;
-                    terminalError = ['run.failed', 'stream.error'].includes(event.event) && !response
-                        ? String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.')
-                        : undefined;
-                    setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: terminalError }
-                        : current);
-                }
+                setLiveExecution((current) => current?.messageId === liveMessageId
+                    ? { ...current, running: false, error: isFailure ? terminalError : undefined }
+                    : current);
             });
             if (!response) throw new Error(terminalError || 'The resume stream ended before returning a result.');
 
@@ -2869,13 +2826,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const pendingReviewAvailability = pendingReviewOperation
         ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
         : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
-    const chatHumanReviewOpen = Boolean(pendingReviewInterrupt);
-    const reviewTranscriptMaxHeight = chatHumanReviewOpen && stackedWorkbench
-        ? REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT
-        : REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT;
-    const reviewDecisionMinHeight = chatHumanReviewOpen && stackedWorkbench
-        ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
-        : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
+    const reviewControlsLocked = Boolean(humanReviewSubmitting);
 
     return (
         <ConversationPanelTemplate
@@ -2883,24 +2834,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             sx={{
                 p: 1,
                 cursor: 'default',
-                ...(chatHumanReviewOpen ? { overflow: 'hidden', overflowX: 'hidden' } : {}),
             }}
-            decisionBeforeTranscript={chatHumanReviewOpen}
-            transcriptSx={chatHumanReviewOpen ? {
-                flex: '0 0 auto',
-                maxHeight: reviewTranscriptMaxHeight,
-                minHeight: 0,
-            } : stackedWorkbench ? {
-                flex: '1 1 auto',
-                minHeight: 'min(44vh, 320px)',
-            } : undefined}
-            decisionSx={chatHumanReviewOpen ? {
-                flex: '1 1 0',
-                minHeight: reviewDecisionMinHeight,
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column',
-            } : undefined}
             header={(
             <ConversationHeader
                 models={availableModels}
@@ -3063,14 +2997,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     submitting={humanReviewSubmitting}
                     error={humanReviewError}
                     editText={humanReviewEditText}
-                    disabled={!pendingReviewAvailability.visible || !pendingReviewAvailability.enabled}
-                    disabledReason={pendingReviewAvailability.disabledReason}
+                    toolCatalog={toolDisplayCatalog}
+                    disabled={!reviewControlsLocked && (
+                        !pendingReviewAvailability.visible || !pendingReviewAvailability.enabled
+                    )}
+                    disabledReason={reviewControlsLocked ? undefined : pendingReviewAvailability.disabledReason}
                     rootRef={chatRootRef}
                     onEditTextChange={setHumanReviewEditText}
                     onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
                 />
             ) : undefined}
-            composer={!chatHumanReviewOpen ? (
+            composer={(
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
                 {editingMessageId && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
@@ -3113,7 +3050,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     onOpenMemoryReview={onOpenMemoryReview}
                 />
             </Box>
-            ) : undefined}
+            )}
             footer={(
             <>
             <ChatSettingsDialog
