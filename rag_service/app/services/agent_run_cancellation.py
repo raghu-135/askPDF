@@ -320,3 +320,136 @@ async def confirm_task_cancellation(
         },
     )
     return finalized
+
+
+_LIVE_RUNTIME_STATUSES = frozenset({"running", "awaiting_human", "paused", "pausing"})
+
+
+async def _finalize_cancelling_against_terminal_run(task: Any, run: Any) -> str:
+    """Align a cancelling task when its active run already reached a terminal state."""
+
+    from app.services import agent_task_repository as tasks
+    from app.services.agent_runtime_reconciliation import reconcile_run_by_id
+
+    if str(run.status) == "cancelled":
+        refreshed = await tasks.get_task(str(task.id))
+        if refreshed is not None and refreshed.status == AgentTaskStatus.CANCELLED.value:
+            return "not_required"
+        await abandon_pending_cancellation(task, run)
+        return "finalized"
+    status = await reconcile_run_by_id(str(run.id))
+    refreshed = await tasks.get_task(str(task.id))
+    if refreshed is not None and refreshed.status != AgentTaskStatus.CANCELLING.value:
+        return "projected" if status == "projected" else "finalized"
+    # Run ended without a projectable snapshot; treat as user cancellation.
+    if cancellation_confirm_deadline_elapsed(task, run):
+        await abandon_pending_cancellation(task, run)
+        return "finalized"
+    return "deferred"
+
+
+async def reconcile_stale_cancelling_task(task: Any, run: Any | None = None) -> str:
+    """Move a stale cancelling task toward its authoritative terminal state."""
+
+    from app.db.enums import AgentRunStatus
+    from app.services import agent_task_repository as tasks
+    from app.services.agent_runtime_reconciliation import reconcile_run_by_id
+
+    task_id = str(getattr(task, "id", "") or "")
+    if not task_id:
+        return "missing"
+    refreshed = await tasks.get_task(task_id)
+    if refreshed is None:
+        return "missing"
+    task = refreshed
+    if str(task.status) != AgentTaskStatus.CANCELLING.value:
+        return "not_required"
+
+    if run is None:
+        run = await tasks.get_task_run(task_id)
+
+    if run is not None and str(run.status) in {
+        AgentRunStatus.COMPLETED.value,
+        AgentRunStatus.FAILED.value,
+        AgentRunStatus.CANCELLED.value,
+        AgentRunStatus.EXPIRED.value,
+        AgentRunStatus.REJECTED.value,
+    }:
+        return await _finalize_cancelling_against_terminal_run(task, run)
+
+    if not cancellation_confirm_deadline_elapsed(task, run):
+        return "fresh"
+
+    if run is None:
+        await tasks.complete_task(task_id, status=AgentTaskStatus.CANCELLED.value, reason="cancelled_by_user")
+        return "finalized"
+
+    if cancellation_scheduled_on_run(run):
+        await finalize_product_local_cancellation(task, run)
+        return "finalized"
+
+    if str(run.status) in {AgentRunStatus.RUNNING.value, AgentRunStatus.AWAITING_HUMAN.value}:
+        metadata = dict(getattr(run, "run_metadata_json", None) or {})
+        if metadata.get("runtime_started") is not True:
+            await finalize_product_local_cancellation(task, run)
+            return "finalized"
+        try:
+            adapter = get_runtime_registry().get(definition_from_run(run))
+            inspection = await adapter.inspect_state(_request(task, run))
+        except AgentRuntimeError as exc:
+            if should_abandon_runtime_cancellation(task, run, error=exc):
+                await abandon_pending_cancellation(task, run, reason=str(exc.code or "cancelled_by_user"))
+                return "finalized"
+            return "deferred"
+        except Exception:
+            return "deferred"
+
+        runtime_status = str(
+            inspection.get("status") or (inspection.get("result") or {}).get("status") or ""
+        ).strip()
+        if inspection.get("continuation_available") and runtime_status in _LIVE_RUNTIME_STATUSES:
+            return "deferred"
+        if runtime_status in {"cancelled", "canceled"}:
+            terminal_result = inspection.get("result")
+            if not isinstance(terminal_result, Mapping):
+                terminal_result = {"status": "cancelled", "runtime_status": "cancelled"}
+            await confirm_task_cancellation(
+                task,
+                run,
+                result=terminal_result,
+                terminal_event_id=inspection.get("terminal_event_id"),
+            )
+            return "finalized"
+        if runtime_status in {"completed", "failed", "no_continuation"}:
+            await reconcile_run_by_id(str(run.id))
+            return "projected"
+        await abandon_pending_cancellation(task, run)
+        return "finalized"
+
+    if cancellation_confirm_deadline_elapsed(task, run):
+        if run is not None:
+            await abandon_pending_cancellation(task, run)
+        else:
+            await tasks.complete_task(task_id, status=AgentTaskStatus.CANCELLED.value, reason="cancelled_by_user")
+        return "finalized"
+    return "deferred"
+
+
+async def run_stale_cancellation_reconciliation(*, batch_size: int = 100, dry_run: bool = False) -> dict[str, int]:
+    """Reconcile leftover cancelling tasks during periodic maintenance."""
+
+    from app.services import agent_task_repository as tasks
+
+    counts = {"inspected": 0, "fresh": 0, "finalized": 0, "projected": 0, "deferred": 0, "not_required": 0, "missing": 0, "failed": 0}
+    for task in await tasks.list_stale_cancelling_tasks(limit=batch_size):
+        counts["inspected"] += 1
+        if dry_run:
+            counts["deferred"] += 1
+            continue
+        try:
+            run = await tasks.get_task_run(task.id)
+            status = await reconcile_stale_cancelling_task(task, run)
+            counts[status] = counts.get(status, 0) + 1
+        except Exception:
+            counts["failed"] += 1
+    return counts

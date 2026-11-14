@@ -499,6 +499,39 @@ async def release_stale_task_leases(*, limit: int = 100) -> int:
             return len(rows)
 
 
+async def list_stale_cancelling_tasks(*, limit: int = 100) -> list[AgentTask]:
+    """Return cancelling tasks whose confirmation deadline has elapsed and have no active lease."""
+
+    from app.services.agent_run_cancellation import cancellation_confirm_deadline_elapsed
+
+    now = utc_now()
+    bounded = max(1, min(int(limit), 500))
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(AgentTask)
+            .where(
+                AgentTask.status == AgentTaskStatus.CANCELLING.value,
+                or_(AgentTask.lease_owner.is_(None), AgentTask.lease_expires_at.is_(None), AgentTask.lease_expires_at < now),
+            )
+            .order_by(AgentTask.updated_at.asc(), AgentTask.id.asc())
+            .limit(max(bounded * 4, bounded))
+        )
+        candidates = list(result.scalars().all())
+    stale: list[AgentTask] = []
+    for task in candidates:
+        run = await get_task_run(task.id) if task.active_run_id else None
+        terminal_mismatch = (
+            run is not None
+            and str(run.status) in TERMINAL_TASK_RUN_STATUSES
+            and str(task.status) == AgentTaskStatus.CANCELLING.value
+        )
+        if cancellation_confirm_deadline_elapsed(task, run) or terminal_mismatch:
+            stale.append(task)
+        if len(stale) >= bounded:
+            break
+    return stale
+
+
 async def mark_artifact_deleted(task_id: Optional[str], artifact_id: str) -> None:
     async with async_session_maker() as session:
         async with session.begin():

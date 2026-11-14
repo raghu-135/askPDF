@@ -22,6 +22,7 @@ from app.services.agent_run_cancellation import (
     cancellation_scheduled_on_run,
     finalize_product_local_cancellation,
     honor_product_cancellation_before_runtime_start,
+    reconcile_stale_cancelling_task,
     request_task_cancellation,
     should_abandon_runtime_cancellation,
     should_finalize_cancel_on_terminal_runtime_ack,
@@ -597,6 +598,8 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
                 status=AgentTaskStatus.CANCELLED.value,
                 reason="cancelled_by_user",
             )
+        else:
+            await reconcile_stale_cancelling_task(task, active_run)
         refreshed = await tasks.get_task(task_id)
         if refreshed is not None and refreshed.status == AgentTaskStatus.CANCELLING.value:
             if should_abandon_runtime_cancellation(refreshed, active_run):
