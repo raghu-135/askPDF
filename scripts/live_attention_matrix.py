@@ -64,13 +64,16 @@ def http_json(method: str, path: str, payload: dict | None = None) -> dict:
 def indexing_ready(status_body: dict) -> bool:
     parsing = str((status_body.get("parsing") or {}).get("status") or "")
     indexing = str((status_body.get("indexing") or {}).get("status") or "")
-    if parsing in {"completed", "ready"} and indexing in {"completed", "ready"}:
-        return True
     projection = (status_body.get("document_processing") or {}).get("projection") or {}
     vectors = str(projection.get("vector_status") or "")
-    if str(projection.get("status") or "") == "completed" and vectors in {"ready", "indexed", "completed"}:
+    vector_ready = vectors in {"ready", "indexed", "completed"}
+    if str(projection.get("status") or "") == "completed" and vector_ready:
         return True
-    return str(status_body.get("status") or "") == "ready"
+    if parsing in {"completed", "ready"} and indexing in {"completed", "ready"} and vector_ready:
+        return True
+    if str(status_body.get("status") or "") == "ready" and vector_ready:
+        return True
+    return False
 
 
 def upload_and_index(thread_id: str) -> str:
@@ -341,6 +344,7 @@ def run_matrix(model: str, sha: str) -> tuple[list[dict], str]:
 
 
 def main() -> int:
+    (ART / "live-matrix-proof.exit").unlink(missing_ok=True)
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     all_rows: list[dict] = []
     thread_ids: dict[str, str] = {}
