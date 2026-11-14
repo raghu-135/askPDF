@@ -236,9 +236,8 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
     }
     if doc_packets and assessments:
         assessment_decline = _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
-        if assessment_decline is None:
-            return None
-        return assessment_decline
+        if assessment_decline is not None:
+            return assessment_decline
     score_decline = post_retrieval_attachment_decline(state)
     if score_decline:
         return score_decline

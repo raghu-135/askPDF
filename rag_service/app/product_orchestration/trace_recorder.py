@@ -480,6 +480,8 @@ class AgentTraceRecorder:
                 "askpdf.used_chat_id_count": event.get("used_chat_id_count"),
                 "askpdf.used_memory_id_count": event.get("used_memory_id_count"),
                 "askpdf.timeline_event_count": event.get("timeline_event_count"),
+                "askpdf.evidence_packet_count": event.get("evidence_packet_count"),
+                "askpdf.evidence_packet_scores": event.get("evidence_packet_scores"),
                 SpanAttributes.LLM_MODEL_NAME: llm_summary.get("model_name"),
                 "llm.response_chars": llm_summary.get("response_chars"),
                 SpanAttributes.LLM_TOKEN_COUNT_PROMPT: token_counts.get("prompt"),

@@ -14,6 +14,41 @@ from langgraph_runtime.workflows.state import runtime_node_id
 from langgraph_runtime.workflows.trace import refs_from_timeline
 
 
+def _retrieval_score_from_source(source: Dict[str, Any]) -> float | None:
+    for key in ("raw_retriever_score", "rerank_score", "score", "raw_score"):
+        value = source.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def _evidence_packet_scores_for_trace(
+    evidence_packets: list[Dict[str, Any]],
+    artifacts: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    scores = [
+        {
+            "id": packet.get("id"),
+            "raw_retriever_score": packet.get("raw_retriever_score"),
+        }
+        for packet in evidence_packets
+        if isinstance(packet, dict) and packet.get("raw_retriever_score") is not None
+    ]
+    if scores:
+        return scores
+    for idx, source in enumerate(artifacts.get("document_sources") or []):
+        if not isinstance(source, dict):
+            continue
+        raw_score = _retrieval_score_from_source(source)
+        if raw_score is None:
+            continue
+        scores.append({
+            "id": str(source.get("chunk_id") or source.get("file_hash") or f"document_source:{idx}"),
+            "raw_retriever_score": raw_score,
+        })
+    return scores[:50]
+
+
 @dataclass(frozen=True)
 class ToolWorkerSpec:
     node_name: str
@@ -220,14 +255,10 @@ async def run_tool_worker(
         },
         "evidence_chars": len(str(evidence or "")),
         "evidence_packet_count": len(evidence_packets),
-        "evidence_packet_scores": [
-            {
-                "id": packet.get("id"),
-                "raw_retriever_score": packet.get("raw_retriever_score"),
-            }
-            for packet in evidence_packets
-            if isinstance(packet, dict) and packet.get("raw_retriever_score") is not None
-        ],
+        "evidence_packet_scores": _evidence_packet_scores_for_trace(
+            evidence_packets,
+            artifacts if isinstance(artifacts, dict) else {},
+        ),
     }
     if "document_sources" in update:
         data["document_source_count"] = len(update["document_sources"])

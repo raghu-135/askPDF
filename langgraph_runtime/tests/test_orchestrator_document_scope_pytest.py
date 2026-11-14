@@ -39,9 +39,29 @@ def test_orchestrator_declines_when_document_chunks_score_below_threshold():
             {
                 "id": "retrieval_worker:1",
                 "source_ids": ["doc:" + "ab" * 16 + ":c1"],
-                "content": "Attention is all you need.",
+                "content": "",
                 "raw_retriever_score": 0.21,
             }
+        ],
+    }
+    assert orchestrator_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def test_orchestrator_tokyo_declines_when_assessment_marks_unrelated_packet_relevant():
+    state = {
+        "workflow_id": PARALLEL_REFERENCE_WORKFLOW_ID,
+        "pre_fetch_bundle": {"documents": [{"file_hash": "abc" * 8}]},
+        "question": "What is the population of Tokyo?",
+        "evidence_packets": [
+            {
+                "id": "retrieval_worker:1",
+                "source_ids": ["doc:" + "ab" * 16 + ":c1"],
+                "content": "The Transformer has six encoder layers.",
+                "raw_retriever_score": 0.62,
+            }
+        ],
+        "evidence_assessments": [
+            {"packet_id": "retrieval_worker:1", "relevant": True},
         ],
     }
     assert orchestrator_document_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER

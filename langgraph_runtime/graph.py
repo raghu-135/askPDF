@@ -447,6 +447,11 @@ class NodeRegistry:
                 "detail": detail,
                 "evidence_packet_scores": latest_node_event.get("evidence_packet_scores"),
                 "evidence_packet_count": latest_node_event.get("evidence_packet_count"),
+                "output_summary": {
+                    **(latest_node_event.get("output_preview") if isinstance(latest_node_event.get("output_preview"), dict) else {}),
+                    "evidence_packet_scores": latest_node_event.get("evidence_packet_scores"),
+                    "evidence_packet_count": latest_node_event.get("evidence_packet_count"),
+                },
             }
             if execution_event_sink is not None:
                 await execution_event_sink.emit(event_name, completion_data)
@@ -1154,12 +1159,15 @@ class NodeRegistry:
             "web_source_count": len(output.get("web_sources") or []),
         })
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        worker_event = (output.get("node_events") or [{}])[-1] if isinstance(output.get("node_events"), list) else {}
+        packet_scores = worker_event.get("evidence_packet_scores") if isinstance(worker_event, dict) else None
         await emit(f"worker.{status}", {
             "attempt": attempt,
             "elapsed_ms": elapsed_ms,
             "evidence_packet_count": len(output.get("evidence_packets") or []),
             "document_source_count": len(output.get("document_sources") or []),
             "web_source_count": len(output.get("web_sources") or []),
+            "evidence_packet_scores": packet_scores,
         })
         return worker_terminal_delta(
             {**item, "dispatch_node_id": state.get("dispatch_node_id")},
