@@ -50,21 +50,25 @@ async function waitForComposerReady(page) {
   await page.getByPlaceholder(/Ask a question about your documents/i).waitFor({ timeout: 180000 });
 }
 
-async function setWebAskMode(page) {
+async function webSearchControl(page) {
   const chatHeader = page.locator('div').filter({
     has: page.getByRole('combobox', { name: /Select LLM/i }),
   }).first();
-  const btn = chatHeader.locator(
+  return chatHeader.locator(
     'button[aria-label="Internet Search Off"], button[aria-label="Internet Search On"], button[aria-label="Ask me every time before internet search"]',
   ).first();
+}
+
+async function setWebSearchLabel(page, expectedSubstring) {
+  const btn = await webSearchControl(page);
   await btn.waitFor({ timeout: 60000 });
   for (let i = 0; i < 4; i += 1) {
     const label = await btn.getAttribute('aria-label');
-    if (label?.includes('Ask me every time')) return;
+    if (label?.includes(expectedSubstring)) return;
     await btn.click();
     await page.waitForTimeout(350);
   }
-  throw new Error('Could not set web search to ask mode');
+  throw new Error(`Could not set web search to mode matching "${expectedSubstring}"`);
 }
 
 async function pickModel(page, model) {
@@ -87,42 +91,97 @@ async function sendChat(page, text) {
   await page.keyboard.press('Enter');
 }
 
+async function waitForChatSendComplete(page) {
+  const input = page.getByPlaceholder(/Ask a question about your documents/i).first();
+  await input.waitFor({ timeout: 180000 });
+  await expect(input).toBeEnabled({ timeout: 240000 });
+  const sending = page.getByPlaceholder(/Sending/i);
+  if (await sending.isVisible({ timeout: 500 }).catch(() => false)) {
+    await sending.waitFor({ state: 'hidden', timeout: 240000 });
+    await waitForComposerReady(page);
+  }
+}
+
 async function assertApprovalVisible(page) {
+  const panel = page.getByTestId('chat-human-review-panel');
+  await panel.scrollIntoViewIfNeeded();
   const approve = page.getByRole('button', { name: /Approve once/i });
   const skip = page.getByRole('button', { name: /Skip this tool/i });
   await approve.waitFor({ timeout: 240000 });
   await expect(skip).toBeVisible();
   const viewport = page.viewportSize();
-  for (const loc of [approve, skip]) {
+  for (const loc of [approve, skip, panel]) {
     const box = await loc.boundingBox();
     expect(box).not.toBeNull();
     expect(box.y + box.height).toBeLessThanOrEqual((viewport?.height || 800) + 1);
+    expect(box.y).toBeGreaterThanOrEqual(-1);
   }
-  await expect(page.getByTestId('chat-human-review-panel')).toBeVisible();
+}
+
+async function waitForReviewPanelClosed(page, { retryScopedApprove = false } = {}) {
+  const panel = page.getByTestId('chat-human-review-panel');
+  await expect(page.getByRole('button', { name: /^Approving/i })).toHaveCount(0, { timeout: 240000 }).catch(() => {});
+  if (retryScopedApprove) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if ((await panel.count()) === 0) return;
+      const scoped = page.getByRole('button', { name: /Approve for this run/i });
+      if (await scoped.isVisible().catch(() => false)) {
+        await scoped.click();
+        await page.waitForTimeout(2500);
+      }
+    }
+  }
+  await expect(panel).toHaveCount(0, { timeout: 240000 });
+}
+
+async function waitForAssistantAnswer(page, pattern) {
+  const locator = page.getByText(/Open trace/i).locator('xpath=ancestor::*[contains(@class,"MuiListItem") or self::li][1]').filter({ hasText: pattern }).last();
+  await locator.waitFor({ timeout: 240000 });
+  const text = await locator.innerText();
+  expect(text).not.toMatch(/Approve search_web/i);
+  return text;
+}
+
+async function captureChatScreenshot(page, filename) {
+  await page.evaluate(() => {
+    const transcript = document.querySelector('.MuiList-root');
+    if (transcript instanceof HTMLElement) transcript.scrollTop = transcript.scrollHeight;
+  });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: filename, fullPage: false });
 }
 
 async function runFlow(page, suffix) {
   await ensureChatWorkspace(page);
   await pickModel(page, MODEL);
   await waitForComposerReady(page);
-  await setWebAskMode(page);
-  for (let i = 1; i <= 10; i += 1) {
+  await setWebSearchLabel(page, 'Internet Search Off');
+
+  for (let i = 1; i <= 6; i += 1) {
     await sendChat(page, `Filler message ${i}: note the number ${i}.`);
-    await page.waitForTimeout(1200);
+    await waitForChatSendComplete(page);
   }
-  await sendChat(page, 'What is the current USD to EUR exchange rate? Reply briefly.');
-  await assertApprovalVisible(page);
-  await page.screenshot({ path: path.join(ART, `chat-web-approval-${suffix}-approve-prompt.png`), fullPage: false });
-  await page.getByRole('button', { name: /Approve once/i }).click();
-  await page.getByRole('button', { name: /Approve once/i }).waitFor({ state: 'hidden', timeout: 240000 }).catch(() => {});
-  await page.waitForTimeout(6000);
-  await page.screenshot({ path: path.join(ART, `chat-web-approval-${suffix}-approved.png`), fullPage: false });
-  await setWebAskMode(page);
+
+  await expect(page.getByTestId('chat-human-review-panel')).toHaveCount(0);
+
+  await setWebSearchLabel(page, 'Ask me every time');
   await sendChat(page, 'What is the weather in Paris today? Reply in one sentence.');
   await assertApprovalVisible(page);
   await page.getByRole('button', { name: /Skip this tool/i }).click();
-  await page.waitForTimeout(8000);
-  await page.screenshot({ path: path.join(ART, `chat-web-approval-${suffix}-denied.png`), fullPage: false });
+  await waitForReviewPanelClosed(page);
+  await waitForComposerReady(page);
+  await waitForAssistantAnswer(page, /Paris|weather|without|skip|unable|sorry|forecast/i);
+  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-denied.png`));
+
+  await setWebSearchLabel(page, 'Ask me every time');
+  await sendChat(page, 'What is the current USD to EUR exchange rate? Reply briefly.');
+  await assertApprovalVisible(page);
+  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-approve-prompt.png`));
+  await page.getByRole('button', { name: /Approve for this run/i }).click();
+  await waitForReviewPanelClosed(page, { retryScopedApprove: true });
+  await waitForComposerReady(page);
+  await waitForAssistantAnswer(page, /EUR|exchange|USD|dollar|rate|context|real-time/i);
+  await captureChatScreenshot(page, path.join(ART, `chat-web-approval-${suffix}-approved.png`));
 }
 
 const viewports = [

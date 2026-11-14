@@ -10,6 +10,7 @@ import {
     Chip,
     CircularProgress,
     Alert,
+    useMediaQuery,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -120,9 +121,14 @@ import {
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
 import {
+    DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
     REVIEW_DECISION_COLUMN_MIN_HEIGHT,
+    REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT,
+    REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT,
     REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT,
+    WORKBENCH_AUTO_SIDE_MIN_WIDTH,
 } from '../lib/deep-research-review-panel-layout';
+import { shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
 import type { DocumentSource } from '../lib/api';
 
@@ -888,13 +894,28 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
     activeThreadIdRef.current = activeThread?.id ?? null;
 
+    const visibleMessages = useMemo(
+        () => messages.filter((message) => !shouldHideChatInterruptPlaceholder(message)),
+        [messages],
+    );
+
     const messageVirtualizer = useVirtualizer({
-        count: messages.length,
+        count: visibleMessages.length,
         getScrollElement: () => messageListRef.current,
-        estimateSize: (index) => messages[index]?.role === MessageRole.User ? 76 : 180,
+        estimateSize: (index) => visibleMessages[index]?.role === MessageRole.User ? 76 : 180,
         overscan: 8,
-        getItemKey: (index) => messages[index]?.id ?? index,
+        getItemKey: (index) => visibleMessages[index]?.id ?? index,
     });
+
+    const stackedWorkbench = useMediaQuery(`(max-width:${WORKBENCH_AUTO_SIDE_MIN_WIDTH - 1}px)`);
+
+    useEffect(() => {
+        if (!pendingHumanReview?.interrupt || !stackedWorkbench) return undefined;
+        window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: true } }));
+        return () => {
+            window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: false } }));
+        };
+    }, [pendingHumanReview?.interrupt?.interrupt_id, stackedWorkbench]);
 
     const setComposerText = useCallback((text: string) => {
         setComposerSeed(text);
@@ -1824,12 +1845,54 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     setHumanReviewCapabilityRevision((revision) => revision + 1);
                     void refreshHumanReviewCapabilities();
                 }
+                if (event.event === '__result__' && event.data?.response) {
+                    const envelope = event.data.response as Record<string, unknown>;
+                    const agentRun = envelope.agent_run as Record<string, unknown> | undefined;
+                    const outcome = envelope.outcome as Record<string, unknown> | undefined;
+                    const resultJson = agentRun?.result_json as { answer?: string; final_answer?: string } | undefined;
+                    response = {
+                        ...envelope,
+                        agent_run: agentRun,
+                        answer: String(
+                            outcome?.answer
+                            || outcome?.final_answer
+                            || resultJson?.answer
+                            || resultJson?.final_answer
+                            || '',
+                        ),
+                    };
+                    setLiveExecution((current) => current?.messageId === liveMessageId
+                        ? { ...current, running: false, error: undefined }
+                        : current);
+                    return;
+                }
+                if (event.event === '__error__') {
+                    const rawError = event.data?.error;
+                    terminalError = String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.');
+                    setLiveExecution((current) => current?.messageId === liveMessageId
+                        ? { ...current, running: false, error: terminalError }
+                        : current);
+                    return;
+                }
                 if (['run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'].includes(event.event)) {
-                    // Resume runtime terminal events may carry the raw
-                    // execution result. Only accept the product-level resume
-                    // envelope here; the final __result__ event provides it.
-                    if (event.data?.response?.agent_run) {
+                    if (event.data?.response) {
                         response = event.data.response;
+                    } else if (event.data?.agent_run) {
+                        const envelope = event.data as Record<string, unknown>;
+                        const agentRun = envelope.agent_run as Record<string, unknown> | undefined;
+                        const outcome = envelope.outcome as Record<string, unknown> | undefined;
+                        const resultJson = agentRun?.result_json as { answer?: string; final_answer?: string } | undefined;
+                        response = {
+                            ...envelope,
+                            agent_run: agentRun,
+                            answer: String(
+                                outcome?.answer
+                                || outcome?.final_answer
+                                || resultJson?.answer
+                                || resultJson?.final_answer
+                                || '',
+                            ),
+                        };
                     }
                     const rawError = event.data?.error;
                     terminalError = ['run.failed', 'stream.error'].includes(event.event) && !response
@@ -1842,15 +1905,36 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             });
             if (!response) throw new Error(terminalError || 'The resume stream ended before returning a result.');
 
-            if (response.agent_run.status === 'awaiting_human' && response.agent_run.pending_interrupt) {
+            const resumedRun = response?.agent_run;
+            if (resumedRun?.status === 'awaiting_human' && resumedRun?.pending_interrupt) {
                 setPendingHumanReview(prev => prev ? {
                     ...prev,
-                    interrupt: response.agent_run.pending_interrupt as AgentRunPendingInterrupt,
+                    interrupt: resumedRun.pending_interrupt as AgentRunPendingInterrupt,
                 } : prev);
-                setHumanReviewEditText(response.agent_run.pending_interrupt.proposed_final_answer || humanReviewEditText);
+                setHumanReviewEditText(resumedRun.pending_interrupt.proposed_final_answer || humanReviewEditText);
                 return true;
             }
 
+            const resumedAnswer = String(
+                response?.answer
+                || response?.outcome?.answer
+                || response?.outcome?.final_answer
+                || response?.agent_run?.result_json?.answer
+                || response?.agent_run?.result_json?.final_answer
+                || '',
+            ).trim();
+            if (resumedAnswer) {
+                setMessages((current) => current.map((message) => (
+                    message.id === liveMessageId
+                        ? {
+                            ...message,
+                            content: resumedAnswer,
+                            pending_human_review: false,
+                            agent_run_turn_kind: 'assistant_final',
+                        }
+                        : message
+                )));
+            }
             setPendingHumanReview(null);
             setHumanReviewEditText('');
             await loadMessages();
@@ -2786,6 +2870,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
         : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
     const chatHumanReviewOpen = Boolean(pendingReviewInterrupt);
+    const reviewTranscriptMaxHeight = chatHumanReviewOpen && stackedWorkbench
+        ? REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT
+        : REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT;
+    const reviewDecisionMinHeight = chatHumanReviewOpen && stackedWorkbench
+        ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
+        : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
+
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
@@ -2797,12 +2888,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             decisionBeforeTranscript={chatHumanReviewOpen}
             transcriptSx={chatHumanReviewOpen ? {
                 flex: '0 0 auto',
-                maxHeight: REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT,
+                maxHeight: reviewTranscriptMaxHeight,
                 minHeight: 0,
             } : undefined}
             decisionSx={chatHumanReviewOpen ? {
                 flex: '1 1 0',
-                minHeight: REVIEW_DECISION_COLUMN_MIN_HEIGHT,
+                minHeight: reviewDecisionMinHeight,
                 overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
@@ -2881,7 +2972,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     }}
                 >
                     {messageVirtualizer.getVirtualItems().map((virtualItem) => {
-                        const msg = messages[virtualItem.index];
+                        const msg = visibleMessages[virtualItem.index];
                         if (!msg) return null;
                         const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
                         const showAgentRunDebug = msg.role === MessageRole.Assistant && Boolean(msg.agent_run_id || liveForMessage);
@@ -2976,7 +3067,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
                 />
             ) : undefined}
-            composer={(
+            composer={!chatHumanReviewOpen ? (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
                 {editingMessageId && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
@@ -3019,7 +3110,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     onOpenMemoryReview={onOpenMemoryReview}
                 />
             </Box>
-            )}
+            ) : undefined}
             footer={(
             <>
             <ChatSettingsDialog

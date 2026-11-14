@@ -14,11 +14,20 @@ export const REVIEW_DECISION_PANEL_SCROLL_MIN_PX =
 /** Footer never grows past this; guidance scrolls inside, buttons stay in the band. */
 export const REVIEW_DECISION_PANEL_FOOTER_MAX_HEIGHT = 'min(30vh, 136px)';
 
+/** While a review decision is open, cap transcript height so the panel keeps the column. */
+export const REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX = 72;
+
 /** Expanded transcript scroll cap so the decision column keeps the footer. */
 export const REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT = 'min(28vh, 220px)';
 
+/** Stacked workbench (chat under thread pane): keep transcript tiny so the panel fits. */
+export const REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT = `${REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX}px`;
+
 /** Floor for the decision column while review is open (footer + limitations). */
 export const REVIEW_DECISION_COLUMN_MIN_HEIGHT = 'min(36vh, 240px)';
+
+/** Stacked workbench needs a taller decision slice at 1024×768 and below. */
+export const REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT = 'min(46vh, 300px)';
 
 /** Non-fill panels: handle, title, header, body, footer in one grid. */
 export const REVIEW_DECISION_PANEL_GRID_ROWS =
@@ -30,9 +39,6 @@ export const REVIEW_LIMITATIONS_MAX_HEIGHT = 'min(24vh, 180px)';
 export const REVIEW_DECISION_PANEL_FIXED_HEADER_MAX_HEIGHT = 'min(36vh, 260px)';
 
 export const REVIEW_PANEL_MIN_TRANSCRIPT_RATIO = 0.12;
-
-/** While a review decision is open, cap transcript height so the panel keeps the column. */
-export const REVIEW_PANEL_OPEN_TRANSCRIPT_MAX_PX = 72;
 
 /** Minimum stacked workbench chat slice while reviewing (under documents). */
 export const REVIEW_STACKED_WORKBENCH_BOTTOM_RATIO = 0.58;
