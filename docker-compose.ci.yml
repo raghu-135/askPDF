@@ -7,9 +7,6 @@ services:
       - ASKPDF_ADMIN_TOKEN=${ASKPDF_ADMIN_TOKEN:?ASKPDF_ADMIN_TOKEN must be set}
 
   rag-service:
-    build:
-      args:
-        DOWNLOAD_LOCAL_MODELS: "false"
     env_file: []
     environment:
       - LOG_LEVEL=INFO
@@ -53,9 +50,6 @@ services:
       - MEMORY_MANAGER_MAX_WEB_CALLS=${MEMORY_MANAGER_MAX_WEB_CALLS:?MEMORY_MANAGER_MAX_WEB_CALLS must be set}
 
   db-migrate:
-    build:
-      args:
-        DOWNLOAD_LOCAL_MODELS: "false"
     env_file: []
     environment:
       - LOG_LEVEL=INFO

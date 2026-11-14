@@ -46,9 +46,6 @@ fi
 
 TEST_PROJECT_NAME="${ASKPDF_TEST_PROJECT_NAME:-askpdf-test}"
 COMPOSE_ARGS=(-p "$TEST_PROJECT_NAME" -f docker-compose.test.yml)
-if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -f docker-compose.test.ci.yml ]; then
-    COMPOSE_ARGS+=(-f docker-compose.test.ci.yml)
-fi
 if [ -f docker-compose.cloud-agent.test.override.yml ] && [ "${ASKPDF_USE_CLOUD_TEST_OVERRIDE:-}" = "1" ]; then
     COMPOSE_ARGS+=(-f docker-compose.cloud-agent.test.override.yml)
 fi
