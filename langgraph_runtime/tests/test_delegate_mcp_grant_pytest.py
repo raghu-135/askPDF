@@ -7,7 +7,8 @@ from pathlib import Path
 
 from langgraph_runtime.api import _context
 from langgraph_runtime.compiler import WorkflowCompiler
-from langgraph_runtime.workflows.graph_validation import WorkflowGraphValidator
+from langgraph_runtime.workflows.graph_validation import GenericGraphValidator
+from langgraph_runtime.workflows.validator import WorkflowValidator
 from runtime_protocol.contracts import AgentRuntimeRequest
 
 _BUILTIN_DIR = Path(__file__).resolve().parents[2] / "rag_service/app/workflow_catalog/builtins"
@@ -35,8 +36,8 @@ def test_execution_context_prefers_input_mcp_token_over_options():
 
 def test_auto_builtin_allows_context_loader_prefetch_tools():
     auto_spec = _load_spec("auto_rag_agent")
-    errors = WorkflowGraphValidator().validate(auto_spec)
-    assert errors == []
+    WorkflowValidator().validate(auto_spec)
+    assert GenericGraphValidator().collect_errors(auto_spec) == []
     WorkflowCompiler().compile(auto_spec, checkpointer=None)
     allowed = set(auto_spec["config"]["allowed_tool_ids"])
     assert "document_search_knowledge" in allowed

@@ -11,7 +11,8 @@ from langgraph_runtime.workflows.auto_nodes import (
     auto_scope_decline,
 )
 from langgraph_runtime.workflows.corrective_nodes import DOCUMENT_SCOPE_DECLINE_ANSWER
-from langgraph_runtime.workflows.graph_validation import WorkflowGraphValidator
+from langgraph_runtime.workflows.graph_validation import GenericGraphValidator
+from langgraph_runtime.workflows.validator import WorkflowValidator
 import json
 from pathlib import Path
 
@@ -24,8 +25,8 @@ def _auto_spec() -> dict:
 
 def test_auto_builtin_validates_and_compiles():
     spec = _auto_spec()
-    errors = WorkflowGraphValidator().validate(spec)
-    assert errors == []
+    WorkflowValidator().validate(spec)
+    assert GenericGraphValidator().collect_errors(spec) == []
     WorkflowCompiler().compile(spec, checkpointer=None)
 
 
