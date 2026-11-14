@@ -28,6 +28,7 @@ from langgraph_runtime.workflows.corrective_nodes import (
     explicit_corrective_document_fact_fallback,
     synthesized_answer_grounded_in_corrective_evidence,
 )
+from langgraph_runtime.workflows.document_scope import postprocess_grounded_document_answer
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
 from langgraph_runtime.workflows.canvas_publish import (
@@ -186,6 +187,8 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
     answer_text = published["answer"]
     if published.get("published"):
         answer_text = finalize_canvas_answer_prose(answer_text, canvas_published=True)
+    if state.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
+        answer_text = postprocess_grounded_document_answer(state, answer_text)
     update: Dict[str, Any] = {
         "final_answer": answer_text,
         "reasoning": published["reasoning"],
@@ -452,6 +455,8 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
     if canvas_update.get("task_canvas_ref"):
         data["canvas_ref"] = canvas_update["task_canvas_ref"]
     final_answer = str(state.get("final_answer") or "")
+    if state.get("workflow_id") != CORRECTIVE_WORKFLOW_ID:
+        final_answer = postprocess_grounded_document_answer(state, final_answer)
     if canvas_update.get("task_canvas_published"):
         from runtime_protocol.research_gaps import finalize_canvas_answer_prose
 

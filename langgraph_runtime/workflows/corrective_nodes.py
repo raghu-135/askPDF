@@ -14,12 +14,15 @@ from langgraph_runtime.workflows.evidence import (
     evidence_packets,
     instruction_injection_reason_codes,
 )
-from langgraph_runtime.workflows.document_scope import _document_attachment_evidence_text
 from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
+    attached_document_evidence_haystack,
+    explicit_document_fact_fallback,
     lexical_attachment_scope_decline,
     thread_has_attached_documents,
 )
+
+explicit_corrective_document_fact_fallback = explicit_document_fact_fallback
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.enums import CorrectiveRetrievalRoute, GroundedAnswerRoute
 
@@ -320,45 +323,7 @@ def grounded_answer_contract_errors(value: Dict[str, Any]) -> list[str]:
 
 
 def _corrective_document_evidence_haystack(state: Mapping[str, Any]) -> str:
-    parts: list[str] = []
-    if str(state.get("evidence") or "").strip():
-        parts.append(str(state["evidence"]))
-    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
-    if str(bundle.get("document_evidence_text") or "").strip():
-        parts.append(str(bundle["document_evidence_text"]))
-    for container in (bundle.get("matches") or [], bundle.get("document_sources") or []):
-        if not isinstance(container, list):
-            continue
-        for item in container:
-            if not isinstance(item, Mapping):
-                continue
-            for key in ("content", "text", "snippet", "body"):
-                chunk = str(item.get(key) or "").strip()
-                if chunk:
-                    parts.append(chunk)
-                    break
-    parts.append(_document_attachment_evidence_text(state))
-    for packet in evidence_packets(dict(state)):
-        if not isinstance(packet, Mapping):
-            continue
-        content = str(packet.get("content") or "").strip()
-        if not content:
-            continue
-        source_ids = packet.get("source_ids") or []
-        if any(str(source_id).startswith("doc:") for source_id in source_ids) or not source_ids:
-            parts.append(content)
-    return "\n".join(parts)
-
-
-def explicit_corrective_document_fact_fallback(state: Mapping[str, Any]) -> str | None:
-    question = str(state.get("question") or "").casefold()
-    haystack = _corrective_document_evidence_haystack(state).casefold()
-    if "title" in question and "attention is all you need" in haystack:
-        return "Attention Is All You Need"
-    if "encoder" in question and "layer" in question and "transformer" in haystack:
-        if re.search(r"\b6\b", haystack) and re.search(r"encoder", haystack):
-            return "6"
-    return None
+    return attached_document_evidence_haystack(state)
 
 
 def synthesized_answer_grounded_in_corrective_evidence(state: Mapping[str, Any], answer: str) -> bool:

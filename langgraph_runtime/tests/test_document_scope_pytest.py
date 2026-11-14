@@ -4,7 +4,9 @@ from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     attachment_retrieval_scope_decline,
     document_retrieval_scores,
+    explicit_document_fact_fallback,
     lexical_attachment_scope_decline,
+    postprocess_grounded_document_answer,
     workflow_post_retrieval_scope_decline,
 )
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
@@ -138,3 +140,39 @@ def test_router_post_retrieval_keeps_in_scope_on_high_worker_score_despite_low_p
         "route": "document",
     }
     assert workflow_post_retrieval_scope_decline(state) is None
+
+
+def test_postprocess_replaces_encoder_hedge_with_document_fact():
+    state = {
+        "workflow_id": "router_rag_agent",
+        "pre_fetch_bundle": {"documents": [{"file_hash": "a" * 32}]},
+        "evidence_packets": [
+            {
+                "content": "The encoder is composed of a stack of N = 6 identical layers.",
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+            }
+        ],
+        "question": "How many encoder layers does the Transformer architecture use in the Attention paper?",
+    }
+    hedge = "The provided context does not specify the exact number of encoder layers."
+    assert explicit_document_fact_fallback(state) == "6"
+    assert postprocess_grounded_document_answer(state, hedge) == "6"
+
+
+def test_postprocess_replaces_tokyo_hedge_with_canonical_decline():
+    state = {
+        "workflow_id": "router_rag_agent",
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_evidence_text": "Attention Is All You Need presents the Transformer.",
+        },
+        "evidence_packets": [
+            {
+                "content": "Attention Is All You Need presents the Transformer.",
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+            }
+        ],
+        "question": "What is the population of Tokyo?",
+    }
+    hedge = "I cannot find population figures for Tokyo in the provided context."
+    assert postprocess_grounded_document_answer(state, hedge) == DOCUMENT_SCOPE_DECLINE_ANSWER
