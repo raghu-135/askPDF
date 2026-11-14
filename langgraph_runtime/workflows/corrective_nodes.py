@@ -18,7 +18,6 @@ from langgraph_runtime.workflows.document_scope import (
     attachment_retrieval_scope_decline,
     post_retrieval_attachment_decline,
     thread_has_attached_documents,
-    _retrieved_document_evidence_is_substantive,
 )
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.enums import CorrectiveRetrievalRoute, GroundedAnswerRoute
@@ -229,16 +228,6 @@ def orchestrator_document_scope_decline(state: Mapping[str, Any]) -> str | None:
         return None
     if not thread_has_attached_documents(state):
         return None
-    doc_packets = _document_evidence_packets(state)
-    assessments = {
-        str(item.get("packet_id")): item
-        for item in state.get("evidence_assessments") or []
-        if isinstance(item, dict) and item.get("packet_id")
-    }
-    if doc_packets and assessments and not _retrieved_document_evidence_is_substantive(state):
-        assessment_decline = _decline_when_document_assessments_are_irrelevant(doc_packets, assessments)
-        if assessment_decline is not None:
-            return assessment_decline
     score_decline = post_retrieval_attachment_decline(state)
     if score_decline:
         return score_decline
