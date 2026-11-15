@@ -248,7 +248,10 @@ await sendChat(
   'Save the current workbench browser page to this thread as a document, then confirm the file name.',
 );
 const saveApprove = await waitForApproval(page, 240000);
-await page.getByTestId('tool-approval-argument-preview').waitFor({ state: 'visible', timeout: 30000 });
+await page
+  .getByTestId('tool-approval-argument-preview')
+  .filter({ hasText: /Save current browser page to this thread/i })
+  .waitFor({ state: 'visible', timeout: 30000 });
 await shot(page, 'e2e-03b-save-tool-approval-card-1440x900.png');
 await saveApprove.click();
 await page

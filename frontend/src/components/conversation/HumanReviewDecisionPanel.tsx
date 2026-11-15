@@ -18,6 +18,9 @@ function proposedToolArgumentPreview(
   if (toolName === 'browser_navigate' && typeof args.url === 'string' && args.url.trim()) {
     return args.url.trim();
   }
+  if (toolName === 'browser_save_to_thread' && Object.keys(args).length === 0) {
+    return 'Save current browser page to this thread';
+  }
   const keys = Object.keys(args);
   if (keys.length === 1) {
     const key = keys[0];
