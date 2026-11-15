@@ -455,7 +455,8 @@ def test_resolve_supersedes_id_from_state_reads_quoted_canvas():
     canvas_id = "41a7cdc2-1234-5678-9abc-def012345678"
     state = {"question": f"Please update {canvas_id} with a stronger summary."}
     assert resolve_supersedes_id_from_state(state, None) == canvas_id
-    assert resolve_supersedes_id_from_state(state, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    explicit = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert resolve_supersedes_id_from_state(state, explicit) == explicit
 
 
 def test_sanitize_supersedes_id_drops_file_hash_and_garbage():
