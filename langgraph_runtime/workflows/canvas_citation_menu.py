@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
+from runtime_protocol.canvas_revision_context import format_quoted_canvas_revisions_for_prompt
+
 
 def _packet_source_ids(packet: Mapping[str, Any]) -> list[str]:
     ids = packet.get("source_ids")
@@ -152,6 +154,20 @@ def format_current_canvases_section(state: Mapping[str, Any]) -> str:
     return "\n".join(lines) if len(lines) > 4 else ""
 
 
+def format_quoted_canvas_revision_section(state: Mapping[str, Any]) -> str:
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), Mapping) else {}
+    revisions = state.get("quoted_canvas_revisions") or bundle.get("quoted_canvas_revisions") or []
+    if not isinstance(revisions, list):
+        return ""
+    return format_quoted_canvas_revisions_for_prompt(
+        [item for item in revisions if isinstance(item, Mapping)],
+    )
+
+
 def canvas_prompt_sections(state: Mapping[str, Any]) -> str:
-    parts = [format_citation_menu_section(state), format_current_canvases_section(state)]
+    parts = [
+        format_citation_menu_section(state),
+        format_current_canvases_section(state),
+        format_quoted_canvas_revision_section(state),
+    ]
     return "\n\n".join(part for part in parts if part).strip()

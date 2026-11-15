@@ -28,6 +28,7 @@ from app.services.content_store import get_content_store, thread_artifact_conten
 from app.services.task_artifact_service import MAX_SINGLE_ARTIFACT_BYTES
 from app.time_utils import iso_utc_z
 from runtime_protocol.canvas_reference import extract_canvas_references
+from runtime_protocol.canvas_revision_context import build_revision_snapshot
 
 
 class CanvasNotFoundError(LookupError):
@@ -70,6 +71,38 @@ async def resolve_canvas_lineage_head(
             break
         current_id = successor.id
     return current_id
+
+
+async def load_quoted_canvas_revisions(thread_id: str, text: str) -> list[dict[str, Any]]:
+    """Load full revision baselines for canvas ids quoted in the user message."""
+
+    refs = extract_canvas_references(text)
+    if not refs:
+        return []
+    service = CanvasService()
+    seen: set[str] = set()
+    revisions: list[dict[str, Any]] = []
+    for ref in refs:
+        normalized = str(ref or "").strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        try:
+            record = await service.get(thread_id, ref, resolve_current=True)
+        except CanvasNotFoundError:
+            continue
+        spec = record.get("spec") if isinstance(record.get("spec"), dict) else {}
+        quoted_id = str(record.get("requested_id") or record.get("id") or ref)
+        lineage_head_id = str(record.get("id") or ref)
+        revisions.append(
+            build_revision_snapshot(
+                canvas_id=quoted_id,
+                lineage_head_id=lineage_head_id,
+                title=str(record.get("title") or ""),
+                spec=spec,
+            )
+        )
+    return revisions
 
 
 async def resolve_quoted_canvas_supersedes_id(

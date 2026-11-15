@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.models.canvas import admit_canvas_spec, parse_canvas_spec
+from app.services.canvas_service import CanvasService
 from app.services.tool_approval import invocation_policies
 from app.tools.context import ToolInvocationContext
 from app.tools.publish_canvas import PublishCanvasRequest, invoke_publish_canvas
@@ -212,6 +213,61 @@ async def test_publish_canvas_supersedes_quoted_canvas_in_user_question(monkeypa
     )
     assert result.ok is True
     assert create.await_args[0][1].supersedes_id == canvas_id
+
+
+@pytest.mark.asyncio
+async def test_publish_canvas_supersedes_merges_shrunk_draft(monkeypatch):
+    rows = [
+        [{"text": f"Claim {i}"}, {"text": f"Source {i}"}, {"text": "supported", "tone": "supported"}, {"text": ""}]
+        for i in range(5)
+    ]
+    citations = [{"kind": "web", "label": f"Source {i}", "url": f"https://example.com/{i}"} for i in range(5)]
+    baseline_spec = {
+        "schema_version": 1,
+        "title": "Before",
+        "sections": [
+            {"title": "Evidence matrix", "blocks": [
+                {"type": "table", "headers": ["Claim", "Source", "Support", "Notes"], "rows": rows}
+            ]},
+            {"title": "Sources", "blocks": [{"type": "source_list", "citations": citations}]},
+        ],
+    }
+    canvas_id = "41a7cdc2-1234-5678-9abc-def012345678"
+
+    async def fake_get(thread_id, target_id, *, resolve_current=True):
+        return {
+            "id": canvas_id,
+            "title": "Before",
+            "spec": baseline_spec,
+        }
+
+    monkeypatch.setattr("app.tools.publish_canvas.get_thread_files", AsyncMock(return_value=[]))
+    create = AsyncMock(return_value={"id": "canvas-new", "title": "After"})
+    service = CanvasService()
+    monkeypatch.setattr(service, "get", fake_get)
+    monkeypatch.setattr("app.tools.publish_canvas.CanvasService", lambda: service)
+    monkeypatch.setattr(service, "create", create)
+    monkeypatch.setattr(
+        "app.tools.publish_canvas._resolve_supersedes_id_for_publish",
+        AsyncMock(return_value=(canvas_id, [])),
+    )
+
+    result = await invoke_publish_canvas(
+        PublishCanvasRequest.model_validate({
+            "layout": "matrix",
+            "title": "After",
+            "summary": "Summary added",
+            "claims": [{"text": "Claim 0", "source_ids": ["web:https://example.com/0"]}],
+            "supersedes_id": canvas_id,
+        }),
+        ToolInvocationContext(thread_id="thread-1", run_id="run-1"),
+    )
+    assert result.ok is True
+    spec = create.await_args[0][1].spec
+    matrix = next(section for section in spec.sections if section.title == "Evidence matrix")
+    table = next(block for block in matrix.blocks if block.type == "table")
+    assert len(table.rows) == 5
+    assert spec.summary == "Summary added"
 
 
 @pytest.mark.asyncio

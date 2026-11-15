@@ -121,7 +121,7 @@ async function waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRec
     }
     await page.waitForTimeout(8000);
   }
-  throw new Error('Canvas did not show a superseded revision with an added summary');
+  throw new Error('Canvas was not superseded after the update request');
 }
 
 function parseCanvasDeepLink(url) {
@@ -161,6 +161,29 @@ async function resolveCanvasRecord(admin, threadId, canvasId) {
   );
 }
 
+function canvasSpecMetrics(spec) {
+  const safe = spec && typeof spec === 'object' ? spec : {};
+  let claimCount = 0;
+  let sourceCount = 0;
+  for (const section of safe.sections || []) {
+    for (const block of section.blocks || []) {
+      if (block.type === 'table' && Array.isArray(block.rows)) {
+        claimCount += block.rows.length;
+      }
+      if (block.type === 'timeline' && Array.isArray(block.events)) {
+        claimCount += block.events.length;
+      }
+      if (block.type === 'claim_pair') {
+        claimCount += 2;
+      }
+      if (block.type === 'source_list' && Array.isArray(block.citations)) {
+        sourceCount += block.citations.length;
+      }
+    }
+  }
+  return { claimCount, sourceCount };
+}
+
 async function main() {
   const testedSha = gitSha();
   const admin = loadEnvAdmin();
@@ -193,7 +216,9 @@ async function main() {
     await selectLlmModel(page, MODEL);
     await waitForThreadWorkspaceReady(page);
 
-    const createPrompt = 'Please create a brief research canvas about how OpenRouter lists free models. Keep it short.';
+    const createPrompt =
+      'Please create a brief research canvas about how OpenRouter lists free models. '
+      + 'Include several distinct claims with web sources.';
     await chatRateLimitPause();
     await typeAndSendChat(page, createPrompt);
     await waitForAssistantAnswer(page);
@@ -208,9 +233,13 @@ async function main() {
     }
 
     const beforeRecord = await resolveCanvasRecord(admin, threadId, canvasId);
+    const beforeMetrics = canvasSpecMetrics(beforeRecord.spec);
+    if (beforeMetrics.claimCount < 2) {
+      throw new Error(`Pre-update canvas needs at least 2 claims for preservation proof (got ${beforeMetrics.claimCount})`);
+    }
 
     await focusChatComposer(page);
-    const updatePrompt = `Update this canvas to add a short summary section at the top.\n\n${deepLink}`;
+    const updatePrompt = `Add a short summary section at the top.\n\n${deepLink}`;
     const composer = page.getByTestId('chat-composer-input');
     await composer.click();
     await composer.fill(updatePrompt);
@@ -240,6 +269,17 @@ async function main() {
     await page.getByRole('heading', { name: afterRecord.title }).first().waitFor({ timeout: 120_000 });
     await guard.capture(page, shots.after, { requireChatWorkspace: true });
 
+    const afterMetrics = canvasSpecMetrics(afterRecord.spec);
+    if (
+      afterMetrics.claimCount < beforeMetrics.claimCount
+      || afterMetrics.sourceCount < beforeMetrics.sourceCount
+    ) {
+      throw new Error(
+        `Canvas content shrank after update (claims ${beforeMetrics.claimCount} -> ${afterMetrics.claimCount}, `
+        + `sources ${beforeMetrics.sourceCount} -> ${afterMetrics.sourceCount})`,
+      );
+    }
+
     const resolvedHeadId = afterRecord.id;
     const screenshotMeta = guard.paths.map((p) => ({
       path: p,
@@ -258,7 +298,11 @@ async function main() {
       canvas_title_before_tab: canvasTitleBefore,
       canvas_title_after: afterRecord.title,
       deep_link: deepLink,
-      prompts: { create: createPrompt, update: 'Update this canvas to add a short summary section at the top. (+ pasted link)' },
+      claim_count_before: beforeMetrics.claimCount,
+      claim_count_after: afterMetrics.claimCount,
+      source_count_before: beforeMetrics.sourceCount,
+      source_count_after: afterMetrics.sourceCount,
+      prompts: { create: createPrompt, update: 'Add a short summary section at the top. (+ pasted link)' },
       assistant_preview: assistantPreview.slice(0, 500),
       screenshots: screenshotMeta,
       captured_at: new Date().toISOString(),
