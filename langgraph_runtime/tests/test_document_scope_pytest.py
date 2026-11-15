@@ -211,7 +211,32 @@ def test_relevance_decline_skips_low_confidence_irrelevant_assessments():
     assert decline_when_all_document_packets_irrelevant(state) is None
 
 
-def test_postprocess_preserves_model_answer_without_lexical_override():
+def test_relevance_decline_skips_when_worker_retrieval_scores_are_strong():
+    from langgraph_runtime.workflows.document_scope import decline_when_all_document_packets_irrelevant
+
+    packet_id = "retrieval_worker:1"
+    state = {
+        "corrective_policy": {"minimum_relevance_confidence": 0.65},
+        "evidence_packets": [
+            {
+                "id": packet_id,
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+                "content": "We propose the Transformer architecture.",
+                "raw_retriever_score": 0.88,
+            }
+        ],
+        "evidence_assessments": [
+            {
+                "packet_id": packet_id,
+                "relevant": False,
+                "confidence": 0.95,
+            }
+        ],
+    }
+    assert decline_when_all_document_packets_irrelevant(state) is None
+
+
+def test_postprocess_normalizes_attachment_scope_hedges_to_canonical_decline():
     state = {
         "workflow_id": "router_rag_agent",
         "pre_fetch_bundle": {
@@ -226,5 +251,8 @@ def test_postprocess_preserves_model_answer_without_lexical_override():
         ],
         "question": "What is the population of Tokyo?",
     }
-    hedge = "I cannot find population figures for Tokyo in the provided context."
-    assert postprocess_grounded_document_answer(state, hedge) == hedge
+    hedge = (
+        "I am sorry, but the provided context does not contain information about "
+        "the population of Tokyo. Therefore, I cannot answer your question."
+    )
+    assert postprocess_grounded_document_answer(state, hedge) == DOCUMENT_SCOPE_DECLINE_ANSWER

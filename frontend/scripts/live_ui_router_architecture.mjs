@@ -67,9 +67,7 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 try {
   const project = await api("POST", "/api/projects", { name: "ui-arch", description: "live", embedding_model: "BAAI/bge-m3" });
   const thread = await api("POST", `/api/projects/${project.id}/threads`, { name: "ui-arch" });
-  await page.goto(`${APP}/threads/${thread.id}`, { waitUntil: "domcontentloaded", timeout: 120000 });
-  await page.waitForTimeout(3000);
-  await page.screenshot({ path: `${ART}/live-router-ui-thread.png`, fullPage: true });
+  await page.goto(APP, { waitUntil: "networkidle", timeout: 120000 });
 
   await uploadAndIndex(thread.id);
   await api("PUT", `/api/threads/${thread.id}/settings`, { agent_workflow: { workflow_id: "router_rag_agent" } });
@@ -102,15 +100,19 @@ try {
     }
     if (answer.trim()) break;
   }
-  await page.goto(`${APP}/threads/${thread.id}`, { waitUntil: "domcontentloaded", timeout: 120000 });
+  await page.goto(APP, { waitUntil: "networkidle", timeout: 120000 });
+  const threadRow = page.getByRole("button", { name: new RegExp(thread.name, "i") }).first();
+  await threadRow.click({ timeout: 60_000 });
+  await page.getByRole("tab", { name: /chat/i }).click({ timeout: 30_000 }).catch(() => {});
   const assistantReplyDeadline = Date.now() + 300_000;
   let visibleAnswer = "";
   while (Date.now() < assistantReplyDeadline) {
-    const bodies = await page.locator('[data-testid="message-content"], [data-role="assistant"], .prose').allTextContents();
+    const bodies = await page.locator(".MuiBox-root").allTextContents();
     visibleAnswer = bodies.join("\n").trim();
-    if (visibleAnswer && !/technical error/i.test(visibleAnswer)) break;
+  if (/\btransformer\b/i.test(visibleAnswer) && !/technical error/i.test(visibleAnswer)) break;
     await page.waitForTimeout(4000);
-    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.reload({ waitUntil: "networkidle" });
+    await threadRow.click({ timeout: 60_000 }).catch(() => {});
   }
   await page.waitForTimeout(2000);
   await page.screenshot({ path: `${ART}/live-router_rag_agent-architecture-ui.png`, fullPage: true });

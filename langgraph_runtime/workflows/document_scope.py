@@ -127,10 +127,40 @@ def _packet_assessment_confidently_irrelevant(
         return False
 
 
+def _answer_is_attachment_scope_hedge(answer: str) -> bool:
+    """Detect model hedges that mean attached documents cannot answer the question."""
+
+    text = str(answer or "").strip()
+    if not text or text == DOCUMENT_SCOPE_DECLINE_ANSWER:
+        return False
+    lowered = text.casefold()
+    phrases = (
+        "does not contain",
+        "do not contain",
+        "not contain information",
+        "cannot answer your question",
+        "cannot answer the question",
+        "cannot answer this question",
+        "can't answer",
+        "do not have information",
+        "does not have information",
+        "don't have information",
+        "not in the provided context",
+        "not in the attached",
+        "provided context does not",
+        "i am sorry, but the provided context",
+    )
+    return any(phrase in lowered for phrase in phrases)
+
+
 def decline_when_all_document_packets_irrelevant(state: Mapping[str, Any]) -> str | None:
     """Decline when every assessed document packet is confidently marked not relevant."""
 
     from langgraph_runtime.workflows.corrective_contracts import normalized_corrective_policy
+
+    worker_scores = worker_document_retrieval_scores(state)
+    if worker_scores and max(worker_scores) >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+        return None
 
     doc_packets = document_evidence_packets(state)
     assessments = packet_assessments_by_id(state)
@@ -246,4 +276,6 @@ def postprocess_grounded_document_answer(state: Mapping[str, Any], answer: str) 
     relevance_decline = decline_when_all_document_packets_irrelevant(state)
     if relevance_decline:
         return relevance_decline
+    if _answer_is_attachment_scope_hedge(text):
+        return DOCUMENT_SCOPE_DECLINE_ANSWER
     return text
