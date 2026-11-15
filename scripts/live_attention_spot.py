@@ -34,7 +34,8 @@ def main() -> int:
         extra = {key: (key, q, p) for key, q, p in lam.EXTRA_SCENARIOS_BY_WORKFLOW.get(workflow, [])}
         base = {key: (key, q, p) for key, q, p in lam.SCENARIOS}
         key, question, pred = extra.get(scenario) or base[scenario]
-        ms, answer, body = lam.chat(thread_id, question)
+        model = lam.MODELS[0]
+        ms, answer, body = lam.chat(thread_id, question, model)
         run_id = str(body.get("run_id") or body.get("agent_run_id") or "")
         scores = lam.export_trace_scores(thread_id, run_id) if run_id else []
         passed = bool(pred(answer))
@@ -58,6 +59,7 @@ def main() -> int:
             question,
             answer,
             passed,
+            model,
         )
         print(json.dumps(row, indent=2))
 
