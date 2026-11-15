@@ -15,6 +15,8 @@ import {
 } from '@mui/material';
 import { listThreads, type Thread } from '../../lib/api';
 import { checkLlmModelReady, fetchAvailableLlmModelsStrict } from '../../lib/models-api';
+import { selectFieldVariant } from '../../theme';
+import { workbenchControlSx } from '../workbench/WorkbenchToolbar';
 
 const LAST_TEST_THREAD_KEY = 'askpdf.agentWorkflowBuilder.lastTestThread';
 const LAST_LLM_MODEL_KEY = 'last_llm_model';
@@ -126,7 +128,9 @@ export function BuilderThreadPicker({
           <TextField
             {...params}
             label="Thread"
+            variant={selectFieldVariant}
             required
+            sx={{ '& .MuiFilledInput-root': workbenchControlSx }}
             helperText={lockedThreadId ? 'Locked to the thread used by the interrupted test.' : 'Select the thread whose context this test should read.'}
             slotProps={{
               input: {
@@ -241,7 +245,9 @@ export function BuilderLlmModelPicker({
           <TextField
             {...params}
             label="Model"
+            variant={selectFieldVariant}
             required
+            sx={{ '& .MuiFilledInput-root': workbenchControlSx }}
             slotProps={{
               input: {
                 ...params.InputProps,

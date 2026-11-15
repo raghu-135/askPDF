@@ -9,6 +9,7 @@ import { ttsSentence, getVoices } from "../lib/tts-api";
 import { useTtsPrefetchCache } from "../hooks/useTtsPrefetchCache";
 import { adjacentReadableId } from "../lib/sentence-catalog";
 import { shouldClearCurrentOnSourceKeyChange } from "../lib/player-source-key";
+import { selectFieldVariant } from "../theme";
 
 type Sentence = {
   id: number;
@@ -424,7 +425,7 @@ export const PlayerExtrasChrome = React.memo(function PlayerExtrasChrome() {
         }}
       >
         <Stack spacing={2}>
-          <FormControl size="small" fullWidth>
+          <FormControl variant={selectFieldVariant} size="small" fullWidth>
             <InputLabel>Voice</InputLabel>
             <Select
               value={voiceOptions.includes(selectedVoice) ? selectedVoice : ""}

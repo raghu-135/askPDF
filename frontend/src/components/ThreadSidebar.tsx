@@ -88,6 +88,7 @@ import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
 import ProjectSettingsForm from './workbench/ProjectSettingsForm';
 import ThreadStatsList, { threadDocumentsFromMeta } from './workbench/ThreadStatsList';
 import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
+import { selectFieldVariant } from '../theme';
 
 
 export interface ThreadSidebarHeaderState {
@@ -1560,7 +1561,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             onChange={(e) => setNewThreadName(e.target.value)}
             placeholder="e.g., Research Paper Analysis"
           />
-          <FormControl fullWidth margin="dense">
+          <FormControl variant={selectFieldVariant} fullWidth margin="dense">
             <InputLabel>Project</InputLabel>
             <Select
               value={newThreadProjectId}
@@ -1762,7 +1763,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             value={newProjectDescription}
             onChange={(event) => setNewProjectDescription(event.target.value)}
           />
-          <FormControl fullWidth margin="dense">
+          <FormControl variant={selectFieldVariant} fullWidth margin="dense">
             <InputLabel>Embedding Model</InputLabel>
             <Select
               value={newProjectEmbeddingModel}
