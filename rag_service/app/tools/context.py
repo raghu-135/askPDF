@@ -27,6 +27,7 @@ class ToolInvocationContext:
     context_window: int | None = None
     context_budget: dict[str, Any] | None = None
     use_web_search: bool = False
+    use_browser_access: bool = False
     use_reranker: bool = True
     web_search_index: bool = True
     client_timezone: str | None = None
@@ -69,6 +70,7 @@ class ToolInvocationContext:
             context_window=data.get("context_window"),
             context_budget=dict(data.get("context_budget") or {}) if isinstance(data.get("context_budget"), Mapping) else None,
             use_web_search=bool(data.get("use_web_search", False)),
+            use_browser_access=bool(data.get("use_browser_access", False)),
             use_reranker=bool(data.get("use_reranker", True)),
             web_search_index=bool(data.get("web_search_index", True)),
             client_timezone=data.get("client_timezone"),
@@ -103,6 +105,7 @@ class ToolInvocationContext:
             "context_window": self.context_window,
             "context_budget": self.context_budget,
             "use_web_search": self.use_web_search,
+            "use_browser_access": self.use_browser_access,
             "use_reranker": self.use_reranker,
             "web_search_index": self.web_search_index,
             "client_timezone": self.client_timezone,

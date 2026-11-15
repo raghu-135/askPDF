@@ -117,9 +117,11 @@ import {
     HumanReviewDecisionPanel,
     ResizableDecisionPanel,
     WebSearchModeControl,
+    BrowserAccessModeControl,
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
+import { useBrowserAccessMode, type BrowserAccessMode } from '../hooks/useBrowserAccessMode';
 import {
     DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
     REVIEW_DECISION_COLUMN_MIN_HEIGHT,
@@ -783,6 +785,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [indexingStatus, setIndexingStatus] = useState<ChatComposerIndexingStatusValue>(ChatComposerIndexingStatus.Checking);
     const [useWebSearch, setUseWebSearch] = useState(false);
     const { mode: webSearchMode, setMode: setSharedWebSearchMode } = useWebSearchMode();
+    const { mode: browserAccessMode, setMode: setSharedBrowserAccessMode } = useBrowserAccessMode();
     const [contextWindow, setContextWindow] = useState<number>(0);
     const {
         contextBudget,
@@ -806,6 +809,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
     const [hitlCanvasPublish, setHitlCanvasPublish] = useState(false);
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
+    const [savingBrowserAccessMode, setSavingBrowserAccessMode] = useState(false);
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
     const [defaultHitlCanvasPublish, setDefaultHitlCanvasPublish] = useState(false);
     const [useReranker, setUseReranker] = useState(false);
@@ -1441,6 +1445,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseWebSearch(webSearchMode !== 'off');
         setHitlWebApproval(webSearchMode === 'ask');
     }, [webSearchMode]);
+
+    const handleBrowserAccessModeChange = (nextMode: BrowserAccessMode) => {
+        if (savingBrowserAccessMode) return;
+        setSharedBrowserAccessMode(nextMode);
+    };
 
     const handleWebSearchModeChange = async (nextMode: WebSearchMode) => {
         if (savingWebSearchMode) return;
@@ -2107,6 +2116,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 },
                 undefined,
                 packingBudgetPayload(contextBudget),
+                browserAccessMode,
             );
             if (!response) throw new Error(terminalStreamError || 'The chat stream ended before returning a response.');
             const traceWasOpenForTempMessage = workspaceTraceMessageIdRef.current === tempAssistantMsg.id;
@@ -2839,6 +2849,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onChange={handleWebSearchModeChange}
             />}
             webSearchMode={webSearchMode}
+            browserAccessMode={browserAccessMode}
             onModelChange={(model) => void handleLlmModelChange(model)}
             onContextWindowChange={handleContextWindowChange}
             onContextBudgetChange={setContextBudget}
@@ -2945,11 +2956,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     </>
                 )}
                 beforeModelControls={(
-                    <WebSearchModeControl
-                        mode={webSearchMode}
-                        disabled={savingWebSearchMode}
-                        onChange={handleWebSearchModeChange}
-                    />
+                    <Box sx={{ display: 'flex', gap: 0.25, alignItems: 'center' }}>
+                        <WebSearchModeControl
+                            mode={webSearchMode}
+                            disabled={savingWebSearchMode}
+                            onChange={handleWebSearchModeChange}
+                        />
+                        <BrowserAccessModeControl
+                            mode={browserAccessMode}
+                            disabled={savingBrowserAccessMode}
+                            onChange={handleBrowserAccessModeChange}
+                        />
+                    </Box>
                 )}
                 trailingActions={(
                     !isTestRuntime && <DeepResearchTaskPicker

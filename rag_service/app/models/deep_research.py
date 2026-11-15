@@ -107,6 +107,7 @@ class AgentTaskCreateRequest(BaseModel):
     context_window: int = Field(default=32_768, ge=2_048, le=2_000_000)
     context_budget: Optional[ContextBudgetOverride] = None
     web_search_mode: Literal["off", "ask", "on"] = "off"
+    browser_access_mode: Literal["off", "ask", "on"] = "off"
     enabled_profiles: List[SubagentProfileId] = Field(default_factory=lambda: [
         SubagentProfileId.DOCUMENT,
         SubagentProfileId.MEMORY,

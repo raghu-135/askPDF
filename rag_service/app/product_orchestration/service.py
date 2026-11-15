@@ -353,6 +353,14 @@ class AgentRunService:
                 **(thread_settings if isinstance(thread_settings, dict) else {}),
                 "hitl_web_approval": bool(hitl_web_approval_override),
             }
+        browser_mode = str(getattr(req, "browser_access_mode", "off") or "off")
+        if browser_mode in {"off", "ask", "on"}:
+            thread_settings = {
+                **(thread_settings if isinstance(thread_settings, dict) else {}),
+                "browser_access_mode": browser_mode,
+                "use_browser_access": browser_mode != "off",
+                "hitl_browser_approval": browser_mode == "ask",
+            }
         agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
         workflow_id = agent_settings.get("workflow_id") or default_agent_workflow_key()
@@ -391,6 +399,8 @@ class AgentRunService:
         request_overrides = {
             "llm_model": getattr(req, "llm_model", None),
             "use_web_search": getattr(req, "use_web_search", None),
+            "browser_access_mode": getattr(req, "browser_access_mode", None),
+            "use_browser_access": getattr(req, "browser_access_mode", "off") != "off",
             "use_reranker": getattr(req, "use_reranker", None),
             "replans": getattr(req, "replans", None),
             "system_role": getattr(req, "system_role_override", None),
@@ -512,6 +522,8 @@ class AgentRunService:
                     "embedding_model": embedding_model,
                     "llm_model": getattr(req, "llm_model", None),
                     "use_web_search": getattr(req, "use_web_search", None),
+                    "browser_access_mode": getattr(req, "browser_access_mode", None),
+                    "use_browser_access": getattr(req, "browser_access_mode", "off") != "off",
                     "use_reranker": getattr(req, "use_reranker", None),
                     "replans": getattr(req, "replans", None),
                     "system_role_override": getattr(req, "system_role_override", None),

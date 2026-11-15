@@ -178,6 +178,24 @@ def test_any_registered_tool_can_be_configured_for_human_approval():
     assert task_policies["search_knowledge"] == {"mode": "ask", "scope": "task"}
 
 
+def test_browser_access_mode_is_authoritative_over_legacy_knobs():
+    policies = tool_approval.invocation_policies({
+        "browser_access_mode": "on",
+        "hitl_browser_approval": True,
+        "use_browser_access": False,
+        "hitl_policy": {"enabled": False, "tools": {"browser_navigate": {"mode": "ask", "scope": "run"}}},
+    })
+    assert policies["browser_navigate"]["mode"] == "ask"
+    denied = tool_approval.invocation_policies({
+        "browser_access_mode": "off",
+        "hitl_policy": {"tools": {"browser_navigate": {"mode": "ask", "scope": "run"}}},
+    })
+    assert denied["browser_navigate"]["mode"] == "deny"
+    derived = tool_approval.invocation_policies({"hitl_browser_approval": True})
+    assert derived["browser_navigate"]["mode"] == "ask"
+    assert derived["browser_navigate"]["scope"] == "run"
+
+
 def test_web_search_mode_is_authoritative_over_legacy_knobs():
     policies = tool_approval.invocation_policies({
         "web_search_mode": "on",

@@ -39,6 +39,14 @@ GRAPH_TOOL_NAMES.extend(
     and name != ToolName.PUBLISH_CANVAS.value
 )
 
+BROWSER_GRAPH_TOOL_NAMES = frozenset({
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_act",
+    "browser_read",
+    "browser_save_to_thread",
+})
+
 QUESTION_PLACEHOLDER = "{{QUESTION}}"
 PREFETCH_PLACEHOLDER = "{{PREFETCH_CONTEXT}}"
 CONTEXT_PLACEHOLDER = "{{EVIDENCE_CONTEXT}}"
@@ -123,7 +131,10 @@ def _format_available_worker_nodes(state_or_settings: Dict[str, Any]) -> str:
 
 def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
     use_web_search = bool(state_or_settings.get("use_web_search", False))
+    use_browser_access = bool(state_or_settings.get("use_browser_access", False))
     active_tools = list(GRAPH_TOOL_NAMES if use_web_search else [name for name in GRAPH_TOOL_NAMES if name != ToolName.SEARCH_WEB.value])
+    if not use_browser_access:
+        active_tools = [name for name in active_tools if name not in BROWSER_GRAPH_TOOL_NAMES]
     catalog = get_tool_catalog(active_tools)
     playbook = normalize_tool_instructions(
         state_or_settings.get("tool_instructions") or {},

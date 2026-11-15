@@ -30,6 +30,7 @@ class ToolWarningCode(str, Enum):
     TOOL_OUTPUT_SOURCES_INVALID = "tool_output_sources_invalid"
     WEB_SEARCH_DISABLED = "web_search_disabled"
     WEB_SEARCH_FAILED = "search_web_failed"
+    BROWSER_ACCESS_DISABLED = "browser_access_disabled"
     RESPONSE_TRUNCATED = "tool_response_truncated"
     INDEXING_IN_PROGRESS = "indexing_in_progress"
 

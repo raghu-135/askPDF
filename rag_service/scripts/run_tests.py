@@ -171,6 +171,7 @@ API_TEST_FILES = [
     "test_api_endpoints_pytest.py",
     "test_api_integration_pytest.py",
     "test_browser_capture_validation_pytest.py",
+    "test_browser_url_policy_pytest.py",
     "test_file_chunks_api_pytest.py",
     "test_embedding_projection_api_pytest.py",
     "test_project_lifecycle_api_pytest.py",

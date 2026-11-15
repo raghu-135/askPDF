@@ -41,6 +41,7 @@ CAT_THREAD_CONVERSATION_HISTORY = NodeCategory.THREAD_CONVERSATION_HISTORY.value
 CAT_DURABLE_MEMORY = NodeCategory.DURABLE_MEMORY.value
 CAT_THREAD_EVENTS = NodeCategory.THREAD_EVENTS.value
 CAT_WEB = NodeCategory.WEB.value
+CAT_BROWSER = NodeCategory.BROWSER.value
 CAT_EXTERNAL_RESEARCH = NodeCategory.EXTERNAL_RESEARCH.value
 CAT_ANSWER = NodeCategory.ANSWER.value
 
@@ -72,6 +73,11 @@ TOOL_STACKEXCHANGE_REFERENCE = ToolContractId.STACKEXCHANGE_REFERENCE.value
 TOOL_YAHOO_FINANCE_NEWS = ToolContractId.YAHOO_FINANCE_NEWS.value
 TOOL_CLARIFY_INTENT = ToolContractId.CLARIFY_INTENT.value
 TOOL_RESEARCH_CANVAS_PUBLISH = ToolContractId.RESEARCH_CANVAS_PUBLISH.value
+TOOL_BROWSER_NAVIGATE = ToolContractId.BROWSER_NAVIGATE.value
+TOOL_BROWSER_SNAPSHOT = ToolContractId.BROWSER_SNAPSHOT.value
+TOOL_BROWSER_ACT = ToolContractId.BROWSER_ACT.value
+TOOL_BROWSER_READ = ToolContractId.BROWSER_READ.value
+TOOL_BROWSER_SAVE_TO_THREAD = ToolContractId.BROWSER_SAVE_TO_THREAD.value
 
 TOOL_NAME_GET_THREAD_SHAPE = ToolName.GET_THREAD_SHAPE.value
 TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY = ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value
@@ -89,6 +95,11 @@ TOOL_NAME_STACK_EXCHANGE = ToolName.STACK_EXCHANGE.value
 TOOL_NAME_YAHOO_FINANCE_NEWS = ToolName.YAHOO_FINANCE_NEWS.value
 TOOL_NAME_ASK_FOR_CLARIFICATION = ToolName.ASK_FOR_CLARIFICATION.value
 TOOL_NAME_PUBLISH_CANVAS = ToolName.PUBLISH_CANVAS.value
+TOOL_NAME_BROWSER_NAVIGATE = ToolName.BROWSER_NAVIGATE.value
+TOOL_NAME_BROWSER_SNAPSHOT = ToolName.BROWSER_SNAPSHOT.value
+TOOL_NAME_BROWSER_ACT = ToolName.BROWSER_ACT.value
+TOOL_NAME_BROWSER_READ = ToolName.BROWSER_READ.value
+TOOL_NAME_BROWSER_SAVE_TO_THREAD = ToolName.BROWSER_SAVE_TO_THREAD.value
 
 
 TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
@@ -163,6 +174,51 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "required_node_capabilities": [CAP_RETRIEVAL_WEB],
         "artifact_keys": ["web_sources"],
         "warning_codes": [ToolWarningCode.WEB_SEARCH_DISABLED, ToolWarningCode.NO_USABLE_WEB_RESULTS],
+    },
+    TOOL_NAME_BROWSER_NAVIGATE: {
+        "id": TOOL_BROWSER_NAVIGATE,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_page"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+    },
+    TOOL_NAME_BROWSER_SNAPSHOT: {
+        "id": TOOL_BROWSER_SNAPSHOT,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_state", "browser_screenshot_b64", "browser_page_text"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+    },
+    TOOL_NAME_BROWSER_ACT: {
+        "id": TOOL_BROWSER_ACT,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_control_result"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+    },
+    TOOL_NAME_BROWSER_READ: {
+        "id": TOOL_BROWSER_READ,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_page_text"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+    },
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD: {
+        "id": TOOL_BROWSER_SAVE_TO_THREAD,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_capture"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED, ToolWarningCode.INDEXING_IN_PROGRESS],
     },
     TOOL_NAME_WIKIPEDIA: {
         "id": TOOL_WIKIPEDIA_REFERENCE,
@@ -461,6 +517,56 @@ TOOL_FRIENDLY_CONFIG = {
         "display_name": "Internet Search",
         "description": "Live web search for external or time-sensitive information; cached to the thread.",
         "default_prompt": "Use when information is outside the uploaded documents or likely time-sensitive. Run in parallel with document search when enabled.",
+    },
+    TOOL_NAME_BROWSER_NAVIGATE: {
+        "id": TOOL_BROWSER_NAVIGATE,
+        "display_name": "Browser Navigate",
+        "description": "Open a URL in the shared workbench browser.",
+        "default_prompt": "Use to open or follow a specific http(s) page in the workbench browser. Do not use for REST search when search_web is enough.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_navigate",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_SNAPSHOT: {
+        "id": TOOL_BROWSER_SNAPSHOT,
+        "display_name": "Browser Snapshot",
+        "description": "Capture visible page text and a desktop screenshot from the workbench browser.",
+        "default_prompt": "Use after navigation to inspect the visible page and desktop state before acting.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_snapshot",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_ACT: {
+        "id": TOOL_BROWSER_ACT,
+        "display_name": "Browser Act",
+        "description": "Click, type, scroll, or send keys on the shared workbench browser.",
+        "default_prompt": "Use for interactive steps after browser_snapshot. Prefer precise coordinates when known.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_act",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_READ: {
+        "id": TOOL_BROWSER_READ,
+        "display_name": "Browser Read",
+        "description": "Read plain text from the active workbench browser page.",
+        "default_prompt": "Use for lightweight text extraction from the active tab.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_read",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD: {
+        "id": TOOL_BROWSER_SAVE_TO_THREAD,
+        "display_name": "Browser Save To Thread",
+        "description": "Capture the active browser page as PDF and attach it to the thread.",
+        "default_prompt": "Use when the active browser page should become durable thread evidence.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_save_to_thread",
+        "mcp_enabled": True,
+        "contract_version": "1",
     },
     TOOL_NAME_WIKIPEDIA: {
         "id": TOOL_WIKIPEDIA_REFERENCE,

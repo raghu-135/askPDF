@@ -13,9 +13,12 @@ import asyncio
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from url_policy import BrowserUrlPolicyError, validate_navigation_url
+from pelorus_client import pelorus_get, pelorus_post, pelorus_ready
 import requests
 import websockets
 from pypdf import PdfReader, PdfWriter
@@ -55,6 +58,30 @@ class CaptureResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class NavigateRequest(BaseModel):
+    url: str = Field(min_length=1)
+
+
+class NavigateResponse(BaseModel):
+    url: str
+    title: str
+
+
+class PelorusControlRequest(BaseModel):
+    action: str
+    coordinate: list[int] | None = None
+    text: str | None = None
+    scroll_direction: str | None = None
+    scroll_amount: int | None = None
+    duration: float | None = None
+
+
+class BrowserReadResponse(BaseModel):
+    url: str
+    title: str
+    text: str
 
 
 async def _send_cdp_command(websocket, msg_id, method, params=None):
@@ -129,6 +156,44 @@ async def get_active_tab_via_cdp():
     except Exception as e:
         logger.error(f"Failed to get active tab: {e}")
         raise
+
+
+async def _with_active_tab_websocket():
+    active_tab = await get_active_tab_via_cdp()
+    websocket_url = active_tab.get("webSocketDebuggerUrl")
+    if not websocket_url:
+        raise HTTPException(status_code=500, detail="Could not get WebSocket URL for tab")
+    return active_tab, websocket_url
+
+
+async def navigate_active_tab(url: str) -> tuple[str, str]:
+    """Navigate the active Brave tab via CDP."""
+    validated = validate_navigation_url(url)
+    _active_tab, websocket_url = await _with_active_tab_websocket()
+    async with websockets.connect(websocket_url, max_size=100 * 1024 * 1024) as websocket:
+        await _send_cdp_command(websocket, 1, "Page.enable")
+        await _send_cdp_command(
+            websocket,
+            2,
+            "Page.navigate",
+            {"url": validated},
+        )
+        await _wait_for_content_ready(websocket, max_wait_ms=15000, poll_interval_ms=250)
+        title_result = await _send_cdp_command(
+            websocket,
+            3,
+            "Runtime.evaluate",
+            {"expression": "JSON.stringify({url: location.href, title: document.title})"},
+        )
+        tab_url = validated
+        tab_title = validated
+        try:
+            payload = json.loads(title_result["result"]["result"]["value"])
+            tab_url = str(payload.get("url") or validated)
+            tab_title = str(payload.get("title") or tab_url)
+        except (KeyError, TypeError, json.JSONDecodeError):
+            pass
+        return tab_url, tab_title
 
 
 async def _wait_for_content_ready(websocket, max_wait_ms=5000, poll_interval_ms=200):
@@ -483,17 +548,112 @@ async def health():
             browser_version = browser_info.get('Browser', 'unknown')
         
         # Return healthy status with browser info
+        pelorus_ok = await pelorus_ready()
         return {
             "status": "healthy", 
             "browser": "cdp_accessible", 
             "version": f"direct_cdp_{browser_version}",
             "tabs_count": len(tabs),
-            "method": "direct_cdp_websocket"
+            "method": "direct_cdp_websocket",
+            "pelorus": "ready" if pelorus_ok else "unavailable",
         }
         
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "browser": str(e)}
+
+
+@app.post("/navigate", response_model=NavigateResponse)
+async def navigate_page(body: NavigateRequest):
+    try:
+        url, title = await navigate_active_tab(body.url)
+        return NavigateResponse(url=url, title=title)
+    except BrowserUrlPolicyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Navigate failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Navigate failed: {exc}") from exc
+
+
+@app.get("/pelorus/state")
+async def pelorus_state():
+    if not await pelorus_ready():
+        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": "Pelorus is not available"})
+    try:
+        return await pelorus_get("/api/state")
+    except Exception as exc:
+        logger.error("Pelorus state failed: %s", exc)
+        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": str(exc)}) from exc
+
+
+@app.get("/pelorus/screenshot")
+async def pelorus_screenshot():
+    if not await pelorus_ready():
+        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": "Pelorus is not available"})
+    try:
+        return await pelorus_get("/api/desktop/screenshot")
+    except Exception as exc:
+        logger.error("Pelorus screenshot failed: %s", exc)
+        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": str(exc)}) from exc
+
+
+@app.post("/pelorus/control")
+async def pelorus_control(body: PelorusControlRequest):
+    if not await pelorus_ready():
+        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": "Pelorus is not available"})
+    payload: dict[str, Any] = {"action": body.action}
+    if body.coordinate is not None:
+        payload["coordinate"] = body.coordinate
+    if body.text is not None:
+        payload["text"] = body.text
+    if body.scroll_direction is not None:
+        payload["scroll_direction"] = body.scroll_direction
+    if body.scroll_amount is not None:
+        payload["scroll_amount"] = body.scroll_amount
+    if body.duration is not None:
+        payload["duration"] = body.duration
+    try:
+        return await pelorus_post("/api/desktop/control", payload)
+    except Exception as exc:
+        logger.error("Pelorus control failed: %s", exc)
+        raise HTTPException(status_code=503, detail={"code": "pelorus_control_failed", "message": str(exc)}) from exc
+
+
+@app.get("/read", response_model=BrowserReadResponse)
+async def read_active_page():
+    try:
+        active_tab, websocket_url = await _with_active_tab_websocket()
+        tab_url = str(active_tab.get("url") or "")
+        tab_title = str(active_tab.get("title") or tab_url)
+        async with websockets.connect(websocket_url, max_size=100 * 1024 * 1024) as websocket:
+            await _send_cdp_command(websocket, 1, "Runtime.enable")
+            await _wait_for_content_ready(websocket)
+            result = await _send_cdp_command(
+                websocket,
+                2,
+                "Runtime.evaluate",
+                {
+                    "expression": "(() => { const t = document.body ? document.body.innerText : ''; return JSON.stringify({url: location.href, title: document.title, text: t.slice(0, 120000)}); })()",
+                    "returnByValue": True,
+                },
+            )
+            raw = result.get("result", {}).get("result", {}).get("value", "{}")
+            payload = json.loads(raw) if isinstance(raw, str) else {}
+            return BrowserReadResponse(
+                url=str(payload.get("url") or tab_url),
+                title=str(payload.get("title") or tab_title),
+                text=str(payload.get("text") or ""),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Read page failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Read failed: {exc}") from exc
 
 
 @app.post("/capture", response_model=CaptureResponse)
