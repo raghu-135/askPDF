@@ -1,0 +1,1204 @@
+{
+  "evalId": "eval-Xlh-2026-11-15T09:12:15",
+  "results": {
+    "version": 3,
+    "timestamp": "2026-11-15T09:12:15.549Z",
+    "prompts": [
+      {
+        "id": "d3bcaf71c11c2678899be04d872718325f0916b3b0705e805ee29930663a42e2",
+        "raw": "{{question}}",
+        "label": "{{question}}",
+        "provider": "router_rag_agent",
+        "metrics": {
+          "score": 5,
+          "testPassCount": 5,
+          "testFailCount": 0,
+          "testErrorCount": 0,
+          "testCacheHitCount": 0,
+          "assertPassCount": 10,
+          "assertFailCount": 0,
+          "totalLatencyMs": 1117413,
+          "tokenUsage": {
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "total": 0,
+            "numRequests": 5,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            },
+            "assertions": {
+              "total": 608,
+              "prompt": 493,
+              "completion": 115,
+              "cached": 0,
+              "numRequests": 1,
+              "completionDetails": {
+                "reasoning": 36,
+                "acceptedPrediction": 0,
+                "rejectedPrediction": 0,
+                "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0
+              }
+            }
+          },
+          "namedScores": {},
+          "namedScoresCount": {},
+          "namedScoreWeights": {},
+          "cost": 0
+        }
+      }
+    ],
+    "results": [
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "contains-any",
+                "value": [
+                  "transformer",
+                  "attention",
+                  "sequence"
+                ]
+              }
+            }
+          ]
+        },
+        "id": "cdeeafea-890a-4962-b39c-266e2945278a",
+        "latencyMs": 193871,
+        "namedScores": {},
+        "prompt": {
+          "raw": "What does the Attention Is All You Need paper discuss at a high level?",
+          "label": "{{question}}",
+          "config": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          }
+        },
+        "promptId": "d3bcaf71c11c2678899be04d872718325f0916b3b0705e805ee29930663a42e2",
+        "promptIdx": 0,
+        "provider": {
+          "id": "python:askpdf_provider.py",
+          "label": "router_rag_agent"
+        },
+        "response": {
+          "output": "**High-level summary:** \"Attention Is All You Need\" (Vaswani et al., Google Brain/Google Research/University of Toronto) introduces the **Transformer**, a sequence-transduction architecture built entirely on attention mechanisms—specifically self-attention—discarding the recurrence (RNNs/LSTMs) and convolutions that dominated prior models [Source: PDF, page 1; internal knowledge for the architecture claim].\n\n**What the supplied context supports:**\n- The paper's authorship and affiliations (title page) [Source: PDF, page 1].\n- Part of its motivation: a convolutional layer with kernel width k < n cannot connect all input/output position pairs, requiring stacks of O(n/k) (contiguous) or O(log_k(n)) (dilated) layers, which lengthens paths between positions—i.e., convolutions are costly for long-range dependencies [Source: PDF, page 7].\n\n**From internal knowledge (not verifiable in the supplied excerpts):** the paper argues recurrent models force sequential computation and struggle with long-range dependencies; proposes multi-head self-attention in an encoder–decoder stack; reports state-of-the-art BLEU on WMT 2014 English→German and English→French translation; and shows results on English constituency parsing.\n\n**Evidence gap:** The retrieved context contains only the title page and a fragment of the related-work/analysis section. The abstract, model description, and experimental results are not included, so specifics such as exact BLEU scores, layer counts, and the multi-head attention formulation cannot be confirmed from the supplied document. If you can provide those pages, I can give a fully sourced summary.",
+          "metadata": {
+            "question_id": "attn-overview",
+            "retrieval_pages": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              10
+            ],
+            "expected_pages": [
+              1,
+              2
+            ],
+            "retrieval_hit": true,
+            "answer_heuristic_pass": true,
+            "workflow": "router_rag_agent",
+            "chat_model": "inclusionai/ling-3.2-flash:free"
+          },
+          "cached": false
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "attn-overview",
+          "vars": {
+            "question_id": "attn-overview",
+            "question": "What does the Attention Is All You Need paper discuss at a high level?",
+            "expected_pages": [
+              1,
+              2
+            ],
+            "answer_match": {
+              "any_contains": [
+                "transformer",
+                "attention",
+                "sequence"
+              ]
+            },
+            "numeric": null
+          },
+          "assert": [
+            {
+              "type": "javascript",
+              "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+            },
+            {
+              "type": "contains-any",
+              "value": [
+                "transformer",
+                "attention",
+                "sequence"
+              ]
+            }
+          ],
+          "options": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          },
+          "metadata": {}
+        },
+        "testIdx": 0,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "question_id": "attn-overview",
+          "question": "What does the Attention Is All You Need paper discuss at a high level?",
+          "expected_pages": [
+            1,
+            2
+          ],
+          "answer_match": {
+            "any_contains": [
+              "transformer",
+              "attention",
+              "sequence"
+            ]
+          },
+          "numeric": null
+        },
+        "metadata": {
+          "question_id": "attn-overview",
+          "retrieval_pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            10
+          ],
+          "expected_pages": [
+            1,
+            2
+          ],
+          "retrieval_hit": true,
+          "answer_heuristic_pass": true,
+          "workflow": "router_rag_agent",
+          "chat_model": "inclusionai/ling-3.2-flash:free",
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 608,
+            "prompt": 493,
+            "completion": 115,
+            "cached": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 36,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+              }
+            },
+            {
+              "assertion": {
+                "type": "llm-rubric",
+                "value": "Pass if the answer states that dot-product attention scores are scaled by\nthe square root of the key dimension (sqrt(d_k) or equivalent).\n"
+              },
+              "pass": true,
+              "score": 1,
+              "reason": "The answer explicitly states that dot-product attention scores are scaled by dividing by √dₖ (the square root of the key dimension), and provides the formula Attention(Q, K, V) = softmax(QKᵀ / √dₖ) V, which satisfies the rubric requirement.",
+              "tokensUsed": {
+                "total": 608,
+                "prompt": 493,
+                "completion": 115,
+                "cached": 0,
+                "numRequests": 1,
+                "completionDetails": {
+                  "reasoning": 36,
+                  "cacheReadInputTokens": 0,
+                  "cacheCreationInputTokens": 0
+                }
+              },
+              "metadata": {
+                "openrouter": {
+                  "accountCharge": 0,
+                  "reportedUpstreamInferenceCost": 0,
+                  "reportedUpstreamPromptCost": 0,
+                  "reportedUpstreamCompletionCost": 0,
+                  "isByok": false
+                },
+                "renderedGradingPrompt": "[{\"role\":\"system\",\"content\":\"You are grading output according to a user-specified rubric. If the statement in the rubric is true, then the output passes the test. You respond with a JSON object with this structure: {reason: string, pass: boolean, score: number}\\n\\nExamples:\\n\\n<Output>Hello world</Output>\\n<Rubric>Content contains a greeting</Rubric>\\n{\\\"reason\\\": \\\"the content contains the word 'Hello'\\\", \\\"pass\\\": true, \\\"score\\\": 1.0}\\n\\n<Output>Avast ye swabs, repel the invaders!</Output>\\n<Rubric>Does not speak like a pirate</Rubric>\\n{\\\"reason\\\": \\\"'avast ye' is a common pirate term\\\", \\\"pass\\\": false, \\\"score\\\": 0.0}\"},{\"role\":\"user\",\"content\":\"<Output>\\nThe dot-product attention scores are scaled by dividing by **√dₖ** — i.e., a scaling factor of **1/√dₖ**, where dₖ is the dimension of the queries and keys.\\n\\nThe paper defines Scaled Dot-Product Attention as:\\n\\n**Attention(Q, K, V) = softmax(QKᵀ / √dₖ) V**\\n\\nAs stated in the text: \\\"We compute the dot products of the query with all keys, divide each by √dₖ, and apply a softmax function to obtain the weights on the values.\\\" [Source: src_6a376c7eeb0c10886441342d690dbc5c, page 4, Section 3.2.1]\\n\\nThe context also notes this scaling matters because when dₖ is large, the dot products grow large in magnitude, pushing the softmax into regions with extremely small gradients; dividing by √dₖ counteracts this. [Source: src_6a376c7eeb0c10886441342d690dbc5c, page 4]\\n</Output>\\n<Rubric>\\nPass if the answer states that dot-product attention scores are scaled by\\nthe square root of the key dimension (sqrt(d_k) or equivalent).\\n\\n</Rubric>\"}]"
+              }
+            }
+          ]
+        },
+        "id": "c03c008f-cf38-4a75-ab0d-fa3f34fb87a1",
+        "latencyMs": 193226,
+        "namedScores": {},
+        "prompt": {
+          "raw": "In the Attention paper, what scaling factor is applied to dot-product attention scores?",
+          "label": "{{question}}",
+          "config": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          }
+        },
+        "promptId": "d3bcaf71c11c2678899be04d872718325f0916b3b0705e805ee29930663a42e2",
+        "promptIdx": 0,
+        "provider": {
+          "id": "python:askpdf_provider.py",
+          "label": "router_rag_agent"
+        },
+        "response": {
+          "output": "The dot-product attention scores are scaled by dividing by **√dₖ** — i.e., a scaling factor of **1/√dₖ**, where dₖ is the dimension of the queries and keys.\n\nThe paper defines Scaled Dot-Product Attention as:\n\n**Attention(Q, K, V) = softmax(QKᵀ / √dₖ) V**\n\nAs stated in the text: \"We compute the dot products of the query with all keys, divide each by √dₖ, and apply a softmax function to obtain the weights on the values.\" [Source: src_6a376c7eeb0c10886441342d690dbc5c, page 4, Section 3.2.1]\n\nThe context also notes this scaling matters because when dₖ is large, the dot products grow large in magnitude, pushing the softmax into regions with extremely small gradients; dividing by √dₖ counteracts this. [Source: src_6a376c7eeb0c10886441342d690dbc5c, page 4]",
+          "metadata": {
+            "question_id": "attn-scaled-dot",
+            "retrieval_pages": [
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              9
+            ],
+            "expected_pages": [
+              4
+            ],
+            "retrieval_hit": true,
+            "answer_heuristic_pass": true,
+            "workflow": "router_rag_agent",
+            "chat_model": "inclusionai/ling-3.2-flash:free"
+          },
+          "cached": false
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "attn-scaled-dot",
+          "vars": {
+            "question_id": "attn-scaled-dot",
+            "question": "In the Attention paper, what scaling factor is applied to dot-product attention scores?",
+            "expected_pages": [
+              4
+            ],
+            "answer_match": {
+              "any_contains": [
+                "sqrt",
+                "√",
+                "d_k",
+                "d model"
+              ]
+            }
+          },
+          "assert": [
+            {
+              "type": "javascript",
+              "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+            },
+            {
+              "type": "llm-rubric",
+              "value": "Pass if the answer states that dot-product attention scores are scaled by\nthe square root of the key dimension (sqrt(d_k) or equivalent).\n"
+            }
+          ],
+          "options": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          },
+          "metadata": {}
+        },
+        "testIdx": 1,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 608,
+            "prompt": 493,
+            "completion": 115,
+            "cached": 0,
+            "numRequests": 1,
+            "completionDetails": {
+              "reasoning": 36,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "question_id": "attn-scaled-dot",
+          "question": "In the Attention paper, what scaling factor is applied to dot-product attention scores?",
+          "expected_pages": [
+            4
+          ],
+          "answer_match": {
+            "any_contains": [
+              "sqrt",
+              "√",
+              "d_k",
+              "d model"
+            ]
+          }
+        },
+        "metadata": {
+          "question_id": "attn-scaled-dot",
+          "retrieval_pages": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            9
+          ],
+          "expected_pages": [
+            4
+          ],
+          "retrieval_hit": true,
+          "answer_heuristic_pass": true,
+          "workflow": "router_rag_agent",
+          "chat_model": "inclusionai/ling-3.2-flash:free",
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "contains",
+                "value": "6"
+              }
+            }
+          ]
+        },
+        "id": "809c6f6c-54f0-4cc4-a6f6-ece6f7f46db3",
+        "latencyMs": 566942,
+        "namedScores": {},
+        "prompt": {
+          "raw": "How many encoder layers does the base Transformer model use in the Attention paper (Table 3)?",
+          "label": "{{question}}",
+          "config": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          }
+        },
+        "promptId": "d3bcaf71c11c2678899be04d872718325f0916b3b0705e805ee29930663a42e2",
+        "promptIdx": 0,
+        "provider": {
+          "id": "python:askpdf_provider.py",
+          "label": "router_rag_agent"
+        },
+        "response": {
+          "output": "**Answer based on the supplied context: not determinable — Table 3 is not included in the provided excerpts.**\n\nThe only source passage shown is from page 5 (Section 3.2.3, \"Applications of Attention in our Model\"), which describes the three attention mechanisms but does not contain Table 3 or any layer-count hyperparameters. The other ranked sources (pages 1–3, 5, 7, 9–10) are listed but their contents were not provided, so I cannot verify the table's values from the context.\n\n**What's missing:** The text or image of Table 3 (the \"Model variations\" table comparing base/big configurations), which in the Attention paper lists the number of layers N, model dimension d_model, and other hyperparameters.\n\nFor reference only — this is **internal knowledge, not supported by the retrieved context**: in \"Attention Is All You Need\" (Vaswani et al., 2017), Table 3's base model uses **N = 6** layers in both the encoder and the decoder (with d_model = 512, d_ff = 2048, h = 8 heads). If you can share the page containing Table 3, I can confirm this against the document.",
+          "metadata": {
+            "question_id": "attn-encoder-layers",
+            "retrieval_pages": [
+              1,
+              2,
+              3,
+              5,
+              7,
+              9,
+              10
+            ],
+            "expected_pages": [
+              6,
+              7
+            ],
+            "retrieval_hit": true,
+            "answer_heuristic_pass": true,
+            "workflow": "router_rag_agent",
+            "chat_model": "inclusionai/ling-3.2-flash:free"
+          },
+          "cached": false
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "attn-encoder-layers",
+          "vars": {
+            "question_id": "attn-encoder-layers",
+            "question": "How many encoder layers does the base Transformer model use in the Attention paper (Table 3)?",
+            "expected_pages": [
+              6,
+              7
+            ],
+            "answer_match": {
+              "any_contains": [
+                "6"
+              ]
+            },
+            "numeric": {
+              "target": 6,
+              "tolerance": 0
+            }
+          },
+          "assert": [
+            {
+              "type": "javascript",
+              "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+            },
+            {
+              "type": "contains",
+              "value": "6"
+            }
+          ],
+          "options": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          },
+          "metadata": {}
+        },
+        "testIdx": 2,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "question_id": "attn-encoder-layers",
+          "question": "How many encoder layers does the base Transformer model use in the Attention paper (Table 3)?",
+          "expected_pages": [
+            6,
+            7
+          ],
+          "answer_match": {
+            "any_contains": [
+              "6"
+            ]
+          },
+          "numeric": {
+            "target": 6,
+            "tolerance": 0
+          }
+        },
+        "metadata": {
+          "question_id": "attn-encoder-layers",
+          "retrieval_pages": [
+            1,
+            2,
+            3,
+            5,
+            7,
+            9,
+            10
+          ],
+          "expected_pages": [
+            6,
+            7
+          ],
+          "retrieval_hit": true,
+          "answer_heuristic_pass": true,
+          "workflow": "router_rag_agent",
+          "chat_model": "inclusionai/ling-3.2-flash:free",
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "contains",
+                "value": "64"
+              }
+            }
+          ]
+        },
+        "id": "5f8c40cc-46aa-43c2-9de4-0f9a6d346a3e",
+        "latencyMs": 98190,
+        "namedScores": {},
+        "prompt": {
+          "raw": "What is d_k per head in the Attention paper's default multi-head setup?",
+          "label": "{{question}}",
+          "config": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          }
+        },
+        "promptId": "d3bcaf71c11c2678899be04d872718325f0916b3b0705e805ee29930663a42e2",
+        "promptIdx": 0,
+        "provider": {
+          "id": "python:askpdf_provider.py",
+          "label": "router_rag_agent"
+        },
+        "response": {
+          "output": "**d_k = 64 per head.**\n\nIn the default multi-head setup, the paper uses h = 8 parallel attention heads with d_model = 512, and sets the per-head key (and value) dimension to d_k = d_v = d_model / h = 512 / 8 = **64** [Source: src_1efa1f9b0546ba451fac8b352307ed26 | page 4, Section 3.2.2 \"Multi-Head Attention\"].\n\nThe paper adds that because of this reduced per-head dimension, the total computational cost is similar to that of single-head attention with full dimensionality.",
+          "metadata": {
+            "question_id": "attn-multi-head-dk",
+            "retrieval_pages": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              9
+            ],
+            "expected_pages": [
+              5
+            ],
+            "retrieval_hit": true,
+            "answer_heuristic_pass": true,
+            "workflow": "router_rag_agent",
+            "chat_model": "inclusionai/ling-3.2-flash:free"
+          },
+          "cached": false
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "attn-multi-head-dk",
+          "vars": {
+            "question_id": "attn-multi-head-dk",
+            "question": "What is d_k per head in the Attention paper's default multi-head setup?",
+            "expected_pages": [
+              5
+            ],
+            "answer_match": {
+              "any_contains": [
+                "64"
+              ]
+            },
+            "numeric": {
+              "target": 64,
+              "tolerance": 0
+            }
+          },
+          "assert": [
+            {
+              "type": "javascript",
+              "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+            },
+            {
+              "type": "contains",
+              "value": "64"
+            }
+          ],
+          "options": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          },
+          "metadata": {}
+        },
+        "testIdx": 3,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "question_id": "attn-multi-head-dk",
+          "question": "What is d_k per head in the Attention paper's default multi-head setup?",
+          "expected_pages": [
+            5
+          ],
+          "answer_match": {
+            "any_contains": [
+              "64"
+            ]
+          },
+          "numeric": {
+            "target": 64,
+            "tolerance": 0
+          }
+        },
+        "metadata": {
+          "question_id": "attn-multi-head-dk",
+          "retrieval_pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            9
+          ],
+          "expected_pages": [
+            5
+          ],
+          "retrieval_hit": true,
+          "answer_heuristic_pass": true,
+          "workflow": "router_rag_agent",
+          "chat_model": "inclusionai/ling-3.2-flash:free",
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      },
+      {
+        "cost": 0,
+        "gradingResult": {
+          "pass": true,
+          "score": 1,
+          "reason": "All assertions passed",
+          "namedScores": {},
+          "tokensUsed": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0
+          },
+          "componentResults": [
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "javascript",
+                "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+              }
+            },
+            {
+              "pass": true,
+              "score": 1,
+              "reason": "Assertion passed",
+              "assertion": {
+                "type": "contains",
+                "value": "Vaswani"
+              }
+            }
+          ]
+        },
+        "id": "13bbbabe-788d-450f-b117-c5faacbef472",
+        "latencyMs": 65184,
+        "namedScores": {},
+        "prompt": {
+          "raw": "Who is the first listed author on the Attention paper?",
+          "label": "{{question}}",
+          "config": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          }
+        },
+        "promptId": "d3bcaf71c11c2678899be04d872718325f0916b3b0705e805ee29930663a42e2",
+        "promptIdx": 0,
+        "provider": {
+          "id": "python:askpdf_provider.py",
+          "label": "router_rag_agent"
+        },
+        "response": {
+          "output": "**Ashish Vaswani** (Google Brain) is the first listed author on \"Attention Is All You Need.\"\n\nThe title page lists the authors in order: Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Łukasz Kaiser, and Illia Polosukhin [Source: src_22ce140777028e87df5d53d79c1fb570 | page 1].",
+          "metadata": {
+            "question_id": "attn-authors",
+            "retrieval_pages": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              10,
+              11,
+              12
+            ],
+            "expected_pages": [
+              1
+            ],
+            "retrieval_hit": true,
+            "answer_heuristic_pass": true,
+            "workflow": "router_rag_agent",
+            "chat_model": "inclusionai/ling-3.2-flash:free"
+          },
+          "cached": false
+        },
+        "score": 1,
+        "success": true,
+        "testCase": {
+          "description": "attn-authors",
+          "vars": {
+            "question_id": "attn-authors",
+            "question": "Who is the first listed author on the Attention paper?",
+            "expected_pages": [
+              1
+            ],
+            "answer_match": {
+              "any_contains": [
+                "Vaswani"
+              ]
+            }
+          },
+          "assert": [
+            {
+              "type": "javascript",
+              "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+            },
+            {
+              "type": "contains",
+              "value": "Vaswani"
+            }
+          ],
+          "options": {
+            "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+          },
+          "metadata": {}
+        },
+        "testIdx": 4,
+        "tokenUsage": {
+          "prompt": 0,
+          "completion": 0,
+          "cached": 0,
+          "total": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 0,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          },
+          "assertions": {
+            "total": 0,
+            "prompt": 0,
+            "completion": 0,
+            "cached": 0,
+            "numRequests": 0,
+            "completionDetails": {
+              "reasoning": 0,
+              "acceptedPrediction": 0,
+              "rejectedPrediction": 0,
+              "cacheReadInputTokens": 0,
+              "cacheCreationInputTokens": 0
+            }
+          }
+        },
+        "vars": {
+          "question_id": "attn-authors",
+          "question": "Who is the first listed author on the Attention paper?",
+          "expected_pages": [
+            1
+          ],
+          "answer_match": {
+            "any_contains": [
+              "Vaswani"
+            ]
+          }
+        },
+        "metadata": {
+          "question_id": "attn-authors",
+          "retrieval_pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            10,
+            11,
+            12
+          ],
+          "expected_pages": [
+            1
+          ],
+          "retrieval_hit": true,
+          "answer_heuristic_pass": true,
+          "workflow": "router_rag_agent",
+          "chat_model": "inclusionai/ling-3.2-flash:free",
+          "_promptfooFileMetadata": {}
+        },
+        "failureReason": 0
+      }
+    ],
+    "stats": {
+      "successes": 5,
+      "failures": 0,
+      "errors": 0,
+      "tokenUsage": {
+        "prompt": 0,
+        "completion": 0,
+        "cached": 0,
+        "total": 0,
+        "numRequests": 5,
+        "completionDetails": {
+          "reasoning": 0,
+          "acceptedPrediction": 0,
+          "rejectedPrediction": 0,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 0
+        },
+        "assertions": {
+          "total": 608,
+          "prompt": 493,
+          "completion": 115,
+          "cached": 0,
+          "numRequests": 1,
+          "completionDetails": {
+            "reasoning": 36,
+            "acceptedPrediction": 0,
+            "rejectedPrediction": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0
+          }
+        }
+      },
+      "durationMs": 1119210,
+      "evaluationDurationMs": 1119210
+    }
+  },
+  "config": {
+    "tags": {},
+    "description": "askPDF promptfoo POC — 5 Attention-paper cases, live rag_service E2E",
+    "prompts": [
+      "{{question}}"
+    ],
+    "providers": [
+      {
+        "id": "python:askpdf_provider.py",
+        "label": "router_rag_agent",
+        "config": {
+          "pythonExecutable": "python3",
+          "timeout": 900000
+        }
+      }
+    ],
+    "tests": [
+      {
+        "description": "attn-overview",
+        "vars": {
+          "question_id": "attn-overview",
+          "question": "What does the Attention Is All You Need paper discuss at a high level?",
+          "expected_pages": [
+            1,
+            2
+          ],
+          "answer_match": {
+            "any_contains": [
+              "transformer",
+              "attention",
+              "sequence"
+            ]
+          },
+          "numeric": null
+        },
+        "assert": [
+          {
+            "type": "contains-any",
+            "value": [
+              "transformer",
+              "attention",
+              "sequence"
+            ]
+          }
+        ]
+      },
+      {
+        "description": "attn-scaled-dot",
+        "vars": {
+          "question_id": "attn-scaled-dot",
+          "question": "In the Attention paper, what scaling factor is applied to dot-product attention scores?",
+          "expected_pages": [
+            4
+          ],
+          "answer_match": {
+            "any_contains": [
+              "sqrt",
+              "√",
+              "d_k",
+              "d model"
+            ]
+          }
+        },
+        "assert": [
+          {
+            "type": "llm-rubric",
+            "value": "Pass if the answer states that dot-product attention scores are scaled by\nthe square root of the key dimension (sqrt(d_k) or equivalent).\n"
+          }
+        ]
+      },
+      {
+        "description": "attn-encoder-layers",
+        "vars": {
+          "question_id": "attn-encoder-layers",
+          "question": "How many encoder layers does the base Transformer model use in the Attention paper (Table 3)?",
+          "expected_pages": [
+            6,
+            7
+          ],
+          "answer_match": {
+            "any_contains": [
+              "6"
+            ]
+          },
+          "numeric": {
+            "target": 6,
+            "tolerance": 0
+          }
+        },
+        "assert": [
+          {
+            "type": "contains",
+            "value": "6"
+          }
+        ]
+      },
+      {
+        "description": "attn-multi-head-dk",
+        "vars": {
+          "question_id": "attn-multi-head-dk",
+          "question": "What is d_k per head in the Attention paper's default multi-head setup?",
+          "expected_pages": [
+            5
+          ],
+          "answer_match": {
+            "any_contains": [
+              "64"
+            ]
+          },
+          "numeric": {
+            "target": 64,
+            "tolerance": 0
+          }
+        },
+        "assert": [
+          {
+            "type": "contains",
+            "value": "64"
+          }
+        ]
+      },
+      {
+        "description": "attn-authors",
+        "vars": {
+          "question_id": "attn-authors",
+          "question": "Who is the first listed author on the Attention paper?",
+          "expected_pages": [
+            1
+          ],
+          "answer_match": {
+            "any_contains": [
+              "Vaswani"
+            ]
+          }
+        },
+        "assert": [
+          {
+            "type": "contains",
+            "value": "Vaswani"
+          }
+        ]
+      }
+    ],
+    "env": {},
+    "outputPath": [
+      "output/poc-results.json"
+    ],
+    "extensions": [],
+    "metadata": {},
+    "evaluateOptions": {
+      "maxConcurrency": 1,
+      "delay": 3500
+    },
+    "defaultTest": {
+      "options": {
+        "provider": "openrouter:inclusionai/ling-3.2-flash:free"
+      },
+      "assert": [
+        {
+          "type": "javascript",
+          "value": "context.providerResponse?.metadata?.retrieval_hit === true"
+        }
+      ],
+      "vars": {},
+      "metadata": {}
+    },
+    "basePath": "/agent/repos/askPDF/evals/promptfoo"
+  },
+  "shareableUrl": null,
+  "metadata": {
+    "promptfooVersion": "0.125.1",
+    "nodeVersion": "v22.23.4",
+    "platform": "linux",
+    "arch": "x64",
+    "exportedAt": "2026-11-15T09:30:54.966Z",
+    "evaluationCreatedAt": "2026-11-15T09:12:15.549Z"
+  },
+  "vars": [
+    "question_id",
+    "question",
+    "expected_pages",
+    "answer_match",
+    "numeric"
+  ],
+  "runtimeOptions": {
+    "eventSource": "cli",
+    "maxConcurrency": 1,
+    "showProgressBar": true,
+    "repeat": 1,
+    "cache": true
+  }
+}

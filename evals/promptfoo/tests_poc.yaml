@@ -1,0 +1,67 @@
+# Subset of benchmarks/questions.json (Attention paper) for promptfoo POC.
+- description: attn-overview
+  vars:
+    question_id: attn-overview
+    question: What does the Attention Is All You Need paper discuss at a high level?
+    expected_pages: [1, 2]
+    answer_match:
+      any_contains: ["transformer", "attention", "sequence"]
+    numeric: null
+  assert:
+    - type: contains-any
+      value:
+        - transformer
+        - attention
+        - sequence
+
+- description: attn-scaled-dot
+  vars:
+    question_id: attn-scaled-dot
+    question: In the Attention paper, what scaling factor is applied to dot-product attention scores?
+    expected_pages: [4]
+    answer_match:
+      any_contains: ["sqrt", "√", "d_k", "d model"]
+  assert:
+    - type: llm-rubric
+      value: |
+        Pass if the answer states that dot-product attention scores are scaled by
+        the square root of the key dimension (sqrt(d_k) or equivalent).
+
+- description: attn-encoder-layers
+  vars:
+    question_id: attn-encoder-layers
+    question: How many encoder layers does the base Transformer model use in the Attention paper (Table 3)?
+    expected_pages: [6, 7]
+    answer_match:
+      any_contains: ["6"]
+    numeric:
+      target: 6
+      tolerance: 0
+  assert:
+    - type: contains
+      value: "6"
+
+- description: attn-multi-head-dk
+  vars:
+    question_id: attn-multi-head-dk
+    question: What is d_k per head in the Attention paper's default multi-head setup?
+    expected_pages: [5]
+    answer_match:
+      any_contains: ["64"]
+    numeric:
+      target: 64
+      tolerance: 0
+  assert:
+    - type: contains
+      value: "64"
+
+- description: attn-authors
+  vars:
+    question_id: attn-authors
+    question: Who is the first listed author on the Attention paper?
+    expected_pages: [1]
+    answer_match:
+      any_contains: ["Vaswani"]
+  assert:
+    - type: contains
+      value: Vaswani

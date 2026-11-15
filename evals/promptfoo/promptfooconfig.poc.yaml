@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: askPDF promptfoo POC — 5 Attention-paper cases, live rag_service E2E
+
+prompts:
+  - "{{question}}"
+
+providers:
+  - id: "python:askpdf_provider.py"
+    label: router_rag_agent
+    config:
+      pythonExecutable: python3
+      timeout: 900000
+
+defaultTest:
+  options:
+    provider: openrouter:inclusionai/ling-3.2-flash:free
+  assert:
+    - type: javascript
+      value: context.providerResponse?.metadata?.retrieval_hit === true
+
+evaluateOptions:
+  maxConcurrency: 1
+  delay: 3500
+
+tests: file://tests_poc.yaml
+
+outputPath: output/poc-results.json
