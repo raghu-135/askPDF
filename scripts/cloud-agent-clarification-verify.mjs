@@ -6,12 +6,17 @@
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { chromium } from 'playwright-core';
+import { createRequire } from 'node:module';
+import pathUtil from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const requireFromFrontend = createRequire(pathUtil.join(pathUtil.dirname(fileURLToPath(import.meta.url)), '../frontend/package.json'));
+const { chromium } = requireFromFrontend('@playwright/test');
 import {
   DEFAULT_API_URL,
   DEFAULT_ART_DIR,
-  DEFAULT_BASE_URL,
   REAL_UI_VIEWPORT,
+  REPO_ROOT,
   ScreenshotGuard,
   chatRateLimitPause,
   ensureProjectAndThread,
@@ -25,7 +30,7 @@ import {
 } from './cloud-agent-e2e-lib.mjs';
 
 const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'inclusionai/ling-3.2-flash:free';
-const PDF = process.env.ASKPDF_E2E_PDF || path.resolve('rag_service/tests/01030000000000.pdf');
+const PDF = process.env.ASKPDF_E2E_PDF || path.join(REPO_ROOT, 'rag_service/tests/01030000000000.pdf');
 const QUESTION = process.env.ASKPDF_CLARIFY_QUESTION || 'Compare them.';
 const CUSTOM = 'Summarize the architecture section in one paragraph.';
 
@@ -34,12 +39,11 @@ async function waitClarificationCard(page) {
   await page.getByRole('button', { name: /Something else/i }).waitFor({ timeout: 60_000 });
 }
 
-async function waitComposerAfterSend(page) {
+async function waitOutOfSending(page) {
   const sending = page.getByPlaceholder(/Sending/i);
-  if (await sending.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await sending.waitFor({ state: 'hidden', timeout: 600_000 });
+  if (await sending.isVisible({ timeout: 120_000 }).catch(() => false)) {
+    await sending.waitFor({ state: 'hidden', timeout: 900_000 });
   }
-  await waitForComposerReady(page);
 }
 
 async function main() {
@@ -77,12 +81,19 @@ async function main() {
   const option = page.getByRole('button').filter({ hasText: /Compare|MORAN/i }).first();
   const optionLabel = (await option.innerText()).trim();
   await option.click();
-  await waitComposerAfterSend(page);
-  await guard.capture(page, 'clarification-06-option-followup.png', { requireChatWorkspace: true });
+  const sendingAfterOption = page.getByPlaceholder(/Sending/i);
+  await sendingAfterOption.waitFor({ state: 'visible', timeout: 120_000 });
+  await guard.capture(page, 'clarification-06-option-sending.png', { requireChatWorkspace: true, allowLoadingShell: true });
+  await waitOutOfSending(page);
+  await waitForComposerReady(page);
+  await guard.capture(page, 'clarification-07-option-answered.png', { requireChatWorkspace: true });
 
   await chatRateLimitPause();
+  await page.waitForTimeout(4000);
+  await waitForComposerReady(page);
   await typeAndSendChat(page, QUESTION);
   await waitClarificationCard(page);
+  await guard.capture(page, 'clarification-08-card-before-cancel.png', { requireChatWorkspace: true });
   await page.getByLabel('Close decision panel').click();
   await waitForComposerReady(page);
   const composer = page.getByTestId('chat-composer-input');
@@ -90,7 +101,7 @@ async function main() {
   if (!reseed.includes(QUESTION)) {
     throw new Error(`Cancel did not re-seed composer with ${JSON.stringify(QUESTION)}; got ${JSON.stringify(reseed)}`);
   }
-  await guard.capture(page, 'clarification-07-cancel-reseed.png', { requireChatWorkspace: true });
+  await guard.capture(page, 'clarification-09-cancel-reseed.png', { requireChatWorkspace: true });
 
   const meta = {
     tested_sha: sha,
