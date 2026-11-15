@@ -312,8 +312,12 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             )
         if gaps:
             answer += "\n\nUnresolved evidence gaps:\n" + "\n".join(f"- {gap}" for gap in gaps)
+        answer = postprocess_grounded_document_answer(state, answer)
         reason = str(state.get("corrective_budget_exhausted_reason") or "")
-        if reason in CORRECTIVE_BUDGET_REASONS and answer != DOCUMENT_SCOPE_DECLINE_ANSWER:
+        if (
+            reason in CORRECTIVE_BUDGET_REASONS
+            and answer != DOCUMENT_SCOPE_DECLINE_ANSWER
+        ):
             answer += f"\n\nCorrection stopped because the {reason.replace('_', ' ')} budget was exhausted."
         data = {
             "status": NodeEventStatus.COMPLETED.value,

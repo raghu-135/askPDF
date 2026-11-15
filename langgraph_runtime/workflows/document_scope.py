@@ -149,6 +149,8 @@ def _answer_is_attachment_scope_hedge(answer: str) -> bool:
         "not in the attached",
         "provided context does not",
         "i am sorry, but the provided context",
+        "attached documents do not address the question",
+        "attached documents do not address this question",
     )
     return any(phrase in lowered for phrase in phrases)
 
