@@ -526,8 +526,29 @@ async def _handle_compiled_rag_chat(
     agent_run_id = agent_run_context.get("agent_run_id")
     question = req.question
     llm_model = req.llm_model
-    use_web_search = bool(getattr(req, "use_web_search", False))
-    use_browser_access = bool(getattr(req, "use_browser_access", False))
+    def _request_bool(name: str, default: bool = False) -> bool:
+        value = getattr(req, name, None)
+        if value is not None:
+            return bool(value)
+        options = getattr(req, "options", None)
+        if isinstance(options, dict) and name in options:
+            return bool(options[name])
+        return default
+
+    workflow_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
+    use_web_search = _request_bool("use_web_search", bool(workflow_config.get("use_web_search")))
+    use_browser_access = _request_bool(
+        "use_browser_access",
+        bool(workflow_config.get("use_browser_access")),
+    )
+    browser_mode = str(
+        getattr(req, "browser_access_mode", None)
+        or (getattr(req, "options", {}) or {}).get("browser_access_mode")
+        or workflow_config.get("browser_access_mode")
+        or "off"
+    )
+    if browser_mode in {"ask", "on"}:
+        use_browser_access = True
     use_reranker = getattr(req, "use_reranker", None)
     if use_reranker is None:
         use_reranker = True

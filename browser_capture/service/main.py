@@ -18,7 +18,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from url_policy import BrowserUrlPolicyError, validate_navigation_url
+from cdp_desktop import cdp_debug_reachable
 from pelorus_client import (
+    CDP_FALLBACK_NOTE,
     DESKTOP_CONTROL_UNAVAILABLE_MESSAGE,
     desktop_screenshot,
     pelorus_get,
@@ -555,6 +557,13 @@ async def health():
         
         # Return healthy status with browser info
         pelorus_ok = await pelorus_ready()
+        pelorus_env = str(os.environ.get("PELORUS") or "").lower() in {"1", "true", "yes"}
+        if pelorus_env and pelorus_ok:
+            control_backend = "pelorus"
+        elif cdp_debug_reachable():
+            control_backend = "cdp"
+        else:
+            control_backend = "unavailable"
         return {
             "status": "healthy", 
             "browser": "cdp_accessible", 
@@ -563,10 +572,15 @@ async def health():
             "method": "direct_cdp_websocket",
             "pelorus": "ready" if pelorus_ok else "unavailable",
             "desktop_control": pelorus_ok,
+            "control_backend": control_backend,
             **(
-                {}
-                if pelorus_ok
-                else {"desktop_control_reason": DESKTOP_CONTROL_UNAVAILABLE_MESSAGE}
+                {"desktop_control_note": CDP_FALLBACK_NOTE}
+                if control_backend == "cdp"
+                else (
+                    {}
+                    if pelorus_ok
+                    else {"desktop_control_reason": DESKTOP_CONTROL_UNAVAILABLE_MESSAGE}
+                )
             ),
         }
         

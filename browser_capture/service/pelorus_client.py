@@ -1,4 +1,4 @@
-"""Pelorus proxy when available, else Pixelflux Computer Use on X11 (PIXELFLUX_CU)."""
+"""Pelorus proxy when available; else CDP viewport control on the shared Brave tab."""
 
 from __future__ import annotations
 
@@ -8,9 +8,16 @@ from typing import Any, Mapping
 
 import httpx
 
+from cdp_desktop import cdp_control, cdp_debug_reachable, cdp_screenshot, cdp_state_summary
+
 DESKTOP_CONTROL_UNAVAILABLE_MESSAGE = (
-    "Desktop control is not available: Pelorus needs Wayland and computer-use HTTP "
-    "(PELORUS or SELKIES_COMPUTER_USE_BIND) does not start on this X11+Brave CDP image."
+    "Desktop control is not available: Pelorus/Computer Use do not run on this X11+Brave CDP image "
+    "and CDP debug is unreachable."
+)
+
+CDP_FALLBACK_NOTE = (
+    "Pelorus and Selkies Computer Use (port 5000) are not enabled on this image; "
+    "snapshot/act use CDP on the active Brave tab. The Browser tab stream is Selkies (X11), not Pelorus."
 )
 
 
@@ -62,7 +69,7 @@ async def _computer_use_ready() -> bool:
                 url,
                 json={"action": "cursor_position"},
                 headers=pelorus_headers(),
-                timeout=5.0,
+                timeout=2.0,
             )
             return response.status_code == 200
     except Exception:
@@ -72,7 +79,9 @@ async def _computer_use_ready() -> bool:
 async def pelorus_ready() -> bool:
     if await _pelorus_proxy_ready():
         return True
-    return await _computer_use_ready()
+    if await _computer_use_ready():
+        return True
+    return cdp_debug_reachable()
 
 
 async def pelorus_get(path: str, *, timeout: float = 30.0) -> dict[str, Any]:
@@ -83,13 +92,16 @@ async def pelorus_get(path: str, *, timeout: float = 30.0) -> dict[str, Any]:
             response.raise_for_status()
             payload = response.json()
             return payload if isinstance(payload, dict) else {"data": payload}
-    # X11: Pelorus nginx is absent; surface minimal state for snapshot prompts.
+    if cdp_debug_reachable():
+        summary = await cdp_state_summary()
+        summary["note"] = CDP_FALLBACK_NOTE
+        return summary
     return {
         "desktop_control": False,
         "code": "desktop_control_unavailable",
         "message": DESKTOP_CONTROL_UNAVAILABLE_MESSAGE,
-        "summary": "Shared Brave desktop (X11). Use browser_read for page text.",
-        "state": "cdp_only",
+        "summary": CDP_FALLBACK_NOTE,
+        "state": "unavailable",
     }
 
 
@@ -125,12 +137,24 @@ async def pelorus_post(path: str, body: Mapping[str, Any], *, timeout: float = 6
 
     payload = dict(body)
     payload["action"] = _map_control_action(str(payload.get("action") or ""))
-    if path.rstrip("/").endswith("screenshot") or payload.get("action") == "screenshot":
-        return await _computer_use_post({"action": "screenshot"}, timeout=timeout)
-    return await _computer_use_post(payload, timeout=timeout)
+    if await _computer_use_ready():
+        if path.rstrip("/").endswith("screenshot") or payload.get("action") == "screenshot":
+            return await _computer_use_post({"action": "screenshot"}, timeout=timeout)
+        return await _computer_use_post(payload, timeout=timeout)
+
+    if cdp_debug_reachable():
+        if path.rstrip("/").endswith("screenshot") or payload.get("action") == "screenshot":
+            return await cdp_screenshot()
+        if payload.get("action") != "screenshot":
+            return await cdp_control(payload)
+
+    raise RuntimeError(DESKTOP_CONTROL_UNAVAILABLE_MESSAGE)
 
 
 async def desktop_screenshot(*, timeout: float = 45.0) -> dict[str, Any]:
+    del timeout
     if await _pelorus_proxy_ready():
-        return await pelorus_get("/api/desktop/screenshot", timeout=timeout)
-    return await _computer_use_post({"action": "screenshot"}, timeout=timeout)
+        return await pelorus_get("/api/desktop/screenshot")
+    if await _computer_use_ready():
+        return await _computer_use_post({"action": "screenshot"})
+    return await cdp_screenshot()

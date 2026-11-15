@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableConfig
 
 from langgraph_runtime.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from langgraph_runtime.workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
+from langgraph_runtime.workflows.external_research import BROWSER_TOOL_CONTRACT_IDS
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.evidence import append_corrective_evidence_packets
@@ -90,7 +91,9 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
         tool_input=lambda current: current["question"],
         skip_reason=lambda current: (
             "web_search_disabled"
-            if isinstance(current.get("execution_plan"), list) and not current.get("use_web_search", False)
+            if isinstance(current.get("execution_plan"), list)
+            and not current.get("use_web_search", False)
+            and not current.get("use_browser_access", False)
             else None
         ),
         state_update=lambda current, _payload, artifacts, _evidence, _packets: {
@@ -146,7 +149,20 @@ async def run_tool_worker(
     )
     if selected_tool_name:
         tool_name = selected_tool_name
-        tool_input = {"query": str(state.get("question") or "")}
+        question_text = str(state.get("question") or "")
+        if tool_name == ToolName.BROWSER_NAVIGATE.value:
+            tool_input = {"url": question_text}
+        elif tool_name in BROWSER_TOOL_CONTRACT_IDS:
+            tool_input = {}
+        else:
+            tool_input = {"query": question_text}
+    elif (
+        spec.node_name == WorkflowNodeType.WEB_WORKER.value
+        and state.get("use_browser_access")
+        and not state.get("use_web_search")
+    ):
+        tool_name = ToolName.BROWSER_NAVIGATE.value
+        tool_input = {"url": str(state.get("question") or "")}
     elif spec.node_name == WorkflowNodeType.RETRIEVAL_WORKER.value and work_item.get("file_hash"):
         tool_name = ToolName.SEARCH_KNOWLEDGE.value
         tool_input = {

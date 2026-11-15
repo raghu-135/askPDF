@@ -114,6 +114,20 @@ class _QueryArguments(_OpenArguments):
     query: str = Field(min_length=1, max_length=4000)
 
 
+class _BrowserNavigateArguments(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    url: str = Field(min_length=1, max_length=4000)
+
+    @classmethod
+    def model_validate(cls, value: Any, **kwargs: Any):
+        if isinstance(value, str):
+            value = {"url": value}
+        elif isinstance(value, Mapping) and "query" in value and "url" not in value:
+            value = {**dict(value), "url": value["query"]}
+        return super().model_validate(value, **kwargs)
+
+
 class _SearchArguments(_QueryArguments):
     max_results: int = Field(default=10, ge=1, le=30)
 
@@ -223,6 +237,7 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "semantic_scholar": _QueryArguments,
     "stack_exchange": _QueryArguments,
     "yahoo_finance_news": _QueryArguments,
+    "browser_navigate": _BrowserNavigateArguments,
 }
 
 

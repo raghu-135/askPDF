@@ -198,6 +198,8 @@ class RouterRagState(TypedDict, total=False):
     context_window: int
     context_budget: Dict[str, Any]
     use_web_search: bool
+    use_browser_access: bool
+    browser_access_mode: str
     use_reranker: bool
     bypass_clarification: bool
     system_role: str

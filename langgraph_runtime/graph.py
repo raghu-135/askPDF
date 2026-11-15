@@ -729,6 +729,7 @@ class NodeRegistry:
                     value,
                     worker_nodes=state.get("available_worker_nodes"),
                     use_web_search=bool(state.get("use_web_search", False)),
+                    use_browser_access=bool(state.get("use_browser_access", False)),
                 ),
                 *clarification_contract_errors(value),
             ],
@@ -737,6 +738,7 @@ class NodeRegistry:
         normalized = normalize_execution_plan(
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
+            use_browser_access=bool(state.get("use_browser_access", False)),
             question=state.get("question"),
             bypass_clarification=bool(state.get("bypass_clarification")),
             worker_nodes=state.get("available_worker_nodes"),
@@ -828,7 +830,7 @@ class NodeRegistry:
             safe_json_object=_safe_json_object,
         )
         allowed_routes = set(ROUTER_ROUTES) - {RouterRoute.WEB.value}
-        if state.get("use_web_search", False):
+        if state.get("use_web_search", False) or state.get("use_browser_access", False):
             allowed_routes.add(RouterRoute.WEB.value)
         if bypass_clarification:
             allowed_routes.discard(RouterRoute.CLARIFY.value)
@@ -1859,6 +1861,7 @@ class NodeRegistry:
                 value,
                 worker_nodes=state.get("available_worker_nodes"),
                 use_web_search=bool(state.get("use_web_search", False)),
+                use_browser_access=bool(state.get("use_browser_access", False)),
                 require_route=False,
             ),
             review_when=lambda value: worker_decisions_need_coverage_review(value, require_route=False),
@@ -1866,6 +1869,7 @@ class NodeRegistry:
         normalized = _normalize_replanner_execution_plan(
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
+            use_browser_access=bool(state.get("use_browser_access", False)),
             allowed_tool_ids=state.get("allowed_tool_ids"),
             worker_nodes=state.get("available_worker_nodes"),
         )
