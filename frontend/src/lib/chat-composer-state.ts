@@ -16,6 +16,7 @@ export interface ChatComposerStateInput {
   isEmbeddingModelValid: boolean | null;
   indexingStatus: ChatComposerIndexingStatusValue;
   hasInput: boolean;
+  humanReviewPending?: boolean;
 }
 
 export interface ChatComposerState {
@@ -39,6 +40,10 @@ function locked(
 }
 
 export function getChatComposerState(input: ChatComposerStateInput): ChatComposerState {
+  if (input.humanReviewPending) {
+    return locked(ChatComposerStatus.HumanReviewPending, 'Approve or skip to continue');
+  }
+
   if (input.loading) {
     return locked(ChatComposerStatus.Sending, 'Sending...', true);
   }

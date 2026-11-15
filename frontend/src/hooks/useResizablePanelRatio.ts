@@ -48,5 +48,9 @@ export function useResizablePanelRatio(
     };
   }, [handleResizeEnd, handleResizeMove, resizing]);
 
-  return { ratio, resizing, onResizeStart };
+  const nudgeRatio = useCallback((delta: number) => {
+    setRatio((current) => clampDecisionPanelRatio(current + delta, min, max));
+  }, [max, min]);
+
+  return { ratio, resizing, onResizeStart, nudgeRatio };
 }

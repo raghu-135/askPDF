@@ -115,6 +115,7 @@ export const ChatComposerStatus = {
   EmbeddingUnavailable: 'embedding_unavailable',
   IndexError: 'index_error',
   Indexing: 'indexing',
+  HumanReviewPending: 'human_review_pending',
   Ready: 'ready',
 } as const;
 export type ChatComposerStatus = typeof ChatComposerStatus[keyof typeof ChatComposerStatus];

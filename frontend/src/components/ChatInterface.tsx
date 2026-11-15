@@ -286,6 +286,7 @@ const ChatComposer = React.memo(function ChatComposer({
     onStop,
     onOpenSettings,
     onOpenMemoryReview,
+    humanReviewPending = false,
 }: {
     inputRef: React.Ref<HTMLInputElement | HTMLTextAreaElement>;
     seedText: string;
@@ -303,6 +304,7 @@ const ChatComposer = React.memo(function ChatComposer({
     onStop: () => void;
     onOpenSettings: () => void;
     onOpenMemoryReview?: (draftContent?: string) => void;
+    humanReviewPending?: boolean;
 }) {
     const [draftPresent, setDraftPresent] = useState(Boolean(seedText));
     useEffect(() => setDraftPresent(Boolean(seedText.trim())), [seedText, seedVersion]);
@@ -315,8 +317,10 @@ const ChatComposer = React.memo(function ChatComposer({
         isEmbeddingModelValid,
         indexingStatus,
         hasInput: draftPresent,
+        humanReviewPending,
     }), [
         draftPresent,
+        humanReviewPending,
         indexingStatus,
         isEmbeddingModelValid,
         isLlmModelValid,
@@ -2918,6 +2922,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         : chatHumanReviewOpen && stackedWorkbench
             ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
             : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
+    const composerHumanReviewPending = chatHumanReviewOpen;
     const reviewControlsLocked = Boolean(humanReviewSubmitting);
 
     return (
@@ -2940,7 +2945,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             } : undefined}
             decisionSx={chatHumanReviewOpen ? {
                 ...(isToolApprovalReview
-                    ? { flex: '0 0 auto', flexGrow: 0, flexShrink: 0, flexBasis: 'auto' }
+                    ? {
+                        flex: '0 0 auto',
+                        flexGrow: 0,
+                        flexShrink: 0,
+                        alignSelf: 'stretch',
+                        justifyContent: 'flex-end',
+                    }
                     : { flex: '1 1 0' }),
                 minHeight: reviewDecisionMinHeight,
                 overflow: isToolApprovalReview ? 'visible' : 'hidden',
@@ -3165,6 +3176,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     liveExecution={liveExecution}
                     liveRunCapabilities={liveRunCapabilities}
                     isTestRuntime={isTestRuntime}
+                    humanReviewPending={composerHumanReviewPending}
                     onSubmit={(text) => void handleSend(text)}
                     onStop={handleStopChat}
                     onOpenSettings={handleOpenThreadSettings}
