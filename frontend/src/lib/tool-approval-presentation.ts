@@ -34,6 +34,9 @@ export function toolApprovalTitle(
   if (/\bpublish\b/.test(signals) && /\bcanvas\b/.test(signals)) {
     return 'Allow publishing to the canvas?';
   }
+  if (toolName === 'browser_navigate' || (/\bbrowser\b/.test(signals) && /\bnavigat/.test(signals))) {
+    return 'Allow opening a web page in the browser?';
+  }
   const verb = display.toLowerCase();
   if (verb.startsWith('search ')) {
     return `Allow a ${verb.slice('search '.length)}?`;
