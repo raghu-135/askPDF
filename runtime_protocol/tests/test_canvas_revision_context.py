@@ -41,7 +41,7 @@ def _matrix_spec_with_five_claims():
             },
             {
                 "title": "Sources",
-                "blocks": [{"type": "source_list", "citations": citations}],
+                "blocks": [{"type": "sources", "citations": citations}],
             },
         ],
     }

@@ -68,7 +68,7 @@ def _collect_citations(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
         for block in section.get("blocks") or []:
             if not isinstance(block, Mapping):
                 continue
-            if block.get("type") == "source_list":
+            if block.get("type") in ("source_list", "sources"):
                 for item in block.get("citations") or []:
                     if isinstance(item, Mapping):
                         citations.append(dict(item))
@@ -153,7 +153,15 @@ def _claims_from_spec(spec: Mapping[str, Any], citations: list[Mapping[str, Any]
                     if tone_idx is not None and tone_idx < len(row):
                         tone = _tone_from_cell(row[tone_idx])
                     if not source_ids and citations:
-                        source_ids = [citation_to_source_id(citations[0])]
+                        row_index = len(claims)
+                        if row_index < len(citations):
+                            picked = citation_to_source_id(citations[row_index])
+                            if picked:
+                                source_ids = [picked]
+                        if not source_ids:
+                            picked = citation_to_source_id(citations[0])
+                            if picked:
+                                source_ids = [picked]
                     source_ids = [item for item in source_ids if item]
                     if not source_ids:
                         continue

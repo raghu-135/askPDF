@@ -176,7 +176,7 @@ function canvasSpecMetrics(spec) {
       if (block.type === 'claim_pair') {
         claimCount += 2;
       }
-      if (block.type === 'source_list' && Array.isArray(block.citations)) {
+      if ((block.type === 'source_list' || block.type === 'sources') && Array.isArray(block.citations)) {
         sourceCount += block.citations.length;
       }
     }

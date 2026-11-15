@@ -173,6 +173,10 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
         browser_access_mandate = "## Browser Workbench Mandate\n\n" + get_browser_access_mandate()
     layout_skills = canvas_layout_skills_section(state_or_settings.get("allowed_tool_ids"))
     canvas_context = canvas_prompt_sections(state_or_settings) if layout_skills else ""
+    if not canvas_context:
+        from langgraph_runtime.workflows.canvas_citation_menu import format_quoted_canvas_revision_section
+
+        canvas_context = format_quoted_canvas_revision_section(state_or_settings)
 
     return {
         "RUNTIME_DATETIME_CONTEXT": format_runtime_datetime_context(
