@@ -277,8 +277,14 @@ def _resume_command(interrupt: Dict[str, Any], state: Dict[str, Any], config: Di
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
     pause_anchor = parse_datetime_utc(interrupt.get("requested_at")) or parse_datetime_utc(decision.get("decided_at"))
     deadline = int(state.get("dispatch_deadline_epoch_ms") or 0)
-    dispatch_id = state.get("dispatch_id")
     work_items = [item for item in state.get("work_items") or [] if isinstance(item, dict)]
+    dispatch_id = state.get("dispatch_id")
+    if not dispatch_id and work_items:
+        for item in work_items:
+            candidate = item.get("dispatch_id")
+            if candidate:
+                dispatch_id = str(candidate)
+                break
     now_ms = int(time.time() * 1000)
     if pause_anchor is not None and (deadline or work_items):
         paused_ms = max(0, int((utc_now() - pause_anchor).total_seconds() * 1000))
