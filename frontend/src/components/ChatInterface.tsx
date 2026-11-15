@@ -119,7 +119,6 @@ import {
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
-import { shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
 import { parseAgentRunResumeStreamEvent } from '../lib/agent-run-resume-stream';
 import type { ToolDisplayCatalog } from '../lib/tool-approval-presentation';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
@@ -888,17 +887,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
     activeThreadIdRef.current = activeThread?.id ?? null;
 
-    const visibleMessages = useMemo(
-        () => messages.filter((message) => !shouldHideChatInterruptPlaceholder(message)),
-        [messages],
-    );
-
     const messageVirtualizer = useVirtualizer({
-        count: visibleMessages.length,
+        count: messages.length,
         getScrollElement: () => messageListRef.current,
-        estimateSize: (index) => visibleMessages[index]?.role === MessageRole.User ? 76 : 180,
+        estimateSize: (index) => messages[index]?.role === MessageRole.User ? 76 : 180,
         overscan: 8,
-        getItemKey: (index) => visibleMessages[index]?.id ?? index,
+        getItemKey: (index) => messages[index]?.id ?? index,
     });
 
     useEffect(() => {
@@ -1365,9 +1359,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     };
 
     useEffect(() => {
-        if (pendingHumanReview) return;
         scrollToBottom();
-    }, [messages.length, autoScroll, pendingHumanReview]);
+    }, [messages.length, autoScroll]);
 
     // Fetch available LLM models
     useEffect(() => {
@@ -2841,8 +2834,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const pendingReviewAvailability = pendingReviewOperation
         ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
         : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
-    const reviewControlsLocked = Boolean(humanReviewSubmitting);
-
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
@@ -2924,7 +2915,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     }}
                 >
                     {messageVirtualizer.getVirtualItems().map((virtualItem) => {
-                        const msg = visibleMessages[virtualItem.index];
+                        const msg = messages[virtualItem.index];
                         if (!msg) return null;
                         const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
                         const showAgentRunDebug = msg.role === MessageRole.Assistant && Boolean(msg.agent_run_id || liveForMessage);
@@ -3013,10 +3004,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     error={humanReviewError}
                     editText={humanReviewEditText}
                     toolCatalog={toolDisplayCatalog}
-                    disabled={!reviewControlsLocked && (
-                        !pendingReviewAvailability.visible || !pendingReviewAvailability.enabled
-                    )}
-                    disabledReason={reviewControlsLocked ? undefined : pendingReviewAvailability.disabledReason}
+                    disabled={!pendingReviewAvailability.visible || !pendingReviewAvailability.enabled}
+                    disabledReason={pendingReviewAvailability.disabledReason}
                     rootRef={chatRootRef}
                     onEditTextChange={setHumanReviewEditText}
                     onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
