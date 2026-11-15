@@ -115,15 +115,25 @@ async function captureViewport(vp) {
     const promptPath = path.join(ART, `chat-tool-approval-${suffix}-prompt.png`);
     await page.screenshot({ path: promptPath, fullPage: false });
     assertPngWidth(promptPath, vp.width);
-    await approve.click({ force: true });
-    await pollForAnswer(
-      page,
-      (t) => (
-        (/0\.\d{2,}/.test(t) || /\b\d+\.\d+\b/.test(t) || /EUR|USD|exchange/i.test(t))
-        && !/APPROVING|Approve search_web|Allow a web search/i.test(t)
-        && t.length > 30
-      ),
-    );
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const approvalOpen = await title.isVisible().catch(() => false);
+      if (approvalOpen) {
+        await approve.click({ force: true });
+      }
+      try {
+        await pollForAnswer(
+          page,
+          (t) => (
+            (/0\.\d{2,}/.test(t) || /\b\d+\.\d+\b/.test(t) || /EUR|USD|exchange/i.test(t))
+            && !/APPROVING|Approve search_web|Allow a web search/i.test(t)
+            && t.length > 30
+          ),
+        );
+        break;
+      } catch (err) {
+        if (attempt === 3) throw err;
+      }
+    }
     const answerPath = path.join(ART, `chat-tool-approval-${suffix}-answer.png`);
     await page.screenshot({ path: answerPath, fullPage: false });
     assertPngWidth(answerPath, vp.width);
