@@ -28,6 +28,7 @@ export function ResizableDecisionPanel({
   resizing: externalResizing,
   showResizeHandle = true,
   betweenScrollAndFooter,
+  compact = false,
 }: {
   title: React.ReactNode;
   children?: React.ReactNode;
@@ -46,6 +47,7 @@ export function ResizableDecisionPanel({
   onResizeStart?: (event: React.PointerEvent<HTMLDivElement>) => void;
   resizing?: boolean;
   showResizeHandle?: boolean;
+  compact?: boolean;
 }) {
   const theme = useTheme();
   const narrow = useMediaQuery(theme.breakpoints.down('sm'));
@@ -212,7 +214,7 @@ export function ResizableDecisionPanel({
   const shellSx = {
     display: 'flex',
     flexDirection: 'column',
-    maxHeight: `calc(100dvh * ${ratio})`,
+    ...(compact ? {} : { maxHeight: `calc(100dvh * ${ratio})` }),
     minHeight,
   };
 

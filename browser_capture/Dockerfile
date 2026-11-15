@@ -97,6 +97,16 @@ prefs["brave_stats_reporting_enabled"] = False
 prefs["user_experience_metrics"] = {"personalization_data_consent_enabled": False}
 prefs.setdefault("profile", {}).setdefault("default_content_setting_values", {})["notifications"] = 2
 prefs_path.write_text(json.dumps(prefs), encoding="utf-8")
+local_state = Path("/config/.config/BraveSoftware/Brave-Browser/Local State")
+local = {}
+if local_state.exists():
+    try:
+        local = json.loads(local_state.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        local = {}
+local["stats_p3a_enabled"] = False
+local.setdefault("brave", {})["p3a_enabled"] = False
+local_state.write_text(json.dumps(local), encoding="utf-8")
 PY
 chown -R abc:abc /config/.config/BraveSoftware
 
@@ -109,7 +119,9 @@ exec s6-setuidgid abc /usr/bin/brave-browser \
     --start-maximized \
     --test-type \
     --user-data-dir=/config/.config/BraveSoftware/Brave-Browser \
-    --disable-features=Translate,TranslateUI,BraveP3A,BraveVPN,BraveAdsInContent,BraveSearchPromotion,BraveOnboarding,BraveIPFS,BraveWaybackMachine \
+    --noerrdialogs \
+    --disable-session-crashed-bubble \
+    --disable-features=Translate,TranslateUI,BraveP3A,BraveVPN,BraveAdsInContent,BraveSearchPromotion,BraveOnboarding,BraveIPFS,BraveWaybackMachine,InfiniteSessionRestore,TabRestoreBubble \
     "${BRAVE_DISPLAY_ARGS[@]}" \
     --remote-debugging-address=127.0.0.1 \
     --remote-debugging-port=9222 \

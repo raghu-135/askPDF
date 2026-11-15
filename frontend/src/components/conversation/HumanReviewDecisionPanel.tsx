@@ -126,6 +126,7 @@ export function HumanReviewDecisionPanel({
       rootRef={rootRef}
       horizontalInset={1}
       fillColumn={false}
+      compact={isToolApproval}
       defaultRatio={isToolApproval ? 0.22 : 0.3}
       narrowDefaultRatio={isToolApproval ? 0.26 : 0.32}
       showResizeHandle={!isToolApproval}
