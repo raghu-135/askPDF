@@ -19,6 +19,13 @@ HERMES_BASE_TOOL_IDS = (
     "search_thread_events",
     "publish_canvas",
 )
+HERMES_BROWSER_TOOL_IDS = (
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_act",
+    "browser_read",
+    "browser_save_to_thread",
+)
 HERMES_EXTERNAL_TOOL_IDS = (
     "arxiv",
     "pubmed",
@@ -29,7 +36,7 @@ HERMES_EXTERNAL_TOOL_IDS = (
     "wikidata",
     "yahoo_finance_news",
 )
-HERMES_RESEARCH_TOOL_IDS = frozenset(HERMES_BASE_TOOL_IDS + HERMES_EXTERNAL_TOOL_IDS)
+HERMES_RESEARCH_TOOL_IDS = frozenset(HERMES_BASE_TOOL_IDS + HERMES_EXTERNAL_TOOL_IDS + HERMES_BROWSER_TOOL_IDS)
 _SECRET_KEYS = frozenset({"api_key", "token", "secret", "password", "authorization", "credentials"})
 
 
@@ -55,9 +62,14 @@ def resolve_hermes_profile(spec: Mapping[str, Any]) -> dict[str, Any]:
     if unknown_tools:
         raise ValueError(f"Hermes definitions contain unsupported research tools: {', '.join(sorted(unknown_tools))}")
     external_enabled = bool(config.get("use_web_search", False))
+    browser_enabled = str(config.get("browser_access_mode") or "off") != "off" or bool(
+        config.get("use_browser_access", False)
+    )
     permitted = set(HERMES_BASE_TOOL_IDS)
     if external_enabled:
         permitted.update(HERMES_EXTERNAL_TOOL_IDS)
+    if browser_enabled:
+        permitted.update(HERMES_BROWSER_TOOL_IDS)
     tools = tuple(sorted(configured_tools & permitted))
     runtime_profile = HERMES_EXTERNAL_PROFILE if external_enabled else HERMES_OFFLINE_PROFILE
     skills = tuple(sorted(set(str(item) for item in config.get("skills") or [])))

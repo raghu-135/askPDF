@@ -165,6 +165,7 @@ class MemoryManagerConversationRequest(BaseModel):
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
     context_budget: Optional[ContextBudgetOverride] = None
     web_search_mode: Literal["off", "ask", "on"] = "off"
+    browser_access_mode: Literal["off", "ask", "on"] = "off"
     web_search_decision: Optional[MemoryManagerWebSearchDecision] = None
     memory_review_cursor: Optional["MemoryConsistencyReviewCursor"] = None
 
@@ -268,6 +269,7 @@ class MemoryManagerPlanRequest(BaseModel):
     memory_review_cursor: Optional[MemoryConsistencyReviewCursor] = None
     review_id: Optional[str] = None
     web_search_mode: Literal["off", "ask", "on"] = "off"
+    browser_access_mode: Literal["off", "ask", "on"] = "off"
     web_search_decision: Optional[MemoryManagerWebSearchDecision] = None
 
 
@@ -355,6 +357,7 @@ class ThreadChatRequest(BaseModel):
     llm_model: str = Field(min_length=1, max_length=300)
     use_web_search: bool = False
     hitl_web_approval: Optional[bool] = None
+    browser_access_mode: Literal["off", "ask", "on"] = "off"
     use_reranker: Optional[bool] = None
     bypass_clarification: bool = False
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)

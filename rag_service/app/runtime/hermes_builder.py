@@ -29,6 +29,7 @@ class HermesBuilderProvider:
     framework = "hermes"
     builder_id = "hermes_agent"
     _task_web_tool_ids = frozenset({"search_web"})
+    _task_browser_tool_ids = frozenset({"browser_navigate"})
 
     def supports_task_web_search(self, definition: AgentDefinition) -> bool:
         allowed_tools = {
@@ -37,6 +38,14 @@ class HermesBuilderProvider:
             if value
         }
         return bool(allowed_tools & self._task_web_tool_ids)
+
+    def supports_task_browser(self, definition: AgentDefinition) -> bool:
+        allowed_tools = {
+            str(value)
+            for value in definition.definition_metadata.get("allowed_tool_ids", ())
+            if value
+        }
+        return bool(allowed_tools & self._task_browser_tool_ids)
 
     def task_configuration_fields(
         self,
@@ -48,6 +57,7 @@ class HermesBuilderProvider:
             {"id": "llm_model", "label": "Model", "type": "model", "required": True},
             {"id": "context_window", "label": "Context window", "type": "integer", "required": True, "default": context_window, "minimum": HERMES_MIN_CONTEXT_LENGTH, "read_only": True},
             {"id": "web_search_mode", "label": "Web search", "type": "enum", "required": True, "default": "off", "options": ["off", "ask", "on"], "enabled": self.supports_task_web_search(definition)},
+            {"id": "browser_access_mode", "label": "Browser agent", "type": "enum", "required": True, "default": "off", "options": ["off", "ask", "on"], "enabled": self.supports_task_browser(definition)},
         )
 
     def normalize_task_limits(self, limits: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -58,9 +68,12 @@ class HermesBuilderProvider:
         "research_policy_id", "system_prompt", "model", "provider", "mcp_server", "allowed_tool_ids",
         "max_output_chars", "max_duration_seconds", "max_event_count",
         "allow_subagents", "allow_persistent_memory", "cancellation_mode",
-        "skills", "task_policy", "use_web_search", "context_window",
+        "skills", "task_policy", "use_web_search", "use_browser_access", "browser_access_mode",
+        "hitl_browser_approval", "context_window",
     }
-    _supported_request_override_keys: frozenset[str] = frozenset({"llm_model", "context_window", "use_web_search"})
+    _supported_request_override_keys: frozenset[str] = frozenset({
+        "llm_model", "context_window", "use_web_search", "browser_access_mode", "use_browser_access",
+    })
 
     def _issues(self, spec: Mapping[str, Any]) -> list[RuntimeValidationIssue]:
         issues: list[RuntimeValidationIssue] = []

@@ -458,6 +458,7 @@ export default function Home() {
     try {
       const updatedThread = await getThread(activeThread.id);
       setActiveThread(updatedThread);
+      setPdfTabs(await loadThreadTabs(updatedThread, { eagerCount: 0 }));
     } catch (error) {
       console.error('Failed to refresh thread after chat update:', error);
     }

@@ -7,6 +7,31 @@ import type { AgentRunPendingInterrupt, AgentRunResumeAction } from '../../lib/a
 import { AgentRunResumeAction as ResumeAction, HitlSelectionMode } from '../../lib/enums';
 import { ResizableDecisionPanel } from './ResizableDecisionPanel';
 
+function proposedToolArgumentPreview(
+  proposedTool: Record<string, unknown> | null,
+): string | null {
+  const toolName = String(proposedTool.name || '').trim();
+  const args = proposedTool.arguments && typeof proposedTool.arguments === 'object'
+    ? proposedTool.arguments as Record<string, unknown>
+    : {};
+  if (toolName === 'browser_save_to_thread') {
+    return 'Save current browser page to this thread';
+  }
+  if (toolName === 'browser_navigate' && typeof args.url === 'string' && args.url.trim()) {
+    return args.url.trim();
+  }
+  if (!Object.keys(args).length) {
+    return null;
+  }
+  const keys = Object.keys(args);
+  if (keys.length === 1) {
+    const key = keys[0];
+    const value = args[key];
+    return `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`;
+  }
+  return JSON.stringify(args, null, 2);
+}
+
 export type HumanReviewScopeOption = {
   id: string;
   label: string;
@@ -92,6 +117,7 @@ export function HumanReviewDecisionPanel({
     </Box>
   );
 
+  const toolArgumentPreview = isToolApproval ? proposedToolArgumentPreview(proposedTool) : null;
   const stickyFooterLayout = isToolApproval;
 
   return (
@@ -100,10 +126,10 @@ export function HumanReviewDecisionPanel({
       variant="approval"
       rootRef={rootRef}
       horizontalInset={1}
-      fillColumn={stickyFooterLayout}
-      defaultRatio={stickyFooterLayout ? 0.42 : 0.3}
-      narrowDefaultRatio={stickyFooterLayout ? 0.46 : 0.32}
-      showResizeHandle={!stickyFooterLayout}
+      showResizeHandle={!isToolApproval}
+      compact={isToolApproval}
+      defaultRatio={isToolApproval ? 0.22 : 0.3}
+      narrowDefaultRatio={isToolApproval ? 0.26 : 0.32}
       footer={stickyFooterLayout ? (
         <>
           {actionButtons}
@@ -112,15 +138,19 @@ export function HumanReviewDecisionPanel({
         </>
       ) : undefined}
     >
-      <Box data-testid="chat-human-review-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minWidth: 0 }}>
-        {(interrupt.prompt || interrupt.body) && (
+      <Box data-testid="chat-human-review-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+        {!isToolApproval && (interrupt.prompt || interrupt.body) && (
           <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {interrupt.prompt || interrupt.body}
           </Typography>
         )}
-        {isToolApproval && proposedTool?.arguments && (
-          <Box component="pre" sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem', maxHeight: 200, overflow: 'auto' }}>
-            {JSON.stringify(proposedTool.arguments, null, 2)}
+        {isToolApproval && toolArgumentPreview && (
+          <Box
+            data-testid="tool-approval-argument-preview"
+            component="pre"
+            sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem' }}
+          >
+            {toolArgumentPreview}
           </Box>
         )}
         {selectableOptions.length > 0 && (actions.has(ResumeAction.ApproveSelected) || editingScope) && (

@@ -246,6 +246,7 @@ class RunProfileManager:
             "    - terminal\n"
             "    - skills\n"
             "    - file\n"
+            "    - browser\n"
             "mcp_servers:\n"
             f"  {mcp_server_name}:\n"
             f"    url: {mcp_url}\n"

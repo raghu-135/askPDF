@@ -753,6 +753,8 @@ async def execute_claimed_task(task_id: str, worker_id: str) -> None:
             permissions={
                 "use_web_search": bool(config.get("use_web_search")),
                 "web_search_mode": str(config.get("web_search_mode") or "off"),
+                "use_browser_access": bool(config.get("use_browser_access")),
+                "browser_access_mode": str(config.get("browser_access_mode") or "off"),
             },
             metadata={
                 "llm_model": config.get("llm_model"),

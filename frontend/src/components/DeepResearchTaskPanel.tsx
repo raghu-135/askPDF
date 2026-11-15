@@ -351,6 +351,7 @@ export default function DeepResearchTaskPanel({
   embeddingControl,
   renderWebControl,
   webSearchMode,
+  browserAccessMode = 'off',
   onModelChange,
   onContextWindowChange,
   onContextBudgetChange,
@@ -379,6 +380,7 @@ export default function DeepResearchTaskPanel({
   embeddingControl: React.ReactNode;
   renderWebControl: (mode: 'off' | 'ask' | 'on', disabled: boolean) => React.ReactNode;
   webSearchMode: 'off' | 'ask' | 'on';
+  browserAccessMode?: 'off' | 'ask' | 'on';
   onModelChange: (model: string) => void;
   onContextWindowChange: (value: number) => void;
   onContextBudgetChange: (value: ContextBudgetRatios) => void;
@@ -642,6 +644,7 @@ export default function DeepResearchTaskPanel({
         context_window: contextWindow,
         context_budget: packingBudgetPayload(contextBudget),
         web_search_mode: webSearchMode,
+        browser_access_mode: browserAccessMode,
       });
       const started = await commandAgentTask(created.id, threadId, 'start', created.version);
       onTaskSelect(started.id);

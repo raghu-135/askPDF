@@ -7,7 +7,25 @@ from pydantic import BaseModel
 
 from app.agent.tool_contract import ToolResult
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG, get_tool_contract_id
-from app.tools.contracts import DocumentSearchRequest, EmptyRequest, InspectDocumentRequest, ReadContextRequest, SearchKnowledgeRequest, QueryRequest, TimelineRequest
+from app.tools.contracts import (
+    BrowserActRequest,
+    BrowserNavigateRequest,
+    DocumentSearchRequest,
+    EmptyBrowserRequest,
+    EmptyRequest,
+    InspectDocumentRequest,
+    ReadContextRequest,
+    SearchKnowledgeRequest,
+    QueryRequest,
+    TimelineRequest,
+)
+from app.tools.browser_workspace import (
+    browser_act,
+    browser_navigate,
+    browser_read,
+    browser_save_to_thread,
+    browser_snapshot,
+)
 from app.tools.context import ToolInvocationContext
 from app.tools.retrieval_conversation import search_thread_conversation_history
 from app.tools.retrieval_memory import search_durable_memory
@@ -94,6 +112,11 @@ _NEUTRAL: dict[str, MCPToolDefinition] = {
     "search_durable_memory": _neutral("search_durable_memory", DocumentSearchRequest, search_durable_memory),
     "search_thread_events": _neutral("search_thread_events", TimelineRequest, search_thread_events),
     "search_web": _neutral("search_web", QueryRequest, search_web),
+    "browser_navigate": _neutral("browser_navigate", BrowserNavigateRequest, browser_navigate),
+    "browser_snapshot": _neutral("browser_snapshot", EmptyBrowserRequest, browser_snapshot),
+    "browser_act": _neutral("browser_act", BrowserActRequest, browser_act),
+    "browser_read": _neutral("browser_read", EmptyBrowserRequest, browser_read),
+    "browser_save_to_thread": _neutral("browser_save_to_thread", EmptyBrowserRequest, browser_save_to_thread),
     "wikipedia": _neutral("wikipedia", WikipediaRequest, invoke_wikipedia),
     "memory_search": _neutral("memory_search", MemorySearchInput, memory_search),
     "memory_get": _neutral("memory_get", MemoryGetInput, memory_get),

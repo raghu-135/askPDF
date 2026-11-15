@@ -21,6 +21,32 @@ from runtime_protocol.tool_approval import (
 from runtime_protocol.tool_contract import ToolResult, ToolError, ToolTrace
 
 
+BROWSER_MCP_TOOL_NAMES = frozenset({
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_act",
+    "browser_read",
+    "browser_save_to_thread",
+})
+
+
+def resolved_browser_access_mode(
+    config: Mapping[str, Any], *, permissions: Mapping[str, Any] | None = None,
+) -> str:
+    """Prefer browser_access_mode; derive ask/on from legacy knobs when absent."""
+    permissions = permissions or {}
+    for source in (permissions.get("browser_access_mode"), config.get("browser_access_mode")):
+        if source in {"on", "off", "ask"}:
+            return str(source)
+        if source not in (None, ""):
+            raise ValueError("Unknown browser access permission mode")
+    if config.get("hitl_browser_approval"):
+        return "ask"
+    if config.get("use_browser_access"):
+        return "on"
+    return "off"
+
+
 def resolved_web_search_mode(
     config: Mapping[str, Any], *, permissions: Mapping[str, Any] | None = None,
 ) -> str:
@@ -88,6 +114,12 @@ def invocation_policies(
         if metadata.get("category") in {CAT_WEB, CAT_EXTERNAL_RESEARCH}:
             if web_mode is ApprovalMode.DENY or name not in rules:
                 rules[name] = ToolApprovalPolicy(web_mode, scope).to_dict()
+    browser_mode_value = resolved_browser_access_mode(config, permissions=permissions)
+    browser_mode = {"on": ApprovalMode.ALLOW, "off": ApprovalMode.DENY, "ask": ApprovalMode.ASK}[browser_mode_value]
+    for name in BROWSER_MCP_TOOL_NAMES:
+        if name in TOOL_CONTRACT_METADATA:
+            if browser_mode is ApprovalMode.DENY or name not in rules:
+                rules[name] = ToolApprovalPolicy(browser_mode, scope).to_dict()
     if config.get("hitl_canvas_publish") and "publish_canvas" not in rules:
         rules["publish_canvas"] = ToolApprovalPolicy(ApprovalMode.ASK, scope).to_dict()
     return rules

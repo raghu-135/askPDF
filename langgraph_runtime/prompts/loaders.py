@@ -21,6 +21,7 @@ RUNTIME_PROMPT_FILES = (
     "plan_execute_planner.md",
     "router_rag_router.md",
     "web_search_mandate.md",
+    "browser_access_mandate.md",
 )
 
 
@@ -52,6 +53,11 @@ def load_runtime_prompt(filename: str) -> str:
 def get_web_search_mandate() -> str:
     """Load the web search mandate section."""
     return load_runtime_prompt("web_search_mandate.md")
+
+
+def get_browser_access_mandate() -> str:
+    """Load the browser workbench mandate section."""
+    return load_runtime_prompt("browser_access_mandate.md")
 
 
 def get_deep_research_policy(policy_id: str = DEEP_RESEARCH_POLICY_ID) -> str:

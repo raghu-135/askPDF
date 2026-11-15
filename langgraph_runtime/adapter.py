@@ -481,6 +481,8 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             context_window=metadata.get("context_window"),
             use_web_search=bool(permissions.get("use_web_search")),
             web_search_mode=str(permissions.get("web_search_mode") or "off"),
+            use_browser_access=bool(permissions.get("use_browser_access")),
+            browser_access_mode=str(permissions.get("browser_access_mode") or "off"),
             use_reranker=bool(metadata.get("use_reranker", True)),
             bypass_clarification=True,
             system_role_override="",

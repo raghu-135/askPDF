@@ -91,6 +91,7 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 embedding_model=context.embedding_model,
                 context_window=context_window,
                 use_web_search=mcp.get("runtime_profile") == "askpdf-deep-external",
+                use_browser_access=bool(config.get("use_browser_access")),
                 use_reranker=True,
                 extensions={
                     "task_id": approval_task_id,
