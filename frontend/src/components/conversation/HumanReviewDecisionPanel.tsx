@@ -160,11 +160,16 @@ export function HumanReviewDecisionPanel({
         )}
         {isToolApproval && toolArgumentPreview && (
           <Box
-            data-testid="tool-approval-argument-preview"
-            component="pre"
-            sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem' }}
+            data-testid="tool-approval-content-scroll"
+            sx={{ minHeight: 0, maxHeight: 168, overflowY: 'auto', overflowX: 'hidden' }}
           >
-            {toolArgumentPreview}
+            <Box
+              data-testid="tool-approval-argument-preview"
+              component="pre"
+              sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem' }}
+            >
+              {toolArgumentPreview}
+            </Box>
           </Box>
         )}
         {selectableOptions.length > 0 && (actions.has(ResumeAction.ApproveSelected) || editingScope) && (
