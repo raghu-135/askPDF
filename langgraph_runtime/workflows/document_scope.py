@@ -158,11 +158,16 @@ def decline_when_all_document_packets_irrelevant(state: Mapping[str, Any]) -> st
 
     from langgraph_runtime.workflows.corrective_contracts import normalized_corrective_policy
 
-    worker_scores = worker_document_retrieval_scores(state)
-    if worker_scores and max(worker_scores) >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
-        return None
-
     doc_packets = document_evidence_packets(state)
+    worker_scores = worker_document_retrieval_scores(state)
+    if worker_scores:
+        peak_worker = max(worker_scores)
+        if peak_worker >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+            return None
+        if peak_worker >= ATTACHMENT_WEAK_RETRIEVAL_SCORE and any(
+            str(packet.get("content") or "").strip() for packet in doc_packets
+        ):
+            return None
     assessments = packet_assessments_by_id(state)
     if not doc_packets or not assessments:
         return None

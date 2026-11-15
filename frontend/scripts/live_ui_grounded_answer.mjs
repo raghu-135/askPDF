@@ -65,7 +65,7 @@ async function waitRuntimeReady() {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch("http://127.0.0.1:8100/health");
+      const res = await fetch("http://127.0.0.1:8100/readyz");
       if (res.ok) return;
     } catch {
       /* retry */

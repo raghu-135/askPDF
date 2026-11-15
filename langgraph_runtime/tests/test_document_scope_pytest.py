@@ -211,6 +211,31 @@ def test_relevance_decline_skips_low_confidence_irrelevant_assessments():
     assert decline_when_all_document_packets_irrelevant(state) is None
 
 
+def test_relevance_decline_skips_when_weak_scores_but_packets_have_content():
+    from langgraph_runtime.workflows.document_scope import decline_when_all_document_packets_irrelevant
+
+    packet_id = "retrieval_worker:1"
+    state = {
+        "corrective_policy": {"minimum_relevance_confidence": 0.65},
+        "evidence_packets": [
+            {
+                "id": packet_id,
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+                "content": "We propose the Transformer architecture.",
+                "raw_retriever_score": 0.36,
+            }
+        ],
+        "evidence_assessments": [
+            {
+                "packet_id": packet_id,
+                "relevant": False,
+                "confidence": 0.95,
+            }
+        ],
+    }
+    assert decline_when_all_document_packets_irrelevant(state) is None
+
+
 def test_relevance_decline_skips_when_worker_retrieval_scores_are_strong():
     from langgraph_runtime.workflows.document_scope import decline_when_all_document_packets_irrelevant
 
