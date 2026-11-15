@@ -13,6 +13,8 @@ import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "scripts"))
+from live_e2e_lib import wait_langgraph_ready  # noqa: E402
 ART = Path(os.environ.get("ASKPDF_E2E_ARTIFACTS", "/opt/cursor/artifacts"))
 ART.mkdir(parents=True, exist_ok=True)
 API = os.environ.get("ASKPDF_E2E_API_URL", "http://127.0.0.1:8000")
@@ -345,6 +347,7 @@ def run_matrix(model: str, sha: str) -> tuple[list[dict], str]:
 
 def main() -> int:
     (ART / "live-matrix-proof.exit").unlink(missing_ok=True)
+    wait_langgraph_ready()
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
     all_rows: list[dict] = []
     thread_ids: dict[str, str] = {}
