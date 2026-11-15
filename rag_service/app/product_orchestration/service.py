@@ -883,6 +883,16 @@ class AgentRunService:
         )
 
         trace_recorder = AgentTraceRecorder(run)
+        execution_event_sink = AgentExecutionEventSink(include_details=False)
+        execution_event_sink.detach_delivery()
+        execution_event_sink.bind_trace_recorder(trace_recorder)
+        execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
+        execution_event_sink.bind_runtime_fact_persister(self.repository.update_run_metadata_fields)
+        execution_event_sink.bind_runtime_event_persister(
+            run.id,
+            self.repository.append_run_event,
+            initial_sequence=0,
+        )
         context = {
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
@@ -937,7 +947,12 @@ class AgentRunService:
             agent_run_context=context,
         )
         runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
-        runtime_result = await adapter.start(runtime_request, context=runtime_context)
+        runtime_result = await adapter.start(
+            runtime_request,
+            context=runtime_context,
+            event_sink=execution_event_sink,
+        )
+        await execution_event_sink.flush()
         if runtime_result.continuation is not None:
             await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
         if runtime_result.checkpoint_boundary_available is not None:

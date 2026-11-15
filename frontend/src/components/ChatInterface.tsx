@@ -1172,7 +1172,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             // approval after a newer run has already completed.
             const response = await listThreadAgentRuns(threadId, { limit: 20 });
             if (activeThreadIdRef.current !== threadId) return;
-            const latest = (response.agent_runs || []).find((run) => !run.task_id);
+            const chatRuns = (response.agent_runs || []).filter((run) => !run.task_id);
+            const awaitingReview = chatRuns.find((run) => run.status === 'awaiting_human');
+            const latest = awaitingReview ?? chatRuns[0];
             if (latest?.status !== 'awaiting_human') {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');

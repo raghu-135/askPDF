@@ -230,7 +230,14 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
 
 async def delegate_synthesizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
+    child_output = state.get("delegate_child_output") if isinstance(state.get("delegate_child_output"), dict) else {}
     answer = str(state.get("child_final_answer") or state.get("final_answer") or "").strip()
+    if (
+        not answer
+        and str(child_output.get("status") or "") == "awaiting_human"
+        and child_output.get("pending_interrupt")
+    ):
+        answer = "Waiting for your approval to continue the delegated workflow."
     if not answer and state.get("agent_task_id"):
         task_id = str(state.get("agent_task_id"))
         answer = f"Deep Research task started. Track progress in task `{task_id}`."
