@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "commit_sha": "e95b1d8aca5f0433d839b1e4221cbf3ff7958278",
+  "generated_at": "2026-11-15T05:40:26.867551+00:00",
+  "chat_model": "openai/gpt-4.1-mini",
+  "judge_model": "google/gemini-2.5-flash",
+  "context_baseline": {
+    "config_path": "benchmarks/benchmark_config.json",
+    "context": {
+      "context_window": 8192,
+      "use_web_search": false,
+      "use_reranker": false,
+      "context_budget": {
+        "document_ratio": 0.28,
+        "usable_ratio": 0.8,
+        "semantic_ratio": 0.12,
+        "recent_ratio": 0.22,
+        "durable_memory_ratio": 0.06,
+        "memory_expanded_ratio": 0.12
+      }
+    },
+    "thread_settings": {
+      "replans": 1,
+      "use_reranker": false,
+      "hitl_web_approval": false
+    }
+  },
+  "workflows": {
+    "router_rag_agent": {
+      "cases": 40,
+      "retrieval_hit_rate": 0.85,
+      "answer_pass_rate": 0.8,
+      "decline_correct_rate": 0.0,
+      "median_latency_s": 10.767,
+      "total_llm_tokens": 0,
+      "by_category": {
+        "facts": {
+          "cases": 7,
+          "retrieval_hit_rate": 0.7143,
+          "answer_pass_rate": 0.8571,
+          "decline_correct_rate": null,
+          "median_latency_s": 9.867,
+          "total_llm_tokens": 0
+        },
+        "method": {
+          "cases": 5,
+          "retrieval_hit_rate": 0.8,
+          "answer_pass_rate": 1.0,
+          "decline_correct_rate": null,
+          "median_latency_s": 10.787,
+          "total_llm_tokens": 0
+        },
+        "multi_doc": {
+          "cases": 5,
+          "retrieval_hit_rate": 1.0,
+          "answer_pass_rate": 1.0,
+          "decline_correct_rate": null,
+          "median_latency_s": 13.081,
+          "total_llm_tokens": 0
+        },
+        "out_of_scope": {
+          "cases": 5,
+          "retrieval_hit_rate": 1.0,
+          "answer_pass_rate": 0.0,
+          "decline_correct_rate": 0.0,
+          "median_latency_s": 10.699,
+          "total_llm_tokens": 0
+        },
+        "overview": {
+          "cases": 6,
+          "retrieval_hit_rate": 0.8333,
+          "answer_pass_rate": 1.0,
+          "decline_correct_rate": null,
+          "median_latency_s": 10.869,
+          "total_llm_tokens": 0
+        },
+        "results": {
+          "cases": 5,
+          "retrieval_hit_rate": 1.0,
+          "answer_pass_rate": 0.8,
+          "decline_correct_rate": null,
+          "median_latency_s": 10.749,
+          "total_llm_tokens": 0
+        },
+        "tables": {
+          "cases": 7,
+          "retrieval_hit_rate": 0.7143,
+          "answer_pass_rate": 0.8571,
+          "decline_correct_rate": null,
+          "median_latency_s": 9.896,
+          "total_llm_tokens": 0
+        }
+      }
+    },
+    "auto_rag_agent": {
+      "cases": 40,
+      "retrieval_hit_rate": 0.825,
+      "answer_pass_rate": 0.85,
+      "decline_correct_rate": 0.0,
+      "median_latency_s": 11.639,
+      "total_llm_tokens": 0,
+      "by_category": {
+        "facts": {
+          "cases": 7,
+          "retrieval_hit_rate": 0.5714,
+          "answer_pass_rate": 1.0,
+          "decline_correct_rate": null,
+          "median_latency_s": 10.648,
+          "total_llm_tokens": 0
+        },
+        "method": {
+          "cases": 5,
+          "retrieval_hit_rate": 0.8,
+          "answer_pass_rate": 1.0,
+          "decline_correct_rate": null,
+          "median_latency_s": 11.641,
+          "total_llm_tokens": 0
+        },
+        "multi_doc": {
+          "cases": 5,
+          "retrieval_hit_rate": 1.0,
+          "answer_pass_rate": 1.0,
+          "decline_correct_rate": null,
+          "median_latency_s": 11.713,
+          "total_llm_tokens": 0
+        },
+        "out_of_scope": {
+          "cases": 5,
+          "retrieval_hit_rate": 1.0,
+          "answer_pass_rate": 0.0,
+          "decline_correct_rate": 0.0,
+          "median_latency_s": 11.666,
+          "total_llm_tokens": 0
+        },
+        "overview": {
+          "cases": 6,
+          "retrieval_hit_rate": 0.8333,
+          "answer_pass_rate": 1.0,
+          "decline_correct_rate": null,
+          "median_latency_s": 11.721,
+          "total_llm_tokens": 0
+        },
+        "results": {
+          "cases": 5,
+          "retrieval_hit_rate": 1.0,
+          "answer_pass_rate": 1.0,
+          "decline_correct_rate": null,
+          "median_latency_s": 10.624,
+          "total_llm_tokens": 0
+        },
+        "tables": {
+          "cases": 7,
+          "retrieval_hit_rate": 0.7143,
+          "answer_pass_rate": 0.8571,
+          "decline_correct_rate": null,
+          "median_latency_s": 11.598,
+          "total_llm_tokens": 0
+        }
+      }
+    }
+  }
+}

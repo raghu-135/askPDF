@@ -1,0 +1,90 @@
+{
+  "schema_version": 2,
+  "redistribution": "PDF bytes are not stored in git. Run scripts/download_benchmark_pdfs.sh to populate .benchmark-pdf-cache/.",
+  "papers": [
+    {
+      "arxiv_id": "1706.03762",
+      "arxiv_version": "v7",
+      "fixture_file": "1706.03762.pdf",
+      "title": "Attention Is All You Need",
+      "authors": "Vaswani et al.",
+      "pages": 15,
+      "source_url": "https://arxiv.org/abs/1706.03762",
+      "pdf_url": "https://arxiv.org/pdf/1706.03762v7.pdf",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "license": "arXiv.org non-exclusive distribution license 1.0 — fetch at runtime; do not redistribute PDFs in public repositories (https://arxiv.org/licenses/nonexclusive-distrib/1.0/).",
+      "role": "benchmark",
+      "tags": ["nlp", "transformers", "figures", "math", "tables"]
+    },
+    {
+      "arxiv_id": "1810.04805",
+      "arxiv_version": "v2",
+      "fixture_file": "1810.04805.pdf",
+      "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "authors": "Devlin et al.",
+      "pages": 16,
+      "source_url": "https://arxiv.org/abs/1810.04805",
+      "pdf_url": "https://arxiv.org/pdf/1810.04805v2.pdf",
+      "sha256": "5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e",
+      "license": "arXiv.org non-exclusive distribution license 1.0 — fetch at runtime; do not redistribute PDFs in public repositories.",
+      "role": "benchmark",
+      "tags": ["nlp", "pretraining", "tables"]
+    },
+    {
+      "arxiv_id": "2005.11401",
+      "arxiv_version": "v4",
+      "fixture_file": "2005.11401.pdf",
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "authors": "Lewis et al.",
+      "pages": 19,
+      "source_url": "https://arxiv.org/abs/2005.11401",
+      "pdf_url": "https://arxiv.org/pdf/2005.11401v4.pdf",
+      "sha256": "c8f40da51c0510d3667aea55e2d95814e8b446c676df7311c513fbd4afc0ac0f",
+      "license": "arXiv.org non-exclusive distribution license 1.0 — fetch at runtime; do not redistribute PDFs in public repositories.",
+      "role": "benchmark",
+      "tags": ["rag", "retrieval", "tables"]
+    },
+    {
+      "arxiv_id": "2106.09685",
+      "arxiv_version": "v2",
+      "fixture_file": "2106.09685.pdf",
+      "title": "LoRA: Low-Rank Adaptation of Large Language Models",
+      "authors": "Hu et al.",
+      "pages": 26,
+      "source_url": "https://arxiv.org/abs/2106.09685",
+      "pdf_url": "https://arxiv.org/pdf/2106.09685v2.pdf",
+      "sha256": "e9a0d3128767db616085dc0f4e6e455e672e89af823e8ed1282793682787395a",
+      "license": "arXiv.org non-exclusive distribution license 1.0 — fetch at runtime; do not redistribute PDFs in public repositories.",
+      "role": "benchmark",
+      "tags": ["peft", "methods", "tables"]
+    },
+    {
+      "arxiv_id": "2303.18223",
+      "arxiv_version": "v19",
+      "fixture_file": "2303.18223.pdf",
+      "title": "A Survey of Large Language Models",
+      "authors": "Zhao et al.",
+      "pages": 56,
+      "source_url": "https://arxiv.org/abs/2303.18223",
+      "pdf_url": "https://arxiv.org/pdf/2303.18223v19.pdf",
+      "sha256": "4180dd0837178a1eeb6a64711300d093ad130a96eaed4f142a85e062883f5efc",
+      "license": "arXiv.org non-exclusive distribution license 1.0 — fetch at runtime; do not redistribute PDFs in public repositories.",
+      "role": "benchmark",
+      "tags": ["survey", "long", "taxonomy", "tables"]
+    },
+    {
+      "arxiv_id": "2305.18290",
+      "arxiv_version": "v3",
+      "fixture_file": "2305.18290.pdf",
+      "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+      "authors": "Rafailov et al.",
+      "pages": 27,
+      "source_url": "https://arxiv.org/abs/2305.18290",
+      "pdf_url": "https://arxiv.org/pdf/2305.18290v3.pdf",
+      "sha256": "92cb3a2b71362acda98a789b03d88688fd33cf5fcf13f81d2b1de30ee7d3b67a",
+      "license": "arXiv.org non-exclusive distribution license 1.0 — fetch at runtime; do not redistribute PDFs in public repositories.",
+      "role": "holdout",
+      "tags": ["alignment", "holdout"]
+    }
+  ]
+}

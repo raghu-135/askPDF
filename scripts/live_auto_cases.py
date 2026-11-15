@@ -8,119 +8,56 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import httpx
-import os
 
-API = "http://127.0.0.1:8000/api"
+from live_stack_client import (
+    create_thread,
+    get_agent_run,
+    live_client,
+    thread_chat,
+    upload_pdf,
+    wait_indexed,
+)
 
-
-def _auth_headers() -> dict[str, str]:
-    token = os.getenv("ASKPDF_ADMIN_TOKEN", "").strip()
-    if not token:
-        env_path = Path(__file__).resolve().parents[1] / ".env"
-        if env_path.is_file():
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                if line.startswith("ASKPDF_ADMIN_TOKEN="):
-                    token = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    break
-    if not token:
-        raise RuntimeError("ASKPDF_ADMIN_TOKEN is required for live API calls")
-    return {"Authorization": f"Bearer {token}"}
 MODEL = "openai/gpt-4.1-mini"
 ATTENTION = Path("/opt/cursor/artifacts/pdfs/attention.pdf")
 BERT = Path("/opt/cursor/artifacts/pdfs/bert.pdf")
 
 
 def wait_ready(client: httpx.Client, thread_id: str, file_hash: str, timeout: float = 600.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        r = client.get(f"{API}/threads/{thread_id}/files/{file_hash}/status")
-        r.raise_for_status()
-        payload = r.json()
-        status = str(
-            payload.get("status")
-            or payload.get("process_status")
-            or payload.get("processing_status")
-            or ""
-        ).lower()
-        indexing = payload.get("indexing") if isinstance(payload.get("indexing"), dict) else {}
-        indexing_status = str(indexing.get("status") or "").lower()
-        projection = (payload.get("document_processing") or {}).get("projection")
-        projection_status = ""
-        if isinstance(projection, dict):
-            projection_status = str(projection.get("status") or "").lower()
-        ready = status in {"ready", "completed", "indexed", "done"} or indexing_status == "completed"
-        if isinstance(projection, dict) and projection_status:
-            ready = ready and projection_status == "completed"
-        if ready:
-            return True
-        if status in {"failed", "error"} or indexing_status in {"failed", "error"}:
-            print(f"index failed for {file_hash}: {payload}", file=sys.stderr)
-            return False
-        time.sleep(5)
-    return False
-
-
-def create_thread(client: httpx.Client) -> str:
-    project_r = client.get(f"{API}/projects")
-    project_r.raise_for_status()
-    projects = project_r.json()
-    project_id = projects[0]["id"] if isinstance(projects, list) and projects else None
-    body = {"name": f"auto-live-{int(time.time())}"}
-    if project_id:
-        body["project_id"] = project_id
-    r = client.post(f"{API}/threads", json=body)
-    r.raise_for_status()
-    return r.json()["id"]
-
-
-def upload_pdf(client: httpx.Client, thread_id: str, path: Path) -> str:
-    with path.open("rb") as handle:
-        files = {"file": (path.name, handle, "application/pdf")}
-        r = client.post(f"{API}/threads/{thread_id}/files/upload", files=files)
-    r.raise_for_status()
-    return r.json()["file_hash"]
-
-
-def chat(client: httpx.Client, thread_id: str, question: str) -> dict:
-    r = client.post(
-        f"{API}/threads/{thread_id}/chat",
-        json={
-            "thread_id": thread_id,
-            "question": question,
-            "llm_model": MODEL,
-            "bypass_clarification": True,
-        },
-        timeout=600.0,
-    )
-    r.raise_for_status()
-    return r.json()
+    try:
+        wait_indexed(client, thread_id=thread_id, file_hash=file_hash, timeout=timeout)
+        return True
+    except (TimeoutError, RuntimeError) as exc:
+        print(exc, file=sys.stderr)
+        return False
 
 
 def resume_run(client: httpx.Client, thread_id: str, run_id: str, interrupt_id: str) -> dict:
     r = client.post(
-        f"{API}/agent-runs/{run_id}/resume",
+        f"/agent-runs/{run_id}/resume",
         params={"thread_id": thread_id},
-        json={
-            "interrupt_id": interrupt_id,
-            "action": "approve",
-        },
+        json={"interrupt_id": interrupt_id, "action": "approve"},
         timeout=600.0,
     )
     r.raise_for_status()
     return r.json()
 
 
+def chat(client: httpx.Client, thread_id: str, question: str) -> dict:
+    return thread_chat(client, thread_id, question, llm_model=MODEL)
+
+
 def run_debug(client: httpx.Client, thread_id: str, run_id: str) -> dict:
-    r = client.get(f"{API}/agent-runs/{run_id}", params={"thread_id": thread_id})
-    r.raise_for_status()
-    return r.json().get("agent_run") or {}
+    return get_agent_run(client, thread_id, run_id)
 
 
 def main() -> int:
     results: list[dict] = []
-    with httpx.Client(timeout=600.0, headers=_auth_headers()) as client:
-        thread_id = create_thread(client)
+    with live_client() as client:
+        thread_id = create_thread(client, f"auto-live-{int(time.time())}")
         print(f"thread_id={thread_id}")
         att_hash = upload_pdf(client, thread_id, ATTENTION)
         bert_hash = upload_pdf(client, thread_id, BERT)
@@ -166,7 +103,6 @@ def main() -> int:
             results.append(row)
             print(json.dumps(row, indent=2))
 
-        # case f from last delegated run with child ids
         f_row = next((r for r in reversed(results) if r.get("technical_details")), results[0] if results else {})
         f_row = {**f_row, "case": "f"}
         results.append(f_row)

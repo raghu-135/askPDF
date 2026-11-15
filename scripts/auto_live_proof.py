@@ -11,6 +11,17 @@ from pathlib import Path
 
 import httpx
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from live_stack_client import (  # noqa: E402
+    answer_from_run,
+    create_thread,
+    get_agent_run,
+    live_client,
+    thread_chat,
+    upload_and_wait,
+)
+
 REPO = Path(__file__).resolve().parents[1]
 ATTENTION = Path("/opt/cursor/artifacts/pdfs/attention.pdf")
 BERT = Path("/opt/cursor/artifacts/pdfs/bert.pdf")
@@ -18,62 +29,37 @@ MODEL = "openai/gpt-4.1-mini"
 DECLINE = "The attached documents do not address this question."
 
 
-def _token() -> str:
-    for line in (REPO / ".env").read_text(encoding="utf-8").splitlines():
-        if line.startswith("ASKPDF_ADMIN_TOKEN="):
-            return line.split("=", 1)[1].strip().strip('"')
-    raise RuntimeError("ASKPDF_ADMIN_TOKEN missing")
-
-
-def _wait_indexed(client: httpx.Client, thread_id: str, file_hash: str) -> None:
-    deadline = time.time() + 900
-    while time.time() < deadline:
-        payload = client.get(f"{API}/threads/{thread_id}/files/{file_hash}/status").json()
-        indexing = payload.get("indexing") if isinstance(payload.get("indexing"), dict) else {}
-        projection = (payload.get("document_processing") or {}).get("projection") or {}
-        if str(indexing.get("status") or "").lower() == "completed" and str(
-            (projection.get("status") if isinstance(projection, dict) else "")
-        ).lower() == "completed":
-            return
-        time.sleep(5)
-    raise TimeoutError(f"indexing timeout for {file_hash}")
-
-
 def _setup_thread(client: httpx.Client, label: str) -> str:
-    projects = client.get(f"{API}/projects").json()
-    project_id = projects[0]["id"] if isinstance(projects, list) and projects else None
-    body = {"name": label}
-    if project_id:
-        body["project_id"] = project_id
-    thread_id = client.post(f"{API}/threads", json=body).json()["id"]
+    thread_id = create_thread(client, label)
     for path in (ATTENTION, BERT):
-        with path.open("rb") as handle:
-            client.post(
-                f"{API}/threads/{thread_id}/files/upload",
-                files={"file": (path.name, handle, "application/pdf")},
-            ).raise_for_status()
-        file_hash = client.get(f"{API}/threads/{thread_id}/files").json()["files"][-1]["file_hash"]
-        _wait_indexed(client, thread_id, file_hash)
+        upload_and_wait(client, thread_id, path)
     return thread_id
 
 
 def _chat(client: httpx.Client, thread_id: str, question: str, *, approve: bool = False) -> dict:
-    out = client.post(
-        f"{API}/threads/{thread_id}/chat",
-        json={"thread_id": thread_id, "question": question, "llm_model": MODEL, "bypass_clarification": True},
-    ).json()
-    run_id = out.get("agent_run_id")
-    interrupt = out.get("pending_interrupt") or {}
-    if approve and out.get("status") == "awaiting_human" and interrupt.get("interrupt_id") and run_id:
-        client.post(
-            f"{API}/agent-runs/{run_id}/resume",
-            json={"thread_id": thread_id, "interrupt_id": interrupt["interrupt_id"], "action": "approve"},
-        ).raise_for_status()
-    detail = client.get(f"{API}/agent-runs/{run_id}", params={"thread_id": thread_id}).json()["agent_run"]
-    answer = (detail.get("final_output") or {}).get("answer") or ""
-    turns = detail.get("turns") or []
-    if not answer and turns:
-        answer = turns[-1].get("answer") or ""
+    if approve:
+        out = client.post(
+            f"/threads/{thread_id}/chat",
+            json={
+                "thread_id": thread_id,
+                "question": question,
+                "llm_model": MODEL,
+                "bypass_clarification": True,
+            },
+            timeout=600.0,
+        ).json()
+        run_id = out.get("agent_run_id")
+        interrupt = out.get("pending_interrupt") or {}
+        if out.get("status") == "awaiting_human" and interrupt.get("interrupt_id") and run_id:
+            client.post(
+                f"/agent-runs/{run_id}/resume",
+                json={"thread_id": thread_id, "interrupt_id": interrupt["interrupt_id"], "action": "approve"},
+            ).raise_for_status()
+    else:
+        out = thread_chat(client, thread_id, question, llm_model=MODEL)
+        run_id = out.get("agent_run_id")
+    detail = get_agent_run(client, thread_id, str(run_id)) if run_id else {}
+    answer = answer_from_run(detail)
     tech = (detail.get("debug") or {}).get("technical_details") or {}
     ops = [row.get("operation_id") for row in (detail.get("debug") or {}).get("operations") or []]
     return {
@@ -83,16 +69,13 @@ def _chat(client: httpx.Client, thread_id: str, question: str, *, approve: bool 
         "answer": answer,
         "technical_details": tech,
         "operations": ops,
-        "interrupt_type": interrupt.get("type"),
+        "interrupt_type": (out.get("pending_interrupt") or {}).get("type"),
         "child_run_id": tech.get("child_run_id"),
         "child_workflow_id": tech.get("child_workflow_id"),
     }
 
 
 def main() -> int:
-    global API
-    API = "http://127.0.0.1:8000/api"
-    headers = {"Authorization": f"Bearer {_token()}"}
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO).decode().strip()
     stamp = int(time.time())
     cases = [
@@ -147,7 +130,7 @@ def main() -> int:
     ]
     rows: list[dict] = []
     child_ids: set[str] = set()
-    with httpx.Client(timeout=600.0, headers=headers) as client:
+    with live_client() as client:
         for case_id, label, question, approve, predicate in cases:
             thread_id = _setup_thread(client, label)
             row = _chat(client, thread_id, question, approve=approve)
