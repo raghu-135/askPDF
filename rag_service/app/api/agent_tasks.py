@@ -303,9 +303,17 @@ async def create_agent_task(
                 "agent_definition_web_unavailable",
                 "The selected definition does not support web search.",
             )
+        if req.browser_access_mode != "off" and not builder.supports_task_browser(definition):
+            raise AgentRuntimeError(
+                "agent_definition_browser_unavailable",
+                "The selected definition does not support browser agent tools.",
+            )
         config = req.model_dump(mode="json")
         config.pop("definition_id", None)
         config["use_web_search"] = req.web_search_mode != "off"
+        config["browser_access_mode"] = req.browser_access_mode
+        config["use_browser_access"] = req.browser_access_mode != "off"
+        config["hitl_browser_approval"] = req.browser_access_mode == "ask"
         requested_limits = (
             req.limits.model_dump(mode="json")
             if req.limits is not None
@@ -321,6 +329,8 @@ async def create_agent_task(
                 "llm_model": req.llm_model,
                 "context_window": req.context_window,
                 "use_web_search": req.web_search_mode != "off",
+                "browser_access_mode": req.browser_access_mode,
+                "use_browser_access": req.browser_access_mode != "off",
             },
         )
     except (AgentRuntimeError, ValueError) as exc:

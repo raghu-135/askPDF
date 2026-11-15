@@ -228,7 +228,11 @@ def normalize_work_items(
         key = (worker_type, f"{file_hash}|{query.casefold()}")
         if not query or key in seen:
             continue
-        if worker_type == WorkflowNodeType.WEB_WORKER.value and not state.get("use_web_search", False):
+        if (
+            worker_type == WorkflowNodeType.WEB_WORKER.value
+            and not state.get("use_web_search", False)
+            and not state.get("use_browser_access", False)
+        ):
             continue
         if is_corrective and worker_type == WorkflowNodeType.WEB_WORKER.value and not corrective_policy["allow_web_fallback"]:
             continue

@@ -1,5 +1,7 @@
 FROM lscr.io/linuxserver/brave:1.91.175-ls106@sha256:4757ede17ac763746b4863a63124a3147084461591bc53679ddb67bf1fdfd755
 
+COPY brave-managed-policy.json /etc/brave/policies/managed/askpdf.json
+
 USER root
 
 # The July 2026 linuxserver/brave base defaults to PixelFlux/Wayland, where
@@ -27,7 +29,7 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install FastAPI and dependencies for direct CDP
-RUN pip install fastapi uvicorn python-multipart requests websockets weasyprint pypdf
+RUN pip install fastapi uvicorn python-multipart requests websockets weasyprint pypdf httpx
 
 # ChromeDriver will be downloaded automatically by webdriver-manager
 
@@ -79,6 +81,41 @@ chown -R abc:abc /config/.config/BraveSoftware
 chown -R abc:abc /config/.cache
 rm -f /config/.config/BraveSoftware/Brave-Browser/Singleton*
 
+PREF_DIR="/config/.config/BraveSoftware/Brave-Browser/Default"
+mkdir -p "${PREF_DIR}"
+python3 <<'PY'
+import json
+from pathlib import Path
+prefs_path = Path("/config/.config/BraveSoftware/Brave-Browser/Default/Preferences")
+prefs_path.parent.mkdir(parents=True, exist_ok=True)
+prefs = {}
+if prefs_path.exists():
+    try:
+        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        prefs = {}
+prefs.setdefault("brave", {})["p3a_enabled"] = False
+prefs["brave_stats_reporting_enabled"] = False
+prefs["user_experience_metrics"] = {"personalization_data_consent_enabled": False}
+prefs.setdefault("profile", {}).setdefault("default_content_setting_values", {})["notifications"] = 2
+prefs.setdefault("profile", {})["exit_type"] = "Normal"
+prefs.setdefault("profile", {})["exited_cleanly"] = True
+prefs.setdefault("session", {})["restore_on_startup"] = 5
+prefs.setdefault("session", {})["startup_urls"] = []
+prefs_path.write_text(json.dumps(prefs), encoding="utf-8")
+local_state = Path("/config/.config/BraveSoftware/Brave-Browser/Local State")
+local = {}
+if local_state.exists():
+    try:
+        local = json.loads(local_state.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        local = {}
+local["stats_p3a_enabled"] = False
+local.setdefault("brave", {})["p3a_enabled"] = False
+local_state.write_text(json.dumps(local), encoding="utf-8")
+PY
+chown -R abc:abc /config/.config/BraveSoftware
+
 exec s6-setuidgid abc /usr/bin/brave-browser \
     --no-first-run \
     --no-sandbox \
@@ -88,10 +125,14 @@ exec s6-setuidgid abc /usr/bin/brave-browser \
     --start-maximized \
     --test-type \
     --user-data-dir=/config/.config/BraveSoftware/Brave-Browser \
+    --noerrdialogs \
+    --disable-session-crashed-bubble \
+    --disable-features=Translate,TranslateUI,BraveP3A,BraveVPN,BraveAdsInContent,BraveSearchPromotion,BraveOnboarding,BraveIPFS,BraveWaybackMachine,InfiniteSessionRestore,TabRestoreBubble \
     "${BRAVE_DISPLAY_ARGS[@]}" \
     --remote-debugging-address=127.0.0.1 \
     --remote-debugging-port=9222 \
     --no-default-browser-check \
+    --lang=en-US \
     about:blank
 EOF
 RUN chmod +x /etc/s6-overlay/s6-rc.d/browser-cdp/run

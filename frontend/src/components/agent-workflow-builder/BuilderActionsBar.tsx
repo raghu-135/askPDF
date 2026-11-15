@@ -24,6 +24,7 @@ import {
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
 import type { AgentWorkflow } from '../../lib/api';
+import { selectFieldVariant } from '../../theme';
 import { WorkbenchToolbarTrailingActions } from '../workbench/WorkbenchToolbar';
 
 export default function BuilderActionsBar({
@@ -110,7 +111,7 @@ export default function BuilderActionsBar({
             <HomeIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-        <FormControl size="small" disabled={workflowSelectionDisabled} sx={{ minWidth: 180 }}>
+        <FormControl variant={selectFieldVariant} size="small" disabled={workflowSelectionDisabled} sx={{ minWidth: 180 }}>
           <InputLabel id="builder-starter-label">Workflow</InputLabel>
           <Select
             labelId="builder-starter-label"

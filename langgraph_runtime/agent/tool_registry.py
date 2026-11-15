@@ -41,6 +41,7 @@ CAT_THREAD_CONVERSATION_HISTORY = NodeCategory.THREAD_CONVERSATION_HISTORY.value
 CAT_DURABLE_MEMORY = NodeCategory.DURABLE_MEMORY.value
 CAT_THREAD_EVENTS = NodeCategory.THREAD_EVENTS.value
 CAT_WEB = NodeCategory.WEB.value
+CAT_BROWSER = NodeCategory.BROWSER.value
 CAT_EXTERNAL_RESEARCH = NodeCategory.EXTERNAL_RESEARCH.value
 CAT_ANSWER = NodeCategory.ANSWER.value
 
@@ -63,6 +64,11 @@ TOOL_THREAD_CONVERSATION_HISTORY = ToolContractId.THREAD_CONVERSATION_HISTORY.va
 TOOL_DURABLE_MEMORY = ToolContractId.DURABLE_MEMORY.value
 TOOL_THREAD_EVENTS = ToolContractId.THREAD_EVENTS.value
 TOOL_LIVE_WEB_RECON = ToolContractId.LIVE_WEB_RECON.value
+TOOL_BROWSER_NAVIGATE = ToolContractId.BROWSER_NAVIGATE.value
+TOOL_BROWSER_SNAPSHOT = ToolContractId.BROWSER_SNAPSHOT.value
+TOOL_BROWSER_ACT = ToolContractId.BROWSER_ACT.value
+TOOL_BROWSER_READ = ToolContractId.BROWSER_READ.value
+TOOL_BROWSER_SAVE_TO_THREAD = ToolContractId.BROWSER_SAVE_TO_THREAD.value
 TOOL_WIKIPEDIA_REFERENCE = ToolContractId.WIKIPEDIA_REFERENCE.value
 TOOL_WIKIDATA_REFERENCE = ToolContractId.WIKIDATA_REFERENCE.value
 TOOL_ARXIV_RESEARCH = ToolContractId.ARXIV_RESEARCH.value
@@ -78,6 +84,11 @@ TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY = ToolName.SEARCH_THREAD_CONVERSATI
 TOOL_NAME_SEARCH_DURABLE_MEMORY = ToolName.SEARCH_DURABLE_MEMORY.value
 TOOL_NAME_SEARCH_THREAD_EVENTS = ToolName.SEARCH_THREAD_EVENTS.value
 TOOL_NAME_SEARCH_WEB = ToolName.SEARCH_WEB.value
+TOOL_NAME_BROWSER_NAVIGATE = ToolName.BROWSER_NAVIGATE.value
+TOOL_NAME_BROWSER_SNAPSHOT = ToolName.BROWSER_SNAPSHOT.value
+TOOL_NAME_BROWSER_ACT = ToolName.BROWSER_ACT.value
+TOOL_NAME_BROWSER_READ = ToolName.BROWSER_READ.value
+TOOL_NAME_BROWSER_SAVE_TO_THREAD = ToolName.BROWSER_SAVE_TO_THREAD.value
 TOOL_NAME_WIKIPEDIA = ToolName.WIKIPEDIA.value
 TOOL_NAME_WIKIDATA = ToolName.WIKIDATA.value
 TOOL_NAME_ARXIV = ToolName.ARXIV.value
@@ -160,6 +171,57 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "required_node_capabilities": [CAP_RETRIEVAL_WEB],
         "artifact_keys": ["web_sources"],
         "warning_codes": [ToolWarningCode.WEB_SEARCH_DISABLED, ToolWarningCode.NO_USABLE_WEB_RESULTS],
+    },
+    TOOL_NAME_BROWSER_NAVIGATE: {
+        "id": TOOL_BROWSER_NAVIGATE,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_page"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+    },
+    TOOL_NAME_BROWSER_SNAPSHOT: {
+        "id": TOOL_BROWSER_SNAPSHOT,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_state", "browser_screenshot_b64", "browser_page_text"],
+        "warning_codes": [
+            ToolWarningCode.BROWSER_ACCESS_DISABLED,
+            ToolWarningCode.BROWSER_DESKTOP_CONTROL_UNAVAILABLE,
+        ],
+    },
+    TOOL_NAME_BROWSER_ACT: {
+        "id": TOOL_BROWSER_ACT,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_control_result"],
+        "warning_codes": [
+            ToolWarningCode.BROWSER_ACCESS_DISABLED,
+            ToolWarningCode.BROWSER_DESKTOP_CONTROL_UNAVAILABLE,
+        ],
+    },
+    TOOL_NAME_BROWSER_READ: {
+        "id": TOOL_BROWSER_READ,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_page_text"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+    },
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD: {
+        "id": TOOL_BROWSER_SAVE_TO_THREAD,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_capture"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED, ToolWarningCode.INDEXING_IN_PROGRESS],
     },
     TOOL_NAME_WIKIPEDIA: {
         "id": TOOL_WIKIPEDIA_REFERENCE,
@@ -273,6 +335,11 @@ for _deep_tool_name in (
     TOOL_NAME_SEARCH_DURABLE_MEMORY,
     TOOL_NAME_SEARCH_THREAD_EVENTS,
     TOOL_NAME_SEARCH_WEB,
+    TOOL_NAME_BROWSER_NAVIGATE,
+    TOOL_NAME_BROWSER_SNAPSHOT,
+    TOOL_NAME_BROWSER_ACT,
+    TOOL_NAME_BROWSER_READ,
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD,
     TOOL_NAME_WIKIPEDIA,
     TOOL_NAME_WIKIDATA,
     TOOL_NAME_ARXIV,
@@ -456,6 +523,56 @@ TOOL_FRIENDLY_CONFIG = {
         "description": "Live web search for external or time-sensitive information; cached to the thread.",
         "default_prompt": "Use when information is outside the uploaded documents or likely time-sensitive. Run in parallel with document search when enabled.",
     },
+    TOOL_NAME_BROWSER_NAVIGATE: {
+        "id": TOOL_BROWSER_NAVIGATE,
+        "display_name": "Browser Navigate",
+        "description": "Open a URL in the shared workbench browser.",
+        "default_prompt": "Use to open or follow a specific http(s) page in the workbench browser. Do not use for REST search when search_web is enough.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_navigate",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_SNAPSHOT: {
+        "id": TOOL_BROWSER_SNAPSHOT,
+        "display_name": "Browser Snapshot",
+        "description": "Capture visible page text and a desktop screenshot from the workbench browser.",
+        "default_prompt": "Use after navigation to inspect the visible page and desktop state before acting.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_snapshot",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_ACT: {
+        "id": TOOL_BROWSER_ACT,
+        "display_name": "Browser Act",
+        "description": "Click, type, scroll, or send keys on the shared workbench browser.",
+        "default_prompt": "Use for interactive steps after browser_snapshot. Prefer precise coordinates when known.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_act",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_READ: {
+        "id": TOOL_BROWSER_READ,
+        "display_name": "Browser Read",
+        "description": "Read plain text from the active workbench browser page.",
+        "default_prompt": "Use for lightweight text extraction from the active tab.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_read",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD: {
+        "id": TOOL_BROWSER_SAVE_TO_THREAD,
+        "display_name": "Browser Save To Thread",
+        "description": "Capture the active browser page as PDF and attach it to the thread.",
+        "default_prompt": "Use when the active browser page should become durable thread evidence.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_save_to_thread",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
     TOOL_NAME_WIKIPEDIA: {
         "id": TOOL_WIKIPEDIA_REFERENCE,
         "display_name": "Wikipedia",
@@ -621,6 +738,11 @@ for _tool_name in (
     TOOL_NAME_SEARCH_DURABLE_MEMORY,
     TOOL_NAME_SEARCH_THREAD_EVENTS,
     TOOL_NAME_SEARCH_WEB,
+    TOOL_NAME_BROWSER_NAVIGATE,
+    TOOL_NAME_BROWSER_SNAPSHOT,
+    TOOL_NAME_BROWSER_ACT,
+    TOOL_NAME_BROWSER_READ,
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD,
     TOOL_NAME_WIKIPEDIA,
     TOOL_NAME_WIKIDATA,
     TOOL_NAME_ARXIV,

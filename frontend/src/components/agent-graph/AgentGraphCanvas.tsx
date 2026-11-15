@@ -1,4 +1,12 @@
-import React, { Component, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  Component,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Box, Chip, Typography, useTheme } from '@mui/material';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import {
@@ -30,6 +38,7 @@ import type {
   AgentTraceRefs,
 } from './agent-graph-types';
 import { applySelectedVisitOverlay } from './agent-node-visits';
+import { isGraphViewportReady } from './agent-graph-viewport-fit';
 
 const elk = new ELK();
 
@@ -163,8 +172,16 @@ function AgentGraphCanvasInner({
 }) {
   const theme = useTheme();
   const { fitView } = useReactFlow();
+  const canvasContainerRef = useRef<HTMLDivElement | null>(null);
   const [flowNodes, setFlowNodes] = useState<Node<AgentGraphNodeModel>[]>([]);
   const [selection, setSelection] = useState<AgentGraphSelection>(null);
+  const fitViewOptions = useMemo(() => ({ padding: 0.08, duration: 200, maxZoom: 1 as const }), []);
+
+  const scheduleFitView = useCallback(() => {
+    const el = canvasContainerRef.current;
+    if (!el || !isGraphViewportReady(el.clientWidth, el.clientHeight)) return;
+    window.requestAnimationFrame(() => fitView(fitViewOptions));
+  }, [fitView, fitViewOptions]);
 
   const graph = useMemo(() => {
     const graphSpec = getAgentGraphSpec(resolvedSpec, workflowId);
@@ -248,7 +265,7 @@ function AgentGraphCanvasInner({
       .then((layoutedNodes) => {
         if (cancelled) return;
         setFlowNodes(layoutedNodes);
-        window.requestAnimationFrame(() => fitView({ padding: 0.08, duration: 200, maxZoom: 1 }));
+        scheduleFitView();
       })
       .catch(() => {
         if (cancelled) return;
@@ -263,7 +280,19 @@ function AgentGraphCanvasInner({
     return () => {
       cancelled = true;
     };
-  }, [fitView, layoutDirection, topologySignature]);
+  }, [layoutDirection, scheduleFitView, topologySignature]);
+
+  useEffect(() => {
+    const el = canvasContainerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => scheduleFitView());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [scheduleFitView]);
+
+  useEffect(() => {
+    scheduleFitView();
+  }, [flowNodes.length, scheduleFitView]);
 
   useEffect(() => {
     const graphNodesById = new Map(graph.nodes.map((node) => [node.id, node]));
@@ -334,6 +363,7 @@ function AgentGraphCanvasInner({
   return (
     <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 1, width: '100%' }}>
       <Box
+        ref={canvasContainerRef}
         sx={{
           width: '100%',
           height: mode === 'run-debug' ? { xs: 460, md: 520 } : { xs: 420, md: 520 },
@@ -354,7 +384,6 @@ function AgentGraphCanvasInner({
             nodesConnectable={false}
             elementsSelectable
             onNodesChange={handleNodesChange}
-            fitView
             fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
             minZoom={0.55}
             maxZoom={1.8}

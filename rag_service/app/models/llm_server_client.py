@@ -440,21 +440,50 @@ async def embed_query(model_name: str, text: str) -> List[float]:
         await close_model_client(model)
 
 
+_local_embed_inference_lock: asyncio.Lock | None = None
+
+
+def _local_embed_lock() -> asyncio.Lock:
+    global _local_embed_inference_lock
+    if _local_embed_inference_lock is None:
+        _local_embed_inference_lock = asyncio.Lock()
+    return _local_embed_inference_lock
+
+
+def _local_embedding_encode_batch_size() -> int:
+    raw = os.environ.get("LOCAL_EMBEDDING_ENCODE_BATCH_SIZE", "32").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 32
+
+
 class LocalEmbeddingWrapper:
     def __init__(self, model: "SentenceTransformer"):
         self.model = model
 
+    async def _encode_locked(self, texts: List[str], *, batch_size: int) -> List[List[float]]:
+        if not texts:
+            return []
+
+        async with _local_embed_lock():
+            def _encode() -> List[List[float]]:
+                embeddings = self.model.encode(
+                    texts,
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                    batch_size=batch_size,
+                )
+                return embeddings.tolist()
+
+            return await asyncio.to_thread(_encode)
+
     async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
-        def _encode():
-            embeddings = self.model.encode(texts, normalize_embeddings=True)
-            return embeddings.tolist()
-        return await asyncio.to_thread(_encode)
+        return await self._encode_locked(texts, batch_size=_local_embedding_encode_batch_size())
 
     async def aembed_query(self, text: str) -> List[float]:
-        def _encode():
-            embeddings = self.model.encode([text], normalize_embeddings=True)
-            return embeddings[0].tolist()
-        return await asyncio.to_thread(_encode)
+        vectors = await self._encode_locked([text], batch_size=1)
+        return vectors[0]
 
 
 _LOCAL_RERANK_BATCH_SIZE = 32

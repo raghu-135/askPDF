@@ -30,7 +30,7 @@ Route this askPDF question to exactly one route.
 - `thread_conversation_history`: answer needs prior messages from this thread.
 - `durable_memory`: answer needs saved user, project, or thread memory.
 - `thread_events`: answer depends on chronology, first/latest, before/after, since, or event ordering.
-- `web`: answer needs live internet evidence and web search is enabled.
+- `web`: answer needs live internet evidence (web search enabled) or an interactive workbench page (browser access enabled).
 - `compound`: the request requires a bounded multi-source plan rather than one retrieval route.
 - `direct`: pre-fetched context is enough for a concise answer.
 - `clarify`: the question is ambiguous and needs 2-4 options.
@@ -46,7 +46,8 @@ Route this askPDF question to exactly one route.
 - Prefer `thread_conversation_history` for prior conversation recall when the question does not depend on ordering or event time.
 - Prefer `durable_memory` when the user asks about stored preferences, durable instructions, decisions, constraints, profile facts, or what the app remembers.
 - Prefer `document` for uploaded document, PDF, file, page, section, quote, citation, excerpt, summary, or content questions.
-- Do not choose `web` when live web search is disabled; choose another enabled route or clarify instead.
+- Do not choose `web` when both live web search and browser workbench access are disabled; choose another enabled route or clarify instead.
+- When browser access is enabled and the user needs a specific page or URL, choose `web`, set `tool_name` to `browser_navigate`, and set `query` to the target URL.
 - Use `clarify` only when multiple distinct interpretations remain after reading the pre-fetched context.
 - Do not use `clarify` when the question is outside uploaded document scope and pre-fetched context has no supporting evidence; choose `direct` instead so the workflow can decline cleanly.
 - Clarification options must contain 2-4 complete, self-contained questions.
@@ -63,7 +64,8 @@ Route this askPDF question to exactly one route.
 - `thread_conversation_history_worker` should use topic and conversation terms to search prior messages in this thread; do not use it for durable preferences or project facts.
 - `durable_memory_worker` should use terms for saved user, project, or thread facts and preferences; it does not search raw chat turns.
 - `thread_events_worker` should preserve temporal anchor words such as latest, first, since, before, and after.
-- Web retrieval should use concise keyword-rich queries and only when live web search is enabled.
+- Web retrieval should use concise keyword-rich queries when live web search is enabled.
+- Browser workbench retrieval should use an http(s) URL in `query` when `tool_name` is `browser_navigate`.
 
 {TOOL_REGISTRY_SECTION}
 
@@ -71,11 +73,13 @@ Route this askPDF question to exactly one route.
 
 {WEB_SEARCH_MANDATE_SECTION}
 
+{BROWSER_ACCESS_MANDATE_SECTION}
+
 ## Output Contract
 
 Return only JSON with keys `route`, `reason`, `tool_name`, `query`, and `clarification_options`.
 
-When route is `web`, set `tool_name` to the registered external research tool that best matches the requested source, or null when generic web search is appropriate. Do not invent tool names. Set `query` to a concise query for the selected tool. For all other routes, set `tool_name` and `query` to null.
+When route is `web`, set `tool_name` to the registered external research tool that best matches the requested source (`browser_navigate` for a specific page URL, or `search_web` / specialist tools for keyword research), or null when generic web search is appropriate. Do not invent tool names. Set `query` to the URL or concise query for the selected tool. For all other routes, set `tool_name` and `query` to null.
 
 `clarification_options` must be null unless route is `clarify`.
 

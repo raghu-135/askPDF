@@ -149,18 +149,17 @@ async def test_execute_claimed_task_defers_cancellation_when_runtime_run_missing
         "pending_interrupt_json": {},
     })()
 
-    monkeypatch.setattr(
-        "app.services.agent_task_runtime.tasks.get_task",
-        AsyncMock(side_effect=[task, task]),
-    )
+    get_task = AsyncMock(side_effect=[task, task, task])
+    monkeypatch.setattr("app.services.agent_task_runtime.tasks.get_task", get_task)
+    monkeypatch.setattr("app.services.agent_task_repository.get_task", get_task)
     monkeypatch.setattr("app.services.agent_task_runtime.tasks.get_task_run", AsyncMock(return_value=run))
     request = AsyncMock(side_effect=AgentRuntimeError("runtime_run_not_found", "missing", retryable=False))
     abandon = AsyncMock()
     finalize = AsyncMock()
     defer = AsyncMock()
-    monkeypatch.setattr("app.services.agent_task_runtime.request_task_cancellation", request)
-    monkeypatch.setattr("app.services.agent_task_runtime.abandon_pending_cancellation", abandon)
-    monkeypatch.setattr("app.services.agent_task_runtime.finalize_product_local_cancellation", finalize)
+    monkeypatch.setattr("app.services.agent_run_cancellation.request_task_cancellation", request)
+    monkeypatch.setattr("app.services.agent_run_cancellation.abandon_pending_cancellation", abandon)
+    monkeypatch.setattr("app.services.agent_run_cancellation.finalize_product_local_cancellation", finalize)
     monkeypatch.setattr("app.services.agent_task_runtime.tasks.release_task_lease", AsyncMock())
     monkeypatch.setattr("app.services.agent_task_runtime.tasks.defer_task_lease", defer)
 

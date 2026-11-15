@@ -1775,6 +1775,7 @@ export async function planMemoryManager(input: {
   review_id?: string | null;
   memory_review_cursor?: MemoryConsistencyReviewCursor | null;
   web_search_mode: 'off' | 'ask' | 'on';
+  browser_access_mode?: 'off' | 'ask' | 'on';
   web_search_decision?: { query: string; approved: boolean };
 }): Promise<MemoryManagerPlan> {
   const res = await fetch(`${API_BASE}/api/memory-manager/plan`, {
@@ -2601,6 +2602,7 @@ export async function createAgentTask(threadId: string, payload: {
   context_window: number;
   context_budget?: ContextBudgetDefaults;
   web_search_mode: 'off' | 'ask' | 'on';
+  browser_access_mode?: 'off' | 'ask' | 'on';
 }): Promise<AgentTaskSummary> {
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/agent-tasks`, {
     method: 'POST',
@@ -2905,6 +2907,7 @@ const threadChatPayload = (
   bypassClarification: boolean = false,
   hitlWebApproval?: boolean,
   contextBudget?: ContextBudgetDefaults,
+  browserAccessMode: 'off' | 'ask' | 'on' = 'off',
 ): Record<string, any> => {
   const payload: any = {
     thread_id: threadId,
@@ -2913,6 +2916,7 @@ const threadChatPayload = (
     use_web_search: useWebSearch,
     use_reranker: useReranker,
     context_window: contextWindowSize,
+    browser_access_mode: browserAccessMode,
     ...getBrowserRuntimeContext()
   };
   if (contextBudget) {
@@ -2953,8 +2957,9 @@ export async function threadChat(
   bypassClarification: boolean = false,
   hitlWebApproval?: boolean,
   contextBudget?: ContextBudgetDefaults,
+  browserAccessMode: 'off' | 'ask' | 'on' = 'off',
 ): Promise<ThreadChatResponse> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget, browserAccessMode);
   const maxRetries = 2;
   let attempt = 0;
 
@@ -3003,8 +3008,9 @@ export async function streamThreadChat(
   onEvent: (event: AgentExecutionStreamEnvelope) => void,
   signal?: AbortSignal,
   contextBudget?: ContextBudgetDefaults,
+  browserAccessMode: 'off' | 'ask' | 'on' = 'off',
 ): Promise<void> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget, browserAccessMode);
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },

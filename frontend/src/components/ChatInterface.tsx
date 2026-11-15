@@ -10,6 +10,7 @@ import {
     Chip,
     CircularProgress,
     Alert,
+    useMediaQuery,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -116,9 +117,20 @@ import {
     HumanReviewDecisionPanel,
     ResizableDecisionPanel,
     WebSearchModeControl,
+    BrowserAccessModeControl,
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
+import { useBrowserAccessMode, type BrowserAccessMode } from '../hooks/useBrowserAccessMode';
+import {
+    DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
+    REVIEW_DECISION_COLUMN_MIN_HEIGHT,
+    REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT,
+    REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT,
+    REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT,
+    WORKBENCH_AUTO_SIDE_MIN_WIDTH,
+} from '../lib/deep-research-review-panel-layout';
+import { shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
 import { isAgentRunResumeProductTerminal, parseAgentRunResumeStreamEvent } from '../lib/agent-run-resume-stream';
 import type { ToolDisplayCatalog } from '../lib/tool-approval-presentation';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
@@ -775,6 +787,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [indexingStatus, setIndexingStatus] = useState<ChatComposerIndexingStatusValue>(ChatComposerIndexingStatus.Checking);
     const [useWebSearch, setUseWebSearch] = useState(false);
     const { mode: webSearchMode, setMode: setSharedWebSearchMode } = useWebSearchMode();
+    const { mode: browserAccessMode, setMode: setSharedBrowserAccessMode } = useBrowserAccessMode();
     const [contextWindow, setContextWindow] = useState<number>(0);
     const {
         contextBudget,
@@ -788,6 +801,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultCustomInstructions, setDefaultCustomInstructions] = useState('');
     const [systemRole, setSystemRole] = useState('');
     const [toolCatalog, setToolCatalog] = useState<PromptToolDefinition[]>([]);
+    const [toolDisplayCatalog, setToolDisplayCatalog] = useState<ToolDisplayCatalog>({});
     const [toolInstructions, setToolInstructions] = useState<Record<string, string>>({});
     const [customInstructions, setCustomInstructions] = useState('');
     const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
@@ -798,6 +812,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
     const [hitlCanvasPublish, setHitlCanvasPublish] = useState(false);
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
+    const [savingBrowserAccessMode, setSavingBrowserAccessMode] = useState(false);
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
     const [defaultHitlCanvasPublish, setDefaultHitlCanvasPublish] = useState(false);
     const [useReranker, setUseReranker] = useState(false);
@@ -870,12 +885,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
     const [humanReviewEditText, setHumanReviewEditText] = useState('');
     const [humanReviewCapabilityRevision, setHumanReviewCapabilityRevision] = useState(0);
-    const [toolDisplayCatalog, setToolDisplayCatalog] = useState<ToolDisplayCatalog>({});
     const { capabilities: humanReviewCapabilities, refresh: refreshHumanReviewCapabilities } = useAgentRunCapabilities(
         pendingHumanReview?.runId,
         activeThread?.id,
         `${pendingHumanReview?.interrupt.interrupt_id}:${pendingHumanReview?.interrupt.status}:${pendingHumanReview?.interrupt.resume_version}:${pendingHumanReview?.interrupt.response_operation}:${humanReviewCapabilityRevision}`,
     );
+
+    useEffect(() => {
+        if (!pendingHumanReview?.runId || !activeThread?.id) return;
+        void refreshHumanReviewCapabilities();
+    }, [
+        pendingHumanReview?.runId,
+        pendingHumanReview?.interrupt.interrupt_id,
+        pendingHumanReview?.interrupt.resume_version,
+        activeThread?.id,
+        refreshHumanReviewCapabilities,
+    ]);
 
     const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -887,13 +912,20 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
     activeThreadIdRef.current = activeThread?.id ?? null;
 
+    const visibleMessages = useMemo(
+        () => messages.filter((message) => !shouldHideChatInterruptPlaceholder(message)),
+        [messages],
+    );
+
     const messageVirtualizer = useVirtualizer({
-        count: messages.length,
+        count: visibleMessages.length,
         getScrollElement: () => messageListRef.current,
-        estimateSize: (index) => messages[index]?.role === MessageRole.User ? 76 : 180,
+        estimateSize: (index) => visibleMessages[index]?.role === MessageRole.User ? 76 : 180,
         overscan: 8,
-        getItemKey: (index) => messages[index]?.id ?? index,
+        getItemKey: (index) => visibleMessages[index]?.id ?? index,
     });
+
+    const stackedWorkbench = useMediaQuery(`(max-width:${WORKBENCH_AUTO_SIDE_MIN_WIDTH - 1}px)`);
 
     useEffect(() => {
         let cancelled = false;
@@ -905,6 +937,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }).catch(() => {});
         return () => { cancelled = true; };
     }, []);
+
+    useEffect(() => {
+        if (!pendingHumanReview?.interrupt || !stackedWorkbench) return undefined;
+        window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: true } }));
+        return () => {
+            window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: false } }));
+        };
+    }, [pendingHumanReview?.interrupt?.interrupt_id, stackedWorkbench]);
 
     const setComposerText = useCallback((text: string) => {
         setComposerSeed(text);
@@ -1359,8 +1399,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     };
 
     useEffect(() => {
+        if (pendingHumanReview) return;
         scrollToBottom();
-    }, [messages.length, autoScroll]);
+    }, [messages.length, autoScroll, pendingHumanReview]);
 
     // Fetch available LLM models
     useEffect(() => {
@@ -1429,6 +1470,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseWebSearch(webSearchMode !== 'off');
         setHitlWebApproval(webSearchMode === 'ask');
     }, [webSearchMode]);
+
+    const handleBrowserAccessModeChange = (nextMode: BrowserAccessMode) => {
+        if (savingBrowserAccessMode) return;
+        setSharedBrowserAccessMode(nextMode);
+    };
 
     const handleWebSearchModeChange = async (nextMode: WebSearchMode) => {
         if (savingWebSearchMode) return;
@@ -1726,7 +1772,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setHumanReviewError('This human-input request has an invalid runtime response contract.');
             return false;
         }
-        if (!isRuntimeOperationEnabled(humanReviewCapabilities, responseOperation)) return false;
+        const reviewAvailability = runtimeOperationAvailability(humanReviewCapabilities, responseOperation);
+        const reviewCapabilityStale = !reviewAvailability.enabled
+            && reviewAvailability.disabledReason === 'no_pending_interrupt'
+            && (!interrupt.status || interrupt.status === InterruptStatus.Pending);
+        if (!reviewAvailability.enabled && !reviewCapabilityStale) return false;
         if (testRuntime && builderRuntime) {
             setHumanReviewSubmitting(action);
             setHumanReviewError(null);
@@ -1811,6 +1861,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         humanReviewSubmissionKeyRef.current = submissionKey;
         setHumanReviewSubmitting(action);
         setHumanReviewError(null);
+        let activeInterrupt = interrupt;
+        try {
+            const freshRun = await getAgentRun(pendingHumanReview.runId, activeThread.id);
+            const freshInterrupt = freshRun.pending_interrupt;
+            if (
+                freshInterrupt?.status === InterruptStatus.Pending
+                && freshInterrupt.interrupt_id
+            ) {
+                activeInterrupt = freshInterrupt as AgentRunPendingInterrupt;
+                setPendingHumanReview((current) => (
+                    current ? { ...current, interrupt: activeInterrupt } : current
+                ));
+            }
+        } catch {
+            /* Fall back to the interrupt shown in the approval card. */
+        }
         const liveMessageId = pendingHumanReview.localAssistantMessageId;
         resetLiveExecutionEvents();
         setLiveExecution({ messageId: liveMessageId, runId: pendingHumanReview.runId, running: true });
@@ -1823,9 +1889,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             try {
                 await streamResumeAgentRun(pendingHumanReview.runId, {
                     action,
-                    interrupt_id: interrupt.interrupt_id,
-                    resume_token: interrupt.resume_token || undefined,
-                    resume_version: interrupt.resume_version || undefined,
+                    interrupt_id: activeInterrupt.interrupt_id,
+                    resume_token: activeInterrupt.resume_token || undefined,
+                    resume_version: activeInterrupt.resume_version || undefined,
                     selected_option_ids: selectedOptionIds,
                     thread_id: activeThread.id,
                     edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
@@ -2071,6 +2137,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 },
                 undefined,
                 packingBudgetPayload(contextBudget),
+                browserAccessMode,
             );
             if (!response) throw new Error(terminalStreamError || 'The chat stream ended before returning a response.');
             const traceWasOpenForTempMessage = workspaceTraceMessageIdRef.current === tempAssistantMsg.id;
@@ -2803,6 +2870,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onChange={handleWebSearchModeChange}
             />}
             webSearchMode={webSearchMode}
+            browserAccessMode={browserAccessMode}
             onModelChange={(model) => void handleLlmModelChange(model)}
             onContextWindowChange={handleContextWindowChange}
             onContextBudgetChange={setContextBudget}
@@ -2833,13 +2901,51 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const pendingReviewAvailability = pendingReviewOperation
         ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
         : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
+    const pendingReviewInputEnabled = pendingReviewOperation && pendingReviewInterrupt && (
+        pendingReviewAvailability.enabled
+        || (
+            pendingReviewAvailability.disabledReason === 'no_pending_interrupt'
+            && (!pendingReviewInterrupt.status || pendingReviewInterrupt.status === InterruptStatus.Pending)
+        )
+    );
+    const chatHumanReviewOpen = Boolean(pendingReviewInterrupt);
+    const isToolApprovalReview = pendingReviewInterrupt?.type === 'tool_approval';
+    const reviewTranscriptMaxHeight = chatHumanReviewOpen && stackedWorkbench
+        ? REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT
+        : REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT;
+    const reviewDecisionMinHeight = isToolApprovalReview
+        ? 0
+        : chatHumanReviewOpen && stackedWorkbench
+            ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
+            : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
+    const reviewControlsLocked = Boolean(humanReviewSubmitting);
+
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
             sx={{
                 p: 1,
                 cursor: 'default',
+                ...(chatHumanReviewOpen ? { overflow: 'hidden', overflowX: 'hidden' } : {}),
             }}
+            decisionBeforeTranscript={chatHumanReviewOpen}
+            transcriptSx={chatHumanReviewOpen ? {
+                flex: '0 0 auto',
+                maxHeight: reviewTranscriptMaxHeight,
+                minHeight: 0,
+            } : stackedWorkbench ? {
+                flex: '1 1 auto',
+                minHeight: 'min(44vh, 320px)',
+            } : undefined}
+            decisionSx={chatHumanReviewOpen ? {
+                ...(isToolApprovalReview
+                    ? { flex: '0 0 auto', flexGrow: 0, flexShrink: 0, flexBasis: 'auto' }
+                    : { flex: '1 1 0' }),
+                minHeight: reviewDecisionMinHeight,
+                overflow: isToolApprovalReview ? 'visible' : 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+            } : undefined}
             header={(
             <ConversationHeader
                 models={availableModels}
@@ -2884,11 +2990,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     </>
                 )}
                 beforeModelControls={(
-                    <WebSearchModeControl
-                        mode={webSearchMode}
-                        disabled={savingWebSearchMode}
-                        onChange={handleWebSearchModeChange}
-                    />
+                    <Box sx={{ display: 'flex', gap: 0.25, alignItems: 'center' }}>
+                        <WebSearchModeControl
+                            mode={webSearchMode}
+                            disabled={savingWebSearchMode}
+                            onChange={handleWebSearchModeChange}
+                        />
+                        <BrowserAccessModeControl
+                            mode={browserAccessMode}
+                            disabled={savingBrowserAccessMode}
+                            onChange={handleBrowserAccessModeChange}
+                        />
+                    </Box>
                 )}
                 trailingActions={(
                     !isTestRuntime && <DeepResearchTaskPicker
@@ -2914,7 +3027,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     }}
                 >
                     {messageVirtualizer.getVirtualItems().map((virtualItem) => {
-                        const msg = messages[virtualItem.index];
+                        const msg = visibleMessages[virtualItem.index];
                         if (!msg) return null;
                         const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
                         const showAgentRunDebug = msg.role === MessageRole.Assistant && Boolean(msg.agent_run_id || liveForMessage);
@@ -3003,8 +3116,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     error={humanReviewError}
                     editText={humanReviewEditText}
                     toolCatalog={toolDisplayCatalog}
-                    disabled={!pendingReviewAvailability.visible || !pendingReviewAvailability.enabled}
-                    disabledReason={pendingReviewAvailability.disabledReason}
+                    disabled={!reviewControlsLocked && (
+                        !pendingReviewAvailability.visible || !pendingReviewInputEnabled
+                    )}
+                    disabledReason={reviewControlsLocked ? undefined : (
+                        pendingReviewInputEnabled ? undefined : pendingReviewAvailability.disabledReason
+                    )}
                     rootRef={chatRootRef}
                     onEditTextChange={setHumanReviewEditText}
                     onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}

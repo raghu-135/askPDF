@@ -729,6 +729,7 @@ class NodeRegistry:
                     value,
                     worker_nodes=state.get("available_worker_nodes"),
                     use_web_search=bool(state.get("use_web_search", False)),
+                    use_browser_access=bool(state.get("use_browser_access", False)),
                 ),
                 *clarification_contract_errors(value),
             ],
@@ -737,6 +738,7 @@ class NodeRegistry:
         normalized = normalize_execution_plan(
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
+            use_browser_access=bool(state.get("use_browser_access", False)),
             question=state.get("question"),
             bypass_clarification=bool(state.get("bypass_clarification")),
             worker_nodes=state.get("available_worker_nodes"),
@@ -828,7 +830,7 @@ class NodeRegistry:
             safe_json_object=_safe_json_object,
         )
         allowed_routes = set(ROUTER_ROUTES) - {RouterRoute.WEB.value}
-        if state.get("use_web_search", False):
+        if state.get("use_web_search", False) or state.get("use_browser_access", False):
             allowed_routes.add(RouterRoute.WEB.value)
         if bypass_clarification:
             allowed_routes.discard(RouterRoute.CLARIFY.value)
@@ -1533,6 +1535,11 @@ class NodeRegistry:
             "Evaluate completeness, factual grounding, citation/source alignment, uncertainty, and instruction following. "
             "Do not rewrite the answer. Return only JSON with pass (boolean), reason (string), and "
             "issues (array of concise strings).\n\n"
+            "Evaluation rules:\n"
+            "- List only substantive issues: unsupported claims, wrong facts, or missing required content relative to the question.\n"
+            "- Do not list issues about brevity, sentence count, answer length, formatting, quotation style, or citation layout when the answer is factually grounded.\n"
+            "- Do not criticize title-only vs body evidence when the answer content matches body text in the evidence.\n"
+            "- When the answer satisfies the question using the evidence, set pass to true and return an empty issues array.\n\n"
             f"Question:\n{compact_preview(state.get('question'), limit=3000)}\n\n"
             f"Draft answer:\n{compact_preview(state.get('final_answer'), limit=10000)}\n\n"
             f"Evidence:\n{compact_preview(state.get('evidence') or _format_prefetch_summary(state.get('pre_fetch_bundle') or {}), limit=12000)}"
@@ -1859,6 +1866,7 @@ class NodeRegistry:
                 value,
                 worker_nodes=state.get("available_worker_nodes"),
                 use_web_search=bool(state.get("use_web_search", False)),
+                use_browser_access=bool(state.get("use_browser_access", False)),
                 require_route=False,
             ),
             review_when=lambda value: worker_decisions_need_coverage_review(value, require_route=False),
@@ -1866,6 +1874,7 @@ class NodeRegistry:
         normalized = _normalize_replanner_execution_plan(
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
+            use_browser_access=bool(state.get("use_browser_access", False)),
             allowed_tool_ids=state.get("allowed_tool_ids"),
             worker_nodes=state.get("available_worker_nodes"),
         )

@@ -176,6 +176,7 @@ def _runtime_config(
     embedding_model: Any = None,
     context_window: Any = None,
     use_web_search: Any = None,
+    use_browser_access: Any = None,
     use_reranker: Any = None,
     telemetry_sink: Dict[str, Any],
     trace_recorder: Any = None,
@@ -226,6 +227,8 @@ def _runtime_config(
         configurable["context_window"] = context_window
     if use_web_search is not None:
         configurable["use_web_search"] = use_web_search
+    if use_browser_access is not None:
+        configurable["use_browser_access"] = use_browser_access
     if use_reranker is not None:
         configurable["use_reranker"] = use_reranker
     result: Dict[str, Any] = {"configurable": configurable}
@@ -533,7 +536,29 @@ async def _handle_compiled_rag_chat(
     agent_run_id = agent_run_context.get("agent_run_id")
     question = req.question
     llm_model = req.llm_model
-    use_web_search = bool(getattr(req, "use_web_search", False))
+    def _request_bool(name: str, default: bool = False) -> bool:
+        value = getattr(req, name, None)
+        if value is not None:
+            return bool(value)
+        options = getattr(req, "options", None)
+        if isinstance(options, dict) and name in options:
+            return bool(options[name])
+        return default
+
+    workflow_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
+    use_web_search = _request_bool("use_web_search", bool(workflow_config.get("use_web_search")))
+    use_browser_access = _request_bool(
+        "use_browser_access",
+        bool(workflow_config.get("use_browser_access")),
+    )
+    browser_mode = str(
+        getattr(req, "browser_access_mode", None)
+        or (getattr(req, "options", {}) or {}).get("browser_access_mode")
+        or workflow_config.get("browser_access_mode")
+        or "off"
+    )
+    if browser_mode in {"ask", "on"}:
+        use_browser_access = True
     use_reranker = getattr(req, "use_reranker", None)
     if use_reranker is None:
         use_reranker = True
@@ -581,6 +606,7 @@ async def _handle_compiled_rag_chat(
         embedding_model=embedding_model,
         context_window=context_window,
         use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
         use_reranker=use_reranker,
         telemetry_sink=telemetry_sink,
         trace_recorder=trace_recorder,
@@ -606,6 +632,7 @@ async def _handle_compiled_rag_chat(
         "context_window": context_window,
         "context_budget": context_budget,
         "use_web_search": use_web_search,
+        "use_browser_access": use_browser_access,
         "use_reranker": use_reranker,
         "bypass_clarification": bool(getattr(req, "bypass_clarification", False)),
         "system_role": system_role,
@@ -665,6 +692,7 @@ async def _handle_compiled_rag_chat(
         # them, which keeps the established chat execution contract unchanged.
         "agent_task_id": getattr(req, "agent_task_id", None),
         "web_search_mode": str(getattr(req, "web_search_mode", "on" if use_web_search else "off")),
+        "browser_access_mode": str(getattr(req, "browser_access_mode", "on" if use_browser_access else "off")),
         "task_version": getattr(req, "agent_task_version", None),
         "task_observed_plan_revision": int(getattr(req, "task_plan_revision", 0) or 0),
         "task_enabled_profiles": list(getattr(req, "task_enabled_profiles", None) or []),

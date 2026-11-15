@@ -17,6 +17,11 @@
         "durable_memory",
         "thread_events",
         "live_web_recon",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_act",
+        "browser_read",
+        "browser_save_to_thread",
         "clarify_intent",
         "research_canvas_publish"
       ],

@@ -17,7 +17,7 @@ from langgraph_runtime.workflows.evidence import corrective_evidence_context, co
 from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER
 from langgraph_runtime.agent.canvas_layout_skills import canvas_layout_skills_section
 from langgraph_runtime.workflows.canvas_citation_menu import canvas_prompt_sections
-from langgraph_runtime.prompts.loaders import get_web_search_mandate, load_runtime_prompt
+from langgraph_runtime.prompts.loaders import get_browser_access_mandate, get_web_search_mandate, load_runtime_prompt
 from runtime_protocol.evidence import usable_context_chars
 
 
@@ -39,6 +39,14 @@ GRAPH_TOOL_NAMES.extend(
     and name != ToolName.PUBLISH_CANVAS.value
 )
 
+BROWSER_GRAPH_TOOL_NAMES = frozenset({
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_act",
+    "browser_read",
+    "browser_save_to_thread",
+})
+
 QUESTION_PLACEHOLDER = "{{QUESTION}}"
 PREFETCH_PLACEHOLDER = "{{PREFETCH_CONTEXT}}"
 CONTEXT_PLACEHOLDER = "{{EVIDENCE_CONTEXT}}"
@@ -50,7 +58,7 @@ WORKER_TYPE_DESCRIPTIONS = {
     "thread_conversation_history_worker": "non-temporal recall of prior conversation, previous answers, or what we discussed",
     "durable_memory_worker": "durable user, project, or thread facts and preferences; not raw chat history",
     "thread_events_worker": "chronology, latest/most recent/current, first/earliest/oldest, before/after/since, date/time, or event ordering",
-    "web_worker": "live internet evidence, only when live web search is enabled",
+    "web_worker": "live internet evidence or browser workbench pages when web search or browser access is enabled",
 }
 
 
@@ -123,7 +131,14 @@ def _format_available_worker_nodes(state_or_settings: Dict[str, Any]) -> str:
 
 def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
     use_web_search = bool(state_or_settings.get("use_web_search", False))
+    use_browser_access = bool(state_or_settings.get("use_browser_access", False))
     active_tools = list(GRAPH_TOOL_NAMES if use_web_search else [name for name in GRAPH_TOOL_NAMES if name != ToolName.SEARCH_WEB.value])
+    if use_browser_access:
+        for name in BROWSER_GRAPH_TOOL_NAMES:
+            if name not in active_tools:
+                active_tools.append(name)
+    else:
+        active_tools = [name for name in active_tools if name not in BROWSER_GRAPH_TOOL_NAMES]
     catalog = get_tool_catalog(active_tools)
     playbook = normalize_tool_instructions(
         state_or_settings.get("tool_instructions") or {},
@@ -153,6 +168,9 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
     web_search_mandate = ""
     if use_web_search:
         web_search_mandate = "## Web Search Mandate\n\n" + get_web_search_mandate()
+    browser_access_mandate = ""
+    if use_browser_access:
+        browser_access_mandate = "## Browser Workbench Mandate\n\n" + get_browser_access_mandate()
     layout_skills = canvas_layout_skills_section(state_or_settings.get("allowed_tool_ids"))
     canvas_context = canvas_prompt_sections(state_or_settings) if layout_skills else ""
 
@@ -167,7 +185,9 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
         "CANVAS_LAYOUT_SKILLS_SECTION": layout_skills,
         "CANVAS_PUBLISH_CONTEXT_SECTION": canvas_context,
         "WEB_SEARCH_MANDATE_SECTION": web_search_mandate,
+        "BROWSER_ACCESS_MANDATE_SECTION": browser_access_mandate,
         "USE_WEB_SEARCH": str(use_web_search),
+        "USE_BROWSER_ACCESS": str(use_browser_access),
         "CONTEXT_WINDOW": state_or_settings.get("context_window", ""),
         "QUESTION": state_or_settings.get("question") or QUESTION_PLACEHOLDER,
         "PREFETCH_CONTEXT": _format_prefetch_summary(state_or_settings.get("pre_fetch_bundle") or {})

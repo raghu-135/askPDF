@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "holdout": true,
+  "do_not_tune_against": true,
+  "paper_file": "2305.18290.pdf",
+  "questions": [
+    {
+      "id": "holdout-dpo-overview",
+      "type": "overview",
+      "question": "What does the Direct Preference Optimization paper propose?",
+      "fixture_files": ["2305.18290.pdf"],
+      "expected_pages": [1, 2],
+      "answer_match": { "any_contains": ["preference", "DPO", "reward"] },
+      "numeric": null
+    },
+    {
+      "id": "holdout-dpo-vs-rlhf",
+      "type": "method",
+      "question": "How does DPO differ from reinforcement learning from human feedback (RLHF)?",
+      "fixture_files": ["2305.18290.pdf"],
+      "expected_pages": [2, 3],
+      "answer_match": { "any_contains": ["without", "reward model", "RL"] },
+      "numeric": null
+    },
+    {
+      "id": "holdout-dpo-beta",
+      "type": "fact",
+      "question": "What role does the beta hyperparameter play in DPO?",
+      "fixture_files": ["2305.18290.pdf"],
+      "expected_pages": [3, 4],
+      "answer_match": { "any_contains": ["beta", "temperature", "KL"] },
+      "numeric": null
+    },
+    {
+      "id": "holdout-dpo-implicit-reward",
+      "type": "fact",
+      "question": "According to DPO, what is the language model secretly acting as?",
+      "fixture_files": ["2305.18290.pdf"],
+      "expected_pages": [1],
+      "answer_match": { "any_contains": ["reward model", "reward"] },
+      "numeric": null
+    },
+    {
+      "id": "holdout-dpo-decline-without-pdf",
+      "type": "out_of_scope",
+      "question": "State the closed-form DPO loss when only the Attention paper is indexed.",
+      "fixture_files": ["1706.03762.pdf"],
+      "expected_pages": [],
+      "answer_match": { "decline": true },
+      "numeric": null
+    }
+  ]
+}

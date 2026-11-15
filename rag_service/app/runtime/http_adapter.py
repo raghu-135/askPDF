@@ -117,6 +117,7 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
                 ),
                 context_budget=budget_dict,
                 use_web_search=bool(config.get("use_web_search")),
+                use_browser_access=bool(config.get("use_browser_access")),
                 use_reranker=use_reranker,
                 extensions={
                     "task_id": token_task_id,

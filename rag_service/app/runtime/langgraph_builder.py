@@ -28,6 +28,7 @@ class LangGraphBuilderProvider:
     framework = "langgraph"
     builder_id = "langgraph_graph"
     _task_web_tool_ids = frozenset({"live_web_recon"})
+    _task_browser_tool_ids = frozenset({"browser_navigate"})
 
     @staticmethod
     def _runtime_thread_settings(settings: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -49,8 +50,11 @@ class LangGraphBuilderProvider:
             "context_window",
             "web_search_mode",
             "hitl_web_approval",
+            "browser_access_mode",
+            "hitl_browser_approval",
             "hitl_canvas_publish",
             "use_web_search",
+            "use_browser_access",
             "use_reranker",
             "system_role",
             "tool_instructions",
@@ -75,12 +79,17 @@ class LangGraphBuilderProvider:
         allowed = {str(value) for value in definition.definition_metadata.get("allowed_tool_ids", ()) if value}
         return bool(allowed & self._task_web_tool_ids)
 
+    def supports_task_browser(self, definition: AgentDefinition) -> bool:
+        allowed = {str(value) for value in definition.definition_metadata.get("allowed_tool_ids", ()) if value}
+        return bool(allowed & self._task_browser_tool_ids)
+
     def task_configuration_fields(self, definition: AgentDefinition, spec: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
         config = spec.get("config") if isinstance(spec.get("config"), Mapping) else {}
         return (
             {"id": "llm_model", "label": "Model", "type": "model", "required": True, "default": config.get("llm_model")},
             {"id": "context_window", "label": "Context window", "type": "integer", "required": True, "default": config.get("context_window"), "minimum": 1024, "read_only": False},
             {"id": "web_search_mode", "label": "Web search", "type": "enum", "required": True, "default": "off", "options": ["off", "ask", "on"], "enabled": self.supports_task_web_search(definition)},
+            {"id": "browser_access_mode", "label": "Browser agent", "type": "enum", "required": True, "default": "off", "options": ["off", "ask", "on"], "enabled": self.supports_task_browser(definition)},
         )
 
     def normalize_task_limits(self, limits: Mapping[str, Any]) -> Mapping[str, Any]:

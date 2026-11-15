@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "description": "Pinned RAG benchmark context baseline: new-thread defaults (merge_thread_settings) with explicit per-chat context_window and packing ratios. Matches reference stack .env (DEFAULT_TOKEN_BUDGET=8192 and CONTEXT_* ratios). Holdout/tuning splits use the same baseline.",
+  "context": {
+    "context_window": 8192,
+    "use_web_search": false,
+    "use_reranker": false,
+    "context_budget": {
+      "usable_ratio": 0.8,
+      "recent_ratio": 0.22,
+      "semantic_ratio": 0.12,
+      "durable_memory_ratio": 0.06,
+      "document_ratio": 0.28,
+      "memory_expanded_ratio": 0.12
+    }
+  },
+  "thread_settings": {
+    "replans": 1,
+    "use_reranker": false,
+    "hitl_web_approval": false
+  }
+}
