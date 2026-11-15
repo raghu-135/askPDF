@@ -89,12 +89,59 @@ export function HumanReviewDecisionPanel({
     ? toolApprovalTitle(String(proposedTool.name), toolCatalog)
     : (interrupt.title || (interrupt.proposed_tool ? 'Approve tool use?' : 'Human review required'));
 
+  const actionButtons = (
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+      {actions.has(ResumeAction.Approve) && (
+        <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>
+          {submitting === ResumeAction.Approve ? 'Approving...' : isToolApproval ? 'Approve once' : 'Approve'}
+        </Button>
+      )}
+      {actions.has(ResumeAction.ApproveForScope) && (
+        <Button size="small" variant="contained" color="secondary" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ApproveForScope)}>
+          {submitting === ResumeAction.ApproveForScope ? 'Approving...' : `Approve for this ${approvalScopeKind}`}
+        </Button>
+      )}
+      {actions.has(ResumeAction.ApproveSelected) && (
+        <Button size="small" variant="contained" disabled={disabled || Boolean(submitting) || selectedIds.length === 0} onClick={() => void submit(ResumeAction.ApproveSelected)}>
+          {submitting === ResumeAction.ApproveSelected ? 'Approving...' : 'Approve selected'}
+        </Button>
+      )}
+      {actions.has(ResumeAction.Edit) && (
+        <Button size="small" variant="contained" color="secondary" startIcon={<EditIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting) || (editingScope ? selectedIds.length === 0 : !editText.trim())} onClick={() => void submit(ResumeAction.Edit)}>
+          {submitting === ResumeAction.Edit ? 'Saving...' : editingScope ? 'Approve selected scope' : 'Save edit'}
+        </Button>
+      )}
+      {actions.has(ResumeAction.ContinueWithout) && (
+        <Button size="small" variant="outlined" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>
+          {submitting === ResumeAction.ContinueWithout ? 'Continuing...' : (isToolApproval ? `Skip this tool for this ${approvalScopeKind}` : 'Continue')}
+        </Button>
+      )}
+      {actions.has(ResumeAction.Reject) && (
+        <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>
+          {submitting === ResumeAction.Reject ? 'Rejecting...' : 'Reject'}
+        </Button>
+      )}
+    </Box>
+  );
+
   return (
     <ResizableDecisionPanel
       title={panelTitle}
       variant="approval"
       rootRef={rootRef}
       horizontalInset={1}
+      defaultRatio={isToolApproval ? 0.36 : 0.3}
+      narrowDefaultRatio={isToolApproval ? 0.4 : 0.32}
+      minHeight={isToolApproval ? 168 : 0}
+      footer={(
+        <>
+          {actionButtons}
+          {disabled && disabledReason && (
+            <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography>
+          )}
+          {error && <Typography variant="caption" color="error">{error}</Typography>}
+        </>
+      )}
     >
       {(interrupt.prompt || interrupt.body) && (
         <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
@@ -133,42 +180,6 @@ export function HumanReviewDecisionPanel({
           sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'action.hover' } }}
         />
       )}
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-        {actions.has(ResumeAction.Approve) && (
-          <Button size="small" variant="contained" startIcon={<CheckIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Approve)}>
-            {submitting === ResumeAction.Approve ? 'Approving...' : isToolApproval ? 'Approve once' : 'Approve'}
-          </Button>
-        )}
-        {actions.has(ResumeAction.ApproveForScope) && (
-          <Button size="small" variant="contained" color="secondary" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ApproveForScope)}>
-            {submitting === ResumeAction.ApproveForScope ? 'Approving...' : `Approve for this ${approvalScopeKind}`}
-          </Button>
-        )}
-        {actions.has(ResumeAction.ApproveSelected) && (
-          <Button size="small" variant="contained" disabled={disabled || Boolean(submitting) || selectedIds.length === 0} onClick={() => void submit(ResumeAction.ApproveSelected)}>
-            {submitting === ResumeAction.ApproveSelected ? 'Approving...' : 'Approve selected'}
-          </Button>
-        )}
-        {actions.has(ResumeAction.Edit) && (
-          <Button size="small" variant="contained" color="secondary" startIcon={<EditIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting) || (editingScope ? selectedIds.length === 0 : !editText.trim())} onClick={() => void submit(ResumeAction.Edit)}>
-            {submitting === ResumeAction.Edit ? 'Saving...' : editingScope ? 'Approve selected scope' : 'Save edit'}
-          </Button>
-        )}
-        {actions.has(ResumeAction.ContinueWithout) && (
-          <Button size="small" variant="outlined" disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.ContinueWithout)}>
-            {submitting === ResumeAction.ContinueWithout ? 'Continuing...' : (isToolApproval ? `Skip this tool for this ${approvalScopeKind}` : 'Continue')}
-          </Button>
-        )}
-        {actions.has(ResumeAction.Reject) && (
-          <Button size="small" variant="outlined" color="error" startIcon={<CloseIcon fontSize="inherit" />} disabled={disabled || Boolean(submitting)} onClick={() => void submit(ResumeAction.Reject)}>
-            {submitting === ResumeAction.Reject ? 'Rejecting...' : 'Reject'}
-          </Button>
-        )}
-      </Box>
-      {disabled && disabledReason && (
-        <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography>
-      )}
-      {error && <Typography variant="caption" color="error">{error}</Typography>}
     </ResizableDecisionPanel>
   );
 }

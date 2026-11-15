@@ -119,7 +119,7 @@ import {
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
-import { parseAgentRunResumeStreamEvent } from '../lib/agent-run-resume-stream';
+import { isAgentRunResumeProductTerminal, parseAgentRunResumeStreamEvent } from '../lib/agent-run-resume-stream';
 import type { ToolDisplayCatalog } from '../lib/tool-approval-presentation';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
 import type { DocumentSource } from '../lib/api';
@@ -1839,8 +1839,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         setHumanReviewCapabilityRevision((revision) => revision + 1);
                         void refreshHumanReviewCapabilities();
                     }
-                    const terminalEvents = ['__result__', '__error__', 'run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'];
-                    if (!terminalEvents.includes(event.event)) return;
+                    if (!isAgentRunResumeProductTerminal(event.event, event.data as Record<string, unknown> | undefined)) return;
                     const parsed = parseAgentRunResumeStreamEvent(event.event, event.data as Record<string, unknown> | undefined);
                     if (!parsed) return;
                     if (parsed.errorMessage) {

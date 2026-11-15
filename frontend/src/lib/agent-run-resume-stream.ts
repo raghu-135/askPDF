@@ -45,7 +45,16 @@ export function parseAgentRunResumeStreamEvent(
     envelope = data.response as Record<string, unknown>;
     agentRun = envelope.agent_run as Record<string, unknown> | undefined;
   } else if (data.response) {
-    return { response: data.response as AgentRunResumeStreamResponse };
+    const nested = data.response as Record<string, unknown>;
+    const nestedRun = nested.agent_run as Record<string, unknown> | undefined;
+    const nestedOutcome = nested.outcome as Record<string, unknown> | undefined;
+    return {
+      response: {
+        ...nested,
+        agent_run: nestedRun,
+        answer: answerFromParts(nestedOutcome, nestedRun),
+      },
+    };
   } else if (data.agent_run) {
     agentRun = data.agent_run as Record<string, unknown>;
     envelope = data;
@@ -61,4 +70,18 @@ export function parseAgentRunResumeStreamEvent(
       answer: answerFromParts(outcome, agentRun),
     },
   };
+}
+
+/** True when an SSE event carries the product-level resume result (not a raw runtime terminal). */
+export function isAgentRunResumeProductTerminal(
+  eventName: string,
+  data: Record<string, unknown> | undefined,
+): boolean {
+  if (!data) return false;
+  if (eventName === '__result__' || eventName === '__error__') return true;
+  if (eventName === 'stream.error' || eventName === 'run.failed' || eventName === 'run.cancelled') return true;
+  if (eventName === 'run.completed' || eventName === 'interrupt.requested') {
+    return Boolean(data.response) || Object.prototype.hasOwnProperty.call(data, 'outcome');
+  }
+  return false;
 }

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAgentRunResumeStreamEvent } from '../src/lib/agent-run-resume-stream.ts';
+import {
+  isAgentRunResumeProductTerminal,
+  parseAgentRunResumeStreamEvent,
+} from '../src/lib/agent-run-resume-stream.ts';
 
 test('parseAgentRunResumeStreamEvent normalizes __result__ payloads', () => {
   const parsed = parseAgentRunResumeStreamEvent('__result__', {
@@ -18,4 +21,27 @@ test('parseAgentRunResumeStreamEvent reads top-level agent_run on run.completed'
     outcome: {},
   });
   assert.equal(parsed?.response.answer, 'final');
+});
+
+test('parseAgentRunResumeStreamEvent normalizes nested response envelopes', () => {
+  const parsed = parseAgentRunResumeStreamEvent('run.completed', {
+    response: {
+      agent_run: { status: 'completed' },
+      outcome: { answer: 'from outcome' },
+    },
+  });
+  assert.equal(parsed?.response.answer, 'from outcome');
+});
+
+test('isAgentRunResumeProductTerminal ignores raw runtime run.completed', () => {
+  assert.equal(
+    isAgentRunResumeProductTerminal('run.completed', { final_output: { answer: 'x' } }),
+    false,
+  );
+  assert.equal(
+    isAgentRunResumeProductTerminal('run.completed', {
+      response: { agent_run: { status: 'completed' }, outcome: {} },
+    }),
+    true,
+  );
 });

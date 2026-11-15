@@ -78,9 +78,10 @@ async function waitComposerIdle(page) {
 async function pollForAnswer(page, predicate) {
   for (let i = 0; i < 90; i += 1) {
     await waitComposerIdle(page);
+    const approvalOpen = await page.getByText(/Allow a web search\?/i).isVisible().catch(() => false);
     const messages = await page.locator('li, .MuiListItem-root').allInnerTexts();
     const hit = messages.find((t) => predicate(t));
-    if (hit) return hit;
+    if (hit && !approvalOpen) return hit;
     await page.waitForTimeout(3000);
   }
   throw new Error('Timed out waiting for assistant answer');
@@ -119,7 +120,11 @@ async function captureViewport(vp) {
     if (await forRun.isVisible({ timeout: 8000 }).catch(() => false)) await forRun.click({ force: true });
     await pollForAnswer(
       page,
-      (t) => /0\.\d{2,}/.test(t) && !/APPROVING|Approve search_web|Allow a web search/i.test(t) && t.length > 30,
+      (t) => (
+        (/0\.\d{2,}/.test(t) || /\b\d+\.\d+\b/.test(t) || /EUR|USD|exchange/i.test(t))
+        && !/APPROVING|Approve search_web|Allow a web search/i.test(t)
+        && t.length > 30
+      ),
     );
     const answerPath = path.join(ART, `chat-tool-approval-${suffix}-answer.png`);
     await page.screenshot({ path: answerPath, fullPage: false });
