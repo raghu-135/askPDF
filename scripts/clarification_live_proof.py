@@ -32,14 +32,25 @@ def main() -> int:
         if project_id:
             body["project_id"] = project_id
         thread_id = client.post(f"{API}/threads", json=body).json()["id"]
-        ambiguous = "what documents are available?"
+        pdf_path = REPO / "rag_service/tests/01030000000000.pdf"
+        with pdf_path.open("rb") as handle:
+            client.post(
+                f"{API}/threads/{thread_id}/files/upload",
+                files={"file": ("sample.pdf", handle, "application/pdf")},
+            ).raise_for_status()
+        for _ in range(120):
+            status = client.get(f"{API}/threads/{thread_id}/indexing/status").json()
+            if status.get("status") == "ready":
+                break
+            time.sleep(2)
+        ambiguous = "Compare them."
         first = client.post(
             f"{API}/threads/{thread_id}/chat",
             json={
                 "thread_id": thread_id,
                 "question": ambiguous,
                 "llm_model": MODEL,
-                "agent_workflow_id": "auto_rag_agent",
+                "agent_workflow_id": "router_rag_agent",
             },
         ).json()
         proof = {

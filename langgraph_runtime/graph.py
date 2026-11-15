@@ -892,8 +892,11 @@ class NodeRegistry:
                 )
         attachment_scope_decline = router_attachment_scope_decline(state, route)
         if attachment_scope_decline:
-            route = RouterRoute.DIRECT.value
-            clarification_options = None
+            if route == RouterRoute.CLARIFY.value and len(clarification_options or []) >= 2:
+                attachment_scope_decline = None
+            else:
+                route = RouterRoute.DIRECT.value
+                clarification_options = None
         route_reason = str(parsed.get("reason") or "")
         if requested_route != route:
             route_reason = (

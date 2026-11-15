@@ -5,13 +5,22 @@ from langgraph_runtime.workflows.enums import RouterRoute
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 
 
-def test_router_scope_decline_on_clarify_without_prefetch_evidence():
+def test_router_scope_decline_skips_clarify_route_with_attachments():
     state = {
         "document_sources": [{"file_hash": "a" * 32}],
         "pre_fetch_bundle": {"documents": [{"file_hash": "a" * 32}], "document_evidence_text": ""},
         "question": "What is the population of Tokyo?",
     }
-    assert router_attachment_scope_decline(state, RouterRoute.CLARIFY.value) == DOCUMENT_SCOPE_DECLINE_ANSWER
+    assert router_attachment_scope_decline(state, RouterRoute.CLARIFY.value) is None
+
+
+def test_router_scope_decline_on_direct_without_prefetch_evidence():
+    state = {
+        "document_sources": [{"file_hash": "a" * 32}],
+        "pre_fetch_bundle": {"documents": [{"file_hash": "a" * 32}], "document_evidence_text": ""},
+        "question": "What is the population of Tokyo?",
+    }
+    assert router_attachment_scope_decline(state, RouterRoute.DIRECT.value) == DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
 def test_router_scope_skips_decline_when_worker_evidence_present_without_prefetch_text():

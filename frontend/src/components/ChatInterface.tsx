@@ -139,6 +139,10 @@ import {
 import { clearInterruptPlaceholderForLiveRun, shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
 import { isAgentRunResumeProductTerminal, parseAgentRunResumeStreamEvent } from '../lib/agent-run-resume-stream';
 import type { ToolDisplayCatalog } from '../lib/tool-approval-presentation';
+import {
+    type ClarificationChoice,
+    clarificationChoicesFromPayload,
+} from '../lib/clarification-options';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
 import type { DocumentSource } from '../lib/api';
 
@@ -168,21 +172,6 @@ type LiveChatExecution = {
     running: boolean;
     canceling?: boolean;
     error?: string;
-};
-
-type ClarificationChoice = {
-    text: string;
-};
-
-const clarificationChoiceText = (choice: unknown): string => {
-    if (typeof choice === 'string') return choice;
-    if (choice && typeof choice === 'object') {
-        const candidate = choice as { text?: unknown; label?: unknown; title?: unknown; question?: unknown };
-        for (const value of [candidate.text, candidate.label, candidate.title, candidate.question]) {
-            if (typeof value === 'string') return value;
-        }
-    }
-    return '';
 };
 
 type PendingHumanReview = {
@@ -2179,21 +2168,19 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     }
                     if (isLiveTraceTerminalEvent(event.event)) {
                         if (event.data?.response) response = event.data.response as ThreadChatResponse;
+                        const streamClarificationChoices = response
+                            ? clarificationChoicesFromPayload(response)
+                            : [];
                         if (
-                            response?.clarification_options?.length
+                            streamClarificationChoices.length
                             && (
                                 event.event === 'run.clarification'
-                                || response.status === 'clarification_required'
+                                || response?.status === 'clarification_required'
                                 || event.event === 'interrupt.requested'
                             )
                         ) {
                             setClarificationDismissSeed(textToSend);
-                            setClarificationOptions(
-                                response.clarification_options
-                                    .map((choice) => clarificationChoiceText(choice).trim())
-                                    .filter(Boolean)
-                                    .map((text) => ({ text })),
-                            );
+                            setClarificationOptions(streamClarificationChoices);
                             setMessages((prev) => prev.filter((message) => message.id !== tempAssistantMsg.id));
                             setLoading(false);
                         }
@@ -2436,14 +2423,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             }
 
             // Handle ambiguous query / clarification options
-            if (response.clarification_options?.length) {
+            const terminalClarificationChoices = clarificationChoicesFromPayload(response);
+            if (terminalClarificationChoices.length) {
                 setClarificationDismissSeed(textToSend);
-                setClarificationOptions(
-                    response.clarification_options
-                        .map((choice) => clarificationChoiceText(choice).trim())
-                        .filter(Boolean)
-                        .map((text) => ({ text })),
-                );
+                setClarificationOptions(terminalClarificationChoices);
                 setMessages((prev) => prev.filter((message) => message.id !== tempAssistantMsg.id));
                 if (isEditingQuestion) {
                     setEditingMessageId(null);
@@ -3200,39 +3183,43 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
             </ConversationTranscriptFrame>
             )}
-            decision={clarificationOptions ? (
-                    <ResizableDecisionPanel
-                        title="I need a bit more clarification. Did you mean:"
-                        rootRef={chatRootRef}
-                        onClose={() => {
+            decision={clarificationOptions?.length ? (
+                <ResizableDecisionPanel
+                    title="I need a bit more clarification. Did you mean:"
+                    variant="clarification"
+                    rootRef={chatRootRef}
+                    horizontalInset={1}
+                    compact
+                    showResizeHandle
+                    onClose={() => {
+                        setClarificationOptions(null);
+                        if (clarificationDismissSeed.trim()) {
+                            setComposerSeed(clarificationDismissSeed);
+                            setComposerSeedVersion((version) => version + 1);
+                        }
+                        setClarificationDismissSeed('');
+                    }}
+                >
+                    <DecisionChoiceList
+                        presentation="buttons"
+                        choices={clarificationOptions.map((choice, index) => ({
+                            id: String(index),
+                            label: choice.text,
+                        }))}
+                        disabled={loading}
+                        onSelect={(_selectedChoice, text) => {
                             setClarificationOptions(null);
-                            if (clarificationDismissSeed.trim()) {
-                                setComposerSeed(clarificationDismissSeed);
-                                setComposerSeedVersion((version) => version + 1);
-                            }
                             setClarificationDismissSeed('');
+                            void handleSend(text, { bypassClarification: true });
                         }}
-                    >
-                            <DecisionChoiceList
-                                presentation="buttons"
-                                choices={clarificationOptions.map((choice, index) => ({
-                                    id: String(index),
-                                    label: clarificationChoiceText(choice.text),
-                                }))}
-                                disabled={loading}
-                                onSelect={(_selectedChoice, text) => {
-                                    setClarificationOptions(null);
-                                    setClarificationDismissSeed('');
-                                    void handleSend(text, { bypassClarification: true });
-                                }}
-                                onCustomSubmit={(text) => {
-                                    setClarificationOptions(null);
-                                    setClarificationDismissSeed('');
-                                    void handleSend(text, { bypassClarification: true });
-                                }}
-                                customPlaceholder="Type your own question"
-                            />
-                    </ResizableDecisionPanel>
+                        onCustomSubmit={(text) => {
+                            setClarificationOptions(null);
+                            setClarificationDismissSeed('');
+                            void handleSend(text, { bypassClarification: true });
+                        }}
+                        customPlaceholder="Type your own question"
+                    />
+                </ResizableDecisionPanel>
             ) : pendingReviewInterrupt && !pendingReviewOperation ? (
                 <Alert severity="error">This human-input request has an invalid runtime response contract.</Alert>
             ) : pendingHumanReviewPanel && !toolApprovalSheetOpen ? (
@@ -3282,7 +3269,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     liveExecution={liveExecution}
                     liveRunCapabilities={liveRunCapabilities}
                     isTestRuntime={isTestRuntime}
-                    humanReviewPending={composerHumanReviewPending(pendingReviewInterrupt)}
+                    humanReviewPending={composerHumanReviewPending(pendingReviewInterrupt) || Boolean(clarificationOptions?.length)}
                     onSubmit={(text) => void handleSend(text)}
                     onStop={handleStopChat}
                     onOpenSettings={handleOpenThreadSettings}

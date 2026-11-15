@@ -89,9 +89,9 @@ def auto_scope_decline(state: Mapping[str, Any], *, workflow_id: str = "") -> st
             return None
     score_decline = attachment_retrieval_scope_decline(state)
     if score_decline:
-        return score_decline
+        return None
     if not str(bundle.get("document_evidence_text") or "").strip():
-        return DOCUMENT_SCOPE_DECLINE_ANSWER
+        return None
     return None
 
 

@@ -8,6 +8,7 @@ export * from './ConversationArtifactList';
 export * from './ConversationPanel';
 export * from './ResizableDecisionPanel';
 export * from './HumanReviewDecisionPanel';
+export * from './ClarificationDecisionPanel';
 export * from './WebSearchModeControl';
 export * from './BrowserAccessModeControl';
 export * from './SourceList';

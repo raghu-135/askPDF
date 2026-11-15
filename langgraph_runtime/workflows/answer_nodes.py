@@ -342,21 +342,6 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
         }
     if state.get("clarification_options") and not state.get("final_answer"):
-        decline = router_attachment_scope_decline(state, RouterRoute.CLARIFY.value)
-        if decline:
-            data = {
-                "status": NodeEventStatus.COMPLETED.value,
-                "answer_chars": len(decline),
-                "output_preview": {"answer": compact_preview(decline)},
-            }
-            log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
-            return {
-                "final_answer": decline,
-                "reasoning": "",
-                "reasoning_available": False,
-                "reasoning_format": "none",
-                "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
-            }
         options = list(state["clarification_options"])
         data = {
             "status": NodeEventStatus.COMPLETED.value,

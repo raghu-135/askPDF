@@ -26,6 +26,8 @@ def router_attachment_scope_decline(state: Mapping[str, Any], route: str | None)
         return None
     if not thread_has_attached_documents(state):
         return None
+    if route == RouterRoute.CLARIFY.value:
+        return None
     score_decline = attachment_retrieval_scope_decline(state)
     if score_decline:
         return score_decline
