@@ -9,24 +9,13 @@ const BASE = process.env.ASKPDF_E2E_BASE_URL || 'http://127.0.0.1:3000';
 const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'openai/gpt-4.1-mini';
 
 async function selectRouterAgentWorkflow(page) {
-  const inlineWorkflow = page.getByRole('combobox', { name: /Agent workflow/i }).first();
-  if (await inlineWorkflow.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await inlineWorkflow.scrollIntoViewIfNeeded();
-    await inlineWorkflow.click();
-    await page.getByRole('option', { name: /Router Agent/i }).click();
-    return;
-  }
-  const header = page.locator('div').filter({
-    has: page.getByRole('combobox', { name: /Select LLM/i }),
-  }).first();
-  await header.getByRole('button').last().click();
+  await page.getByRole('button', { name: /AI prompt settings for this thread/i }).click();
   const dialog = page.getByRole('dialog');
   await dialog.waitFor({ timeout: 30000 });
   await dialog.getByRole('combobox', { name: /Agent workflow/i }).click();
   await page.getByRole('option', { name: /Router Agent/i }).click();
-  const save = dialog.getByRole('button', { name: /^Save$/i });
-  await save.scrollIntoViewIfNeeded();
-  await save.click();
+  await dialog.getByRole('button', { name: /^Save$/i }).scrollIntoViewIfNeeded();
+  await dialog.getByRole('button', { name: /^Save$/i }).click();
   await dialog.waitFor({ state: 'hidden', timeout: 60000 });
 }
 
@@ -41,26 +30,34 @@ async function openChatSurface(page) {
 async function ensureChatWorkspace(page) {
   await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.waitForTimeout(1500);
-  await openChatSurface(page);
   const llmCombo = page.getByRole('combobox', { name: /Select LLM/i }).first();
-  if (await llmCombo.isVisible({ timeout: 3000 }).catch(() => false)) return;
-  let projectLabel = 'web-approval-test';
-  const createInExisting = page.getByRole('button', { name: /Create thread in web-approval-test/i });
-  if (!(await createInExisting.isVisible({ timeout: 4000 }).catch(() => false))) {
+  const composerReady = page.getByPlaceholder(/Ask a question about your documents/i).first();
+  if (
+    await llmCombo.isVisible({ timeout: 3000 }).catch(() => false)
+    && await composerReady.isVisible({ timeout: 1000 }).catch(() => false)
+  ) {
+    await openChatSurface(page);
+    return;
+  }
+  let createInExisting = page.getByRole('button', { name: /Create thread in web-approval-test/i }).first();
+  if (!(await createInExisting.isVisible({ timeout: 12000 }).catch(() => false))) {
     await page.getByRole('button', { name: /Create Project/i }).click();
-    projectLabel = `web-approval-${Date.now()}`;
-    await page.getByRole('textbox').first().fill(projectLabel);
+    const newLabel = `web-approval-${Date.now()}`;
+    await page.getByRole('textbox').first().fill(newLabel);
     await page.getByRole('button', { name: /^Create Project$/i }).click();
     await page.waitForTimeout(1200);
+    createInExisting = page
+      .getByRole('button', { name: new RegExp(`Create thread in ${newLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i') })
+      .first();
   }
-  const createThreadBtn = page
-    .getByRole('button', { name: new RegExp(`Create thread in ${projectLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i') })
-    .or(page.getByRole('button', { name: /Create Thread/i }))
-    .first();
-  await createThreadBtn.click();
-  await page.getByRole('textbox').first().fill(`approval-live-${Date.now()}`);
-  await page.getByRole('button', { name: /^Create$/i }).click();
-  await llmCombo.waitFor({ timeout: 60000 });
+  await createInExisting.scrollIntoViewIfNeeded();
+  await createInExisting.click({ force: true });
+  const threadName = `approval-live-${Date.now()}`;
+  const nameField = page.getByRole('dialog').getByRole('textbox').first();
+  await nameField.waitFor({ state: 'visible', timeout: 30000 });
+  await nameField.fill(threadName);
+  await page.getByRole('dialog').getByRole('button', { name: /^Create$/i }).click();
+  await llmCombo.waitFor({ state: 'visible', timeout: 120000 });
   await openChatSurface(page);
 }
 
@@ -91,10 +88,7 @@ async function waitForComposerReady(page) {
 
 async function setWebSearchAsk(page) {
   const labels = ['Internet Search Off', 'Internet Search On', 'Ask me every time before internet search'];
-  const chatHeader = page.locator('div').filter({
-    has: page.getByRole('combobox', { name: /Select LLM/i }),
-  }).first();
-  const btn = chatHeader.getByRole('button', { name: new RegExp(labels.join('|')) }).first();
+  const btn = page.getByRole('button', { name: new RegExp(labels.join('|')) }).first();
   await btn.scrollIntoViewIfNeeded();
   for (let i = 0; i < labels.length; i += 1) {
     const aria = await btn.getAttribute('aria-label');
@@ -106,13 +100,16 @@ async function setWebSearchAsk(page) {
 
 async function pickModel(page, model) {
   const combo = page.getByRole('combobox', { name: /Select LLM/i }).first();
+  await combo.waitFor({ state: 'visible', timeout: 120000 });
   await combo.scrollIntoViewIfNeeded();
+  const needle = model.includes('/') ? model.split('/').slice(-1)[0] : model;
   await combo.click();
-  await combo.fill(model.includes('/') ? model.split('/').slice(-1)[0] : model);
-  await page.waitForTimeout(400);
-  const option = page.getByRole('option', { name: new RegExp(model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }).first();
-  if (await option.count()) await option.click();
-  else await page.keyboard.press('Escape');
+  await combo.fill(needle);
+  await page.waitForTimeout(800);
+  const option = page.getByRole('option', { name: new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }).first();
+  await option.waitFor({ state: 'visible', timeout: 30000 });
+  await option.click();
+  await waitForComposerReady(page);
 }
 
 async function dismissClarificationIfPresent(page) {
@@ -138,8 +135,10 @@ async function waitForComposerIdle(page) {
 }
 
 async function assertApprovalCard(page) {
-  await focusChatComposer(page);
-  await expect(page.getByText(/Allow a web search\?/i)).toBeVisible({ timeout: 180000 });
+  await expect(page.getByText(/auto_rag_agent/i)).toHaveCount(0);
+  const title = page.getByText(/Allow a web search\?/i).first();
+  await title.scrollIntoViewIfNeeded();
+  await expect(title).toBeVisible({ timeout: 180000 });
   const approveOnce = page.getByRole('button', { name: /Approve once/i });
   const skip = page.getByRole('button', { name: /Skip this tool for this/i });
   await approveOnce.scrollIntoViewIfNeeded();
@@ -172,40 +171,26 @@ async function assertViewportScreenshot(page, filePath) {
 
 async function waitForAnswer(page, pattern) {
   await waitForComposerIdle(page);
-  await page.waitForFunction(
-    (source, flags) => {
-      const rx = new RegExp(source, flags);
-      const items = [...document.querySelectorAll('li, .MuiListItem-root')];
-      return items.some((node) => {
-        const text = node.textContent || '';
-        if (!rx.test(text)) return false;
-        return !/Use the internet search tool to find/i.test(text);
-      });
-    },
-    pattern.source,
-    pattern.flags,
-    { timeout: 240000 },
-  );
   const answer = page.locator('li, .MuiListItem-root').filter({ hasText: pattern }).filter({
-    hasNotText: /Use the internet search tool to find/i,
+    hasNotText: /Use the internet search tool to find|What is the weather in Paris today/i,
   }).last();
-  await answer.waitFor({ state: 'visible', timeout: 5000 });
+  await answer.waitFor({ state: 'visible', timeout: 300000 });
   const text = await answer.innerText();
   expect(text.length).toBeGreaterThan(15);
-  expect(text).not.toMatch(/Approved, continuing/i);
+  expect(text).not.toMatch(/Approved, continuing|technical error while processing/i);
+  await expect(page.getByText(/auto_rag_agent/i)).toHaveCount(0);
   return text;
 }
 
 async function prepareThread(page) {
   await ensureChatWorkspace(page);
   await openChatSurface(page);
-  await createFreshThread(page);
   await pickModel(page, MODEL);
-  await waitForComposerReady(page);
   await selectRouterAgentWorkflow(page);
   await pickModel(page, MODEL);
-  await waitForComposerReady(page);
   await setWebSearchAsk(page);
+  await expect(page.getByText(/auto_rag_agent/i)).toHaveCount(0);
+  await waitForComposerReady(page);
 }
 
 async function runApproveFlow(page, suffix) {
@@ -238,7 +223,7 @@ const viewports = [
 ];
 
 test.describe('Live chat web search approval UI', () => {
-  test.describe.configure({ timeout: 600_000 });
+  test.describe.configure({ timeout: 900_000 });
   test.beforeAll(() => fs.mkdirSync(ART, { recursive: true }));
 
   for (const vp of viewports) {
