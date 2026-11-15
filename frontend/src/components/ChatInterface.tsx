@@ -28,6 +28,12 @@ import {
     type ConversationSentenceCache,
 } from '../lib/chat-sentence-cache';
 import { getChatComposerState } from '../lib/chat-composer-state';
+import {
+    chatHumanReviewUsesStackedDecisionLayout,
+    chatToolApprovalReplacesComposer,
+    composerHumanReviewPending,
+    shouldDismissToolApprovalOnAction,
+} from '../lib/chat-tool-approval-ui';
 import { canRequestChatCancellation, recoverCanceledChat } from '../lib/chat-run-cancellation';
 import {
     Thread,
@@ -130,7 +136,7 @@ import {
     REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT,
     WORKBENCH_AUTO_SIDE_MIN_WIDTH,
 } from '../lib/deep-research-review-panel-layout';
-import { shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
+import { clearInterruptPlaceholderForLiveRun, shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
 import { isAgentRunResumeProductTerminal, parseAgentRunResumeStreamEvent } from '../lib/agent-run-resume-stream';
 import type { ToolDisplayCatalog } from '../lib/tool-approval-presentation';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
@@ -1769,30 +1775,49 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const handleHumanReviewAction = async (action: AgentRunResumeAction, selectedOptionIds?: string[]): Promise<boolean> => {
         if (!pendingHumanReview || !activeThread) return false;
-        const interrupt = pendingHumanReview.interrupt;
-        if (!interrupt.interrupt_id) return false;
+        const reviewSnapshot = pendingHumanReview;
+        const interrupt = reviewSnapshot.interrupt;
+        const dismissToolApprovalOnAction = shouldDismissToolApprovalOnAction(interrupt);
+        if (dismissToolApprovalOnAction) {
+            setPendingHumanReview(null);
+            setHumanReviewEditText('');
+        }
+        const restoreToolApprovalUi = () => {
+            if (dismissToolApprovalOnAction) {
+                setPendingHumanReview(reviewSnapshot);
+                setHumanReviewEditText(interrupt.proposed_final_answer || '');
+            }
+        };
+        if (!interrupt.interrupt_id) {
+            restoreToolApprovalUi();
+            return false;
+        }
         const responseOperation = runtimeInterruptResponseOperation(interrupt);
         if (!responseOperation) {
             setHumanReviewError('This human-input request has an invalid runtime response contract.');
+            restoreToolApprovalUi();
             return false;
         }
         const reviewAvailability = runtimeOperationAvailability(humanReviewCapabilities, responseOperation);
         const reviewCapabilityStale = !reviewAvailability.enabled
             && reviewAvailability.disabledReason === 'no_pending_interrupt'
             && (!interrupt.status || interrupt.status === InterruptStatus.Pending);
-        if (!reviewAvailability.enabled && !reviewCapabilityStale) return false;
+        if (!reviewAvailability.enabled && !reviewCapabilityStale) {
+            restoreToolApprovalUi();
+            return false;
+        }
         if (testRuntime && builderRuntime) {
             setHumanReviewSubmitting(action);
             setHumanReviewError(null);
             resetLiveExecutionEvents();
             setLiveExecution({
-                messageId: pendingHumanReview.localAssistantMessageId,
-                runId: pendingHumanReview.runId,
+                messageId: reviewSnapshot.localAssistantMessageId,
+                runId: reviewSnapshot.runId,
                 running: true,
             });
             try {
-                const traceStream = new LiveTraceStreamController(pendingHumanReview.runId);
-                await resumeAgentWorkflowBuilderTest(pendingHumanReview.runId, {
+                const traceStream = new LiveTraceStreamController(reviewSnapshot.runId);
+                await resumeAgentWorkflowBuilderTest(reviewSnapshot.runId, {
                     ...builderTestRequestContext(),
                     action,
                     interrupt_id: interrupt.interrupt_id,
@@ -1806,7 +1831,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     const snapshot = traceStream.append(event as AgentExecutionStreamEnvelope);
                     if (event.event !== 'heartbeat') {
                         publishLiveTrace(snapshot, {
-                            messageId: pendingHumanReview.localAssistantMessageId,
+                            messageId: reviewSnapshot.localAssistantMessageId,
                             label: `Test · ${workflowSpecFingerprint(testRuntime.spec)}`,
                         });
                     }
@@ -1820,9 +1845,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     || refreshed?.result_json?.final_answer
                     || 'The workflow test completed.',
                 );
-                updateBuilderTestMessage(pendingHumanReview.localAssistantMessageId, {
+                updateBuilderTestMessage(reviewSnapshot.localAssistantMessageId, {
                     content: answer,
-                    runId: refreshed?.id || pendingHumanReview.runId,
+                    runId: refreshed?.id || reviewSnapshot.runId,
                     status: refreshed?.pending_interrupt ? 'review' : 'completed',
                 });
                 if (refreshed) {
@@ -1830,7 +1855,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     onOpenTrace?.({
                         id: refreshed.id,
                         threadId: activeThread?.id,
-                        messageId: pendingHumanReview.localAssistantMessageId,
+                        messageId: reviewSnapshot.localAssistantMessageId,
                         label: `Test · ${workflowSpecFingerprint(testRuntime.spec)}`,
                         status: refreshed.status,
                         runDetails: refreshed,
@@ -1853,45 +1878,62 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 return true;
             } catch (error: any) {
                 setHumanReviewError(error?.message || 'Unable to submit the test review decision.');
+                restoreToolApprovalUi();
                 return false;
             } finally {
                 setLiveExecution(null);
                 setHumanReviewSubmitting(null);
             }
         }
-        const submissionKey = `${pendingHumanReview.runId}:${interrupt.interrupt_id}:${interrupt.resume_version ?? 1}:${action}`;
-        if (humanReviewSubmissionKeyRef.current) return false;
+        const submissionKey = `${reviewSnapshot.runId}:${interrupt.interrupt_id}:${interrupt.resume_version ?? 1}:${action}`;
+        if (humanReviewSubmissionKeyRef.current) {
+            restoreToolApprovalUi();
+            return false;
+        }
 
         humanReviewSubmissionKeyRef.current = submissionKey;
         setHumanReviewSubmitting(action);
         setHumanReviewError(null);
         let activeInterrupt = interrupt;
         try {
-            const freshRun = await getAgentRun(pendingHumanReview.runId, activeThread.id);
+            const freshRun = await getAgentRun(reviewSnapshot.runId, activeThread.id);
             const freshInterrupt = freshRun.pending_interrupt;
             if (
                 freshInterrupt?.status === InterruptStatus.Pending
                 && freshInterrupt.interrupt_id
             ) {
                 activeInterrupt = freshInterrupt as AgentRunPendingInterrupt;
-                setPendingHumanReview((current) => (
-                    current ? { ...current, interrupt: activeInterrupt } : current
-                ));
+                if (!dismissToolApprovalOnAction) {
+                    setPendingHumanReview((current) => (
+                        current ? { ...current, interrupt: activeInterrupt } : current
+                    ));
+                }
             }
         } catch {
             /* Fall back to the interrupt shown in the approval card. */
         }
-        const liveMessageId = pendingHumanReview.localAssistantMessageId;
+        const liveMessageId = reviewSnapshot.localAssistantMessageId;
+        const resumeAssistantMessage = messages.find((message) => message.id === liveMessageId);
+        const resumeTraceLabel = formatAgentTraceIdentity({
+            workflowId: resumeAssistantMessage?.agent_workflow_id,
+            route: resumeAssistantMessage?.agent_route,
+        });
+        setMessages((current) => current.map((message) => (
+            message.id === liveMessageId ? clearInterruptPlaceholderForLiveRun(message) : message
+        )));
         resetLiveExecutionEvents();
-        setLiveExecution({ messageId: liveMessageId, runId: pendingHumanReview.runId, running: true });
+        setLiveExecution({ messageId: liveMessageId, runId: reviewSnapshot.runId, running: true });
         setOpenAgentRunIds((current) => new Set(current).add(liveMessageId));
+        setLoading(true);
+        const traceStream = new LiveTraceStreamController(reviewSnapshot.runId);
+        let resumeStreamError: string | undefined;
         try {
             let response: any;
             let terminalError: string | undefined;
             const resumeAbort = new AbortController();
             let resumeTerminalReceived = false;
             try {
-                await streamResumeAgentRun(pendingHumanReview.runId, {
+                await streamResumeAgentRun(reviewSnapshot.runId, {
                     action,
                     interrupt_id: activeInterrupt.interrupt_id,
                     resume_token: activeInterrupt.resume_token || undefined,
@@ -1902,12 +1944,47 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     client_metadata: { source: 'chat_pending_review_panel' },
                 }, (event) => {
                     if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
-                    if (
-                        humanReviewSubmissionKeyRef.current !== submissionKey
-                        && /^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)
-                    ) {
-                        setHumanReviewCapabilityRevision((revision) => revision + 1);
-                        void refreshHumanReviewCapabilities();
+                    if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
+                        setLiveCapabilityRevision((revision) => revision + 1);
+                        void refreshLiveRunCapabilities();
+                        if (
+                            humanReviewSubmissionKeyRef.current !== submissionKey
+                        ) {
+                            setHumanReviewCapabilityRevision((revision) => revision + 1);
+                            void refreshHumanReviewCapabilities();
+                        }
+                    }
+                    if (event.event === 'run.failed' && !event.data?.response) {
+                        const formatted = formatContextLengthUserMessage(event.data?.error);
+                        resumeStreamError = formatted.detail
+                            ? `${formatted.title}\n\n${formatted.detail}`
+                            : formatted.title;
+                    } else if (!isAgentRunResumeProductTerminal(event.event, event.data as Record<string, unknown> | undefined)) {
+                        resumeStreamError = undefined;
+                    }
+                    const snapshot = traceStream.append(
+                        event,
+                        resumeStreamError,
+                        response?.status,
+                    );
+                    if (isValidTraceId(snapshot.runId)) {
+                        setLiveExecution((current) => current?.messageId === liveMessageId
+                            ? {
+                                ...current,
+                                runId: snapshot.runId,
+                                running: snapshot.running,
+                                error: resumeStreamError,
+                            }
+                            : current);
+                    }
+                    if (event.event !== 'heartbeat') {
+                        publishLiveTrace(snapshot, {
+                            messageId: liveMessageId,
+                            label: resumeTraceLabel,
+                            routeReason: resumeAssistantMessage?.agent_route_reason,
+                            traceRefs: resumeAssistantMessage?.agent_trace_refs,
+                            error: resumeStreamError,
+                        });
                     }
                     if (!isAgentRunResumeProductTerminal(event.event, event.data as Record<string, unknown> | undefined)) return;
                     const parsed = parseAgentRunResumeStreamEvent(event.event, event.data as Record<string, unknown> | undefined);
@@ -1921,9 +1998,20 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     if (isFailure && !terminalError) {
                         terminalError = 'Unable to resume the agent run.';
                     }
+                    const terminalSnapshot = traceStream.snapshot(event.event, terminalError, response?.status);
                     setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: isFailure ? terminalError : undefined }
+                        ? {
+                            ...current,
+                            runId: terminalSnapshot.runId,
+                            running: false,
+                            error: isFailure ? terminalError : undefined,
+                        }
                         : current);
+                    setOpenAgentRunIds((current) => {
+                        const next = new Set(current);
+                        if (!manuallyToggledAgentRunsRef.current.has(liveMessageId)) next.delete(liveMessageId);
+                        return next;
+                    });
                     if (response || terminalError) {
                         resumeTerminalReceived = true;
                         resumeAbort.abort();
@@ -1941,11 +2029,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
             const resumedRun = response?.agent_run;
             if (resumedRun?.status === 'awaiting_human' && resumedRun?.pending_interrupt) {
-                setPendingHumanReview(prev => prev ? {
-                    ...prev,
+                setPendingHumanReview({
+                    ...reviewSnapshot,
+                    runId: resumedRun.id || reviewSnapshot.runId,
                     interrupt: resumedRun.pending_interrupt as AgentRunPendingInterrupt,
-                } : prev);
+                });
                 setHumanReviewEditText(resumedRun.pending_interrupt.proposed_final_answer || humanReviewEditText);
+                setLoading(false);
                 return true;
             }
 
@@ -1957,18 +2047,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 || response?.agent_run?.result_json?.final_answer
                 || '',
             ).trim();
-            if (resumedAnswer) {
-                setMessages((current) => current.map((message) => (
-                    message.id === liveMessageId
-                        ? {
-                            ...message,
-                            content: resumedAnswer,
-                            pending_human_review: false,
-                            agent_run_turn_kind: 'assistant_final',
-                        }
-                        : message
-                )));
-            }
+            setMessages((current) => current.map((message) => {
+                if (message.id !== liveMessageId) return message;
+                const next = clearInterruptPlaceholderForLiveRun(message);
+                return resumedAnswer ? { ...next, content: resumedAnswer } : next;
+            }));
             setPendingHumanReview(null);
             setHumanReviewEditText('');
             await loadMessages();
@@ -1976,6 +2059,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             return true;
         } catch (err: any) {
             setHumanReviewError(err?.message || 'Unable to submit review decision.');
+            restoreToolApprovalUi();
             return false;
         } finally {
             if (humanReviewSubmissionKeyRef.current === submissionKey) {
@@ -1988,6 +2072,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             });
             setLiveExecution((current) => current?.messageId === liveMessageId ? null : current);
             setHumanReviewSubmitting(null);
+            setLoading(false);
         }
     };
 
@@ -2912,18 +2997,33 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             && (!pendingReviewInterrupt.status || pendingReviewInterrupt.status === InterruptStatus.Pending)
         )
     );
-    const chatHumanReviewOpen = Boolean(pendingReviewInterrupt);
-    const isToolApprovalReview = pendingReviewInterrupt?.type === 'tool_approval';
-    const reviewTranscriptMaxHeight = chatHumanReviewOpen && stackedWorkbench
+    const toolApprovalSheetOpen = chatToolApprovalReplacesComposer(pendingReviewInterrupt);
+    const stackedHumanReviewLayout = chatHumanReviewUsesStackedDecisionLayout(pendingReviewInterrupt);
+    const reviewTranscriptMaxHeight = stackedHumanReviewLayout && stackedWorkbench
         ? REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT
         : REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT;
-    const reviewDecisionMinHeight = isToolApprovalReview
-        ? 0
-        : chatHumanReviewOpen && stackedWorkbench
-            ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
-            : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
-    const composerHumanReviewPending = chatHumanReviewOpen;
+    const reviewDecisionMinHeight = stackedHumanReviewLayout && stackedWorkbench
+        ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
+        : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
     const reviewControlsLocked = Boolean(humanReviewSubmitting);
+    const pendingHumanReviewPanel = pendingReviewInterrupt ? (
+        <HumanReviewDecisionPanel
+            interrupt={pendingReviewInterrupt}
+            submitting={humanReviewSubmitting}
+            error={humanReviewError}
+            editText={humanReviewEditText}
+            toolCatalog={toolDisplayCatalog}
+            disabled={!reviewControlsLocked && (
+                !pendingReviewAvailability.visible || !pendingReviewInputEnabled
+            )}
+            disabledReason={reviewControlsLocked ? undefined : (
+                pendingReviewInputEnabled ? undefined : pendingReviewAvailability.disabledReason
+            )}
+            rootRef={chatRootRef}
+            onEditTextChange={setHumanReviewEditText}
+            onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
+        />
+    ) : null;
 
     return (
         <ConversationPanelTemplate
@@ -2932,10 +3032,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             sx={{
                 p: 1,
                 cursor: 'default',
-                ...(chatHumanReviewOpen ? { overflow: 'hidden', overflowX: 'hidden' } : {}),
+                ...(stackedHumanReviewLayout ? { overflow: 'hidden', overflowX: 'hidden' } : {}),
             }}
-            decisionBeforeTranscript={chatHumanReviewOpen && !isToolApprovalReview}
-            transcriptSx={chatHumanReviewOpen ? {
+            decisionBeforeTranscript={stackedHumanReviewLayout}
+            transcriptSx={stackedHumanReviewLayout ? {
                 flex: '0 0 auto',
                 maxHeight: reviewTranscriptMaxHeight,
                 minHeight: 0,
@@ -2943,18 +3043,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 flex: '1 1 auto',
                 minHeight: 'min(44vh, 320px)',
             } : undefined}
-            decisionSx={chatHumanReviewOpen ? {
-                ...(isToolApprovalReview
-                    ? {
-                        flex: '0 0 auto',
-                        flexGrow: 0,
-                        flexShrink: 0,
-                        alignSelf: 'stretch',
-                        justifyContent: 'flex-end',
-                    }
-                    : { flex: '1 1 0' }),
+            decisionSx={stackedHumanReviewLayout ? {
+                flex: '1 1 0',
                 minHeight: reviewDecisionMinHeight,
-                overflow: isToolApprovalReview ? 'visible' : 'hidden',
+                overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
             } : undefined}
@@ -3121,25 +3213,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     </ResizableDecisionPanel>
             ) : pendingReviewInterrupt && !pendingReviewOperation ? (
                 <Alert severity="error">This human-input request has an invalid runtime response contract.</Alert>
-            ) : pendingReviewInterrupt ? (
-                <HumanReviewDecisionPanel
-                    interrupt={pendingReviewInterrupt}
-                    submitting={humanReviewSubmitting}
-                    error={humanReviewError}
-                    editText={humanReviewEditText}
-                    toolCatalog={toolDisplayCatalog}
-                    disabled={!reviewControlsLocked && (
-                        !pendingReviewAvailability.visible || !pendingReviewInputEnabled
-                    )}
-                    disabledReason={reviewControlsLocked ? undefined : (
-                        pendingReviewInputEnabled ? undefined : pendingReviewAvailability.disabledReason
-                    )}
-                    rootRef={chatRootRef}
-                    onEditTextChange={setHumanReviewEditText}
-                    onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
-                />
+            ) : pendingHumanReviewPanel && !toolApprovalSheetOpen ? (
+                pendingHumanReviewPanel
             ) : undefined}
-            composer={(
+            composer={toolApprovalSheetOpen && pendingHumanReviewPanel ? (
+            <Box
+                data-testid="chat-tool-approval-composer-slot"
+                sx={{ display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0 }}
+            >
+                {pendingHumanReviewPanel}
+            </Box>
+            ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
                 {editingMessageId && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
@@ -3176,7 +3260,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     liveExecution={liveExecution}
                     liveRunCapabilities={liveRunCapabilities}
                     isTestRuntime={isTestRuntime}
-                    humanReviewPending={composerHumanReviewPending}
+                    humanReviewPending={composerHumanReviewPending(pendingReviewInterrupt)}
                     onSubmit={(text) => void handleSend(text)}
                     onStop={handleStopChat}
                     onOpenSettings={handleOpenThreadSettings}

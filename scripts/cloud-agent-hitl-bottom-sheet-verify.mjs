@@ -121,11 +121,12 @@ async function main() {
     await guard.capture(page, 'hitl-03-sheet-content-scrolled.png');
 
     await dragSheetHandle(page, -180);
-    const pendingPlaceholder = page.getByPlaceholder(/Approve or skip to continue/i);
-    await pendingPlaceholder.waitFor({ state: 'visible', timeout: 10000 });
-    await pendingPlaceholder.scrollIntoViewIfNeeded();
+    const composerSlot = page.getByTestId('chat-tool-approval-composer-slot');
+    await composerSlot.waitFor({ state: 'visible', timeout: 10000 });
+    const composerInput = page.getByTestId('chat-composer-input');
+    await composerInput.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => composerInput.waitFor({ state: 'detached', timeout: 5000 }));
     await page.waitForTimeout(300);
-    await guard.capture(page, 'hitl-04-composer-disabled.png');
+    await guard.capture(page, 'hitl-04-sheet-replaces-composer.png');
 
     const debugTraceTab = page.getByRole('tab', { name: /^Debug Trace/i }).first();
     await debugTraceTab.waitFor({ state: 'visible', timeout: 30000 });

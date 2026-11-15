@@ -148,7 +148,7 @@ export function ResizableDecisionPanel({
         flexDirection: 'column',
         gap: 0.5,
         maxHeight: REVIEW_DECISION_PANEL_FOOTER_MAX_HEIGHT,
-        overflowY: 'auto',
+        overflowY: bottomSheet ? 'hidden' : 'auto',
         '& > :last-child': { flexShrink: 0 },
       }}
     >
@@ -202,7 +202,7 @@ export function ResizableDecisionPanel({
             flexDirection: 'column',
           }}
         >
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 0.5, pb: footer ? 0 : 1, minHeight: 0 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 0.5, pb: footer ? 0 : 1, minHeight: 0, flexShrink: 0 }}>
             {children}
           </Box>
         </Box>
