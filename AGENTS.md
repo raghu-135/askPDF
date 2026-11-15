@@ -8,6 +8,10 @@ Highlight-only fixes belong in the frontend or in non-chunking metadata on sente
 
 See `rag_service/tests/test_highlight_retrieval_invariant_pytest.py` for the guard test and `docs/testing.md` for the test runner.
 
+## Real UI verification
+
+Cloud Agents must not substitute API output, recycled screenshots, or fake overlays for browser proof. Follow **`docs/verification.md`**: stack bootstrap, canonical UI flows (project/thread → upload → chat → document tab / HITL), forbidden shortcuts, and the required report format. Run `node scripts/cloud-agent-real-ui-verify.mjs` when proving chat/PDF UI on a VM (optional `--prove-screenshot-guard` for the duplicate-screenshot check).
+
 ## Cloud Agent VM setup
 
 Fresh Cursor Cloud Agent VMs need Docker, a host OpenRouter proxy, and the Compose

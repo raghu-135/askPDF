@@ -2932,6 +2932,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
+            transcriptDataTestId="chat-message-list"
             sx={{
                 p: 1,
                 cursor: 'default',
