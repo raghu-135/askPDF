@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Tab, Tabs } from '@mui/material';
+import { selectedInstanceTabValue } from '../../lib/instance-tabs';
 
 export type NestedInstanceTab = {
   id: string;
@@ -60,7 +61,7 @@ export default function NestedInstanceTabs({
 }) {
   if (tabs.length === 0 && !trailingAction) return null;
 
-  const selectedTabValue = activeId && tabs.some((tab) => tab.id === activeId) ? activeId : false;
+  const selectedTabValue = selectedInstanceTabValue(tabs, activeId);
 
   return (
     <Box

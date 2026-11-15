@@ -1,5 +1,6 @@
 import type { FormattedSelection } from "@embedpdf/plugin-selection/react";
 import type { SearchResult } from "@embedpdf/models";
+import { closeInstanceTab } from "./instance-tabs";
 import type { PdfTab } from "./document-tabs";
 
 export type PdfSelectionBBox = {
@@ -61,18 +62,8 @@ export function handleTabCloseUtil(
   setCurrentPdfId: (id: number | null) => void,
   setPlayRequestId: (id: number | null) => void
 ) {
-  const newTabs = pdfTabs.filter(t => t.id !== tabId);
-  // If closing the active tab, switch to another tab
-  if (activeTabId === tabId) {
-    const closingIndex = pdfTabs.findIndex(t => t.id === tabId);
-    if (newTabs.length > 0) {
-      // Try to select the tab to the left, or the first tab
-      const newIndex = Math.max(0, closingIndex - 1);
-      setActiveTabId(newTabs[newIndex]?.id || null);
-    } else {
-      setActiveTabId(null);
-    }
-  }
+  const { tabs: newTabs, activeId } = closeInstanceTab(pdfTabs, activeTabId, tabId);
+  setActiveTabId(activeId);
   setPdfTabs(newTabs);
   setCurrentPdfId(null);
   setPlayRequestId(null);
@@ -87,11 +78,9 @@ export function closeDocumentTabUtil(
   setCurrentPdfId: (id: number | null) => void,
   setPlayRequestId: (id: number | null) => void,
 ) {
-  const newTabs = pdfTabs.filter((tab) => tab.id !== tabId);
+  const { tabs: newTabs, activeId } = closeInstanceTab(pdfTabs, activeDocumentId, tabId);
   if (activeDocumentId === tabId) {
-    const closingIndex = pdfTabs.findIndex((tab) => tab.id === tabId);
-    const newIndex = Math.max(0, closingIndex - 1);
-    setActiveDocumentId(newTabs[newIndex]?.id || null);
+    setActiveDocumentId(activeId);
     setCurrentPdfId(null);
     setPlayRequestId(null);
   }

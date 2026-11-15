@@ -34,6 +34,7 @@ import {
   writeWorkspaceResume,
   type WorkspaceResumeState,
 } from '../lib/workspace-resume-state';
+import { closeInstanceTab } from '../lib/instance-tabs';
 import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
 import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec";
 import {
@@ -49,6 +50,7 @@ import WorkspaceTabs, { type DocumentWorkspaceTab } from '../components/workbenc
 import DocumentChunkInspectorDialog from '../components/document/DocumentChunkInspectorDialog';
 import ThreadWorkspaceContent from '../components/workbench/ThreadWorkspaceContent';
 import useTraceTabs from '../components/workbench/useTraceTabs';
+import useCanvasTabs from '../components/workbench/useCanvasTabs';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
 import { API_BASE, Project, Thread, removeSourceFromThread, removeSourceFromProject, promoteFileToProject, retryTargetFile, getParsedSentencesForTarget, captureBrowserPageForTarget, pollForTargetFileReady, getThread, getProject, getPdfForTarget, deleteThread, listThreads, type KnowledgeTarget } from "../lib/api";
 import { loadThreadTabs, loadProjectTabs, hydrateThreadPdfTab, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
@@ -159,7 +161,15 @@ export default function Home() {
     closeTrace,
     clearTraces,
   } = useTraceTabs();
-  const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
+  const {
+    canvasTabs,
+    activeCanvasId,
+    setActiveCanvasId,
+    openCanvas,
+    closeCanvas,
+    clearCanvasTabs,
+    updateCanvasTab,
+  } = useCanvasTabs();
   const [canvasRefreshVersion, setCanvasRefreshVersion] = useState(0);
   const pendingDocumentCitationRef = useRef<DocumentCanvasCitationTarget | null>(null);
   const [chunkInspectorTab, setChunkInspectorTab] = useState<DocumentWorkspaceTab | null>(null);
@@ -248,7 +258,7 @@ export default function Home() {
     setActiveProject(null);
     setThreadProject(null);
     clearTraces();
-    setActiveCanvasId(null);
+    clearCanvasTabs();
     setActiveDocumentId(null);
     setActiveTraceId(null);
 
@@ -261,9 +271,6 @@ export default function Home() {
       setActiveTabId(initialTabId);
       setActiveDocumentId(
         isDocumentsWorkspaceActive(initialTabId) && cached?.documentId ? cached.documentId : null,
-      );
-      setActiveCanvasId(
-        initialTabId === RESEARCH_CANVAS_TAB_ID && cached?.canvasId ? cached.canvasId : null,
       );
       setIsBrowserActive(initialTabId === 'browser-tab');
 
@@ -301,6 +308,9 @@ export default function Home() {
         setActiveTabId(resolved.tabId);
         setActiveDocumentId(resolved.documentId ?? null);
         setActiveTraceId(resolved.traceId ?? null);
+        if (resolved.canvasId) {
+          openCanvas({ id: resolved.canvasId, title: 'Canvas' }, { activate: false });
+        }
         setActiveCanvasId(resolved.canvasId ?? null);
         setIsBrowserActive(resolved.tabId === 'browser-tab');
         persistWorkspaceResume(contextKey, resolved);
@@ -329,7 +339,7 @@ export default function Home() {
       setActiveTabId(resolved.tabId);
       setIsBrowserActive(false);
     }
-  }, [clearTraces, confirmDiscardMemoryCurator, hydrateResumedDocumentTab, memoryManagerIntent, persistWorkspaceResume, setActiveTraceId]);
+  }, [clearCanvasTabs, clearTraces, confirmDiscardMemoryCurator, hydrateResumedDocumentTab, memoryManagerIntent, openCanvas, persistWorkspaceResume, setActiveCanvasId, setActiveTraceId]);
 
   const handleProjectSelect = useCallback(async (project: Project) => {
     if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
@@ -349,7 +359,7 @@ export default function Home() {
     setCachedPdfFileHash(null);
     previousDocumentFileHashRef.current = null;
     clearTraces();
-    setActiveCanvasId(null);
+    clearCanvasTabs();
     setActiveTraceId(null);
     setActiveTabId(initialTabId);
     setActiveDocumentId(
@@ -388,7 +398,7 @@ export default function Home() {
         setIsPdfLoading(false);
       }
     }
-  }, [clearTraces, confirmDiscardMemoryCurator, hydrateResumedDocumentTab, memoryManagerIntent, persistWorkspaceResume, setActiveTraceId]);
+  }, [clearCanvasTabs, clearTraces, confirmDiscardMemoryCurator, hydrateResumedDocumentTab, memoryManagerIntent, persistWorkspaceResume, setActiveTraceId]);
 
   const handleThreadForked = useCallback(async (thread: Thread) => {
     setSidebarVersion(v => v + 1);
@@ -459,8 +469,8 @@ export default function Home() {
     setActiveSource('pdf');
     setChatSentences([]);
     clearTraces();
-    setActiveCanvasId(null);
-  }, [clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
+    clearCanvasTabs();
+  }, [clearCanvasTabs, clearTraces, confirmDiscardMemoryCurator, memoryManagerIntent]);
 
   const handleBackToProject = useCallback(async () => {
     try {
@@ -926,9 +936,10 @@ export default function Home() {
           documentCount: pdfTabs.length,
           traces: traceTabs,
           includeResearchCanvas: true,
+          canvasCount: canvasTabs.length,
         })
       : activeProject ? buildProjectWorkspaceTabs(pdfTabs.length) : buildHomeWorkspaceTabs(),
-    [activeThread, activeProject, pdfTabs.length, traceTabs],
+    [activeThread, activeProject, canvasTabs.length, pdfTabs.length, traceTabs],
   );
 
   const handleWorkspaceTabChange = useCallback((tabId: string) => {
@@ -940,13 +951,19 @@ export default function Home() {
     let nextDocumentId = activeDocumentId;
     let nextTraceId = activeTraceId;
     let nextCanvasId = activeCanvasId;
-    if (tabId === DOCUMENTS_TAB_ID && !activeDocumentId && pdfTabs[0]) {
-      nextDocumentId = pdfTabs[0].id;
-      hydrateDocumentOnSelect(pdfTabs[0]);
-    }
     if (tabId !== DOCUMENTS_TAB_ID) nextDocumentId = null;
     if (tabId !== 'trace-tab') nextTraceId = null;
     if (tabId !== RESEARCH_CANVAS_TAB_ID) nextCanvasId = null;
+    if (tabId === DOCUMENTS_TAB_ID && !nextDocumentId && pdfTabs[0]) {
+      nextDocumentId = pdfTabs[0].id;
+      hydrateDocumentOnSelect(pdfTabs[0]);
+    }
+    if (tabId === 'trace-tab' && !nextTraceId && traceTabs[0]) {
+      nextTraceId = traceTabs[0].id;
+    }
+    if (tabId === RESEARCH_CANVAS_TAB_ID && !nextCanvasId && canvasTabs[0]) {
+      nextCanvasId = canvasTabs[0].id;
+    }
     setActiveTabId(tabId);
     setActiveDocumentId(nextDocumentId);
     setActiveTraceId(nextTraceId);
@@ -970,7 +987,7 @@ export default function Home() {
         }));
       }
     }
-  }, [activeCanvasId, activeDocumentId, activeProject, activeThread, activeTraceId, confirmDiscardMemoryCurator, hydrateDocumentOnSelect, memoryManagerIntent, pdfTabs, persistWorkspaceResume, threadProject, workspaceContextKey]);
+  }, [activeCanvasId, activeDocumentId, activeProject, activeThread, activeTraceId, canvasTabs, confirmDiscardMemoryCurator, hydrateDocumentOnSelect, memoryManagerIntent, pdfTabs, persistWorkspaceResume, threadProject, traceTabs, workspaceContextKey]);
 
   const handleOpenMemoryCurator = useCallback((intent: MemoryManagerIntent) => {
     if (memoryManagerIntent && memoryManagerDirtyRef.current && !confirmDiscardMemoryCurator()) return;
@@ -990,6 +1007,7 @@ export default function Home() {
         documentCount: pdfTabs.length,
         traces: traceTabs,
         includeResearchCanvas: true,
+        canvasCount: canvasTabs.length,
       })
       : activeProject
         ? buildProjectWorkspaceTabs(pdfTabs.length)
@@ -1000,7 +1018,7 @@ export default function Home() {
       availableTabs,
       pdfTabs,
       traceIds: traceTabs.map((trace) => trace.id),
-      canvasIds: activeCanvasId ? [activeCanvasId] : [],
+      canvasIds: canvasTabs.map((tab) => tab.id),
     });
     if (resolved.tabId === 'home-tab' && workspaceContextKey === 'home') {
       setActiveTabId(resolved.tabId);
@@ -1012,7 +1030,7 @@ export default function Home() {
     setActiveTraceId(resolved.traceId ?? null);
     setActiveCanvasId(resolved.canvasId ?? null);
     setIsBrowserActive(resolved.tabId === 'browser-tab');
-  }, [activeCanvasId, activeProject, activeThread, confirmDiscardMemoryCurator, pdfTabs, traceTabs, workspaceContextKey]);
+  }, [activeCanvasId, activeProject, activeThread, canvasTabs, confirmDiscardMemoryCurator, pdfTabs, traceTabs, workspaceContextKey]);
 
   const handleOpenConversationReview = useCallback((draftContent?: string) => {
     if (!activeThread) return;
@@ -1027,7 +1045,7 @@ export default function Home() {
   }, [activeProject, activeThread, handleOpenMemoryCurator, threadProject]);
 
   const handleOpenCanvas = useCallback((canvas: CanvasRef) => {
-    setActiveCanvasId(canvas.id);
+    openCanvas(canvas);
     setActiveTabId(RESEARCH_CANVAS_TAB_ID);
     setIsBrowserActive(false);
     setCanvasRefreshVersion((value) => value + 1);
@@ -1037,7 +1055,20 @@ export default function Home() {
       traceId: null,
       canvasId: canvas.id,
     });
-  }, [persistWorkspaceResume, workspaceContextKey]);
+  }, [openCanvas, persistWorkspaceResume, workspaceContextKey]);
+
+  const handleCloseCanvas = useCallback((canvasId: string) => {
+    const { activeId: nextActiveCanvasId } = closeInstanceTab(canvasTabs, activeCanvasId, canvasId);
+    closeCanvas(canvasId);
+    if (activeTabId === RESEARCH_CANVAS_TAB_ID) {
+      persistWorkspaceResume(workspaceContextKey, {
+        tabId: RESEARCH_CANVAS_TAB_ID,
+        documentId: null,
+        traceId: null,
+        canvasId: nextActiveCanvasId,
+      });
+    }
+  }, [activeCanvasId, activeTabId, canvasTabs, closeCanvas, persistWorkspaceResume, workspaceContextKey]);
 
   const handleOpenDocumentCitation = useCallback((target: DocumentCanvasCitationTarget) => {
     const normalizedHash = normalizeFileHash(target.fileHash);
@@ -1232,8 +1263,11 @@ export default function Home() {
               highlightEnabled={highlightEnabled}
               threadId={activeThread?.id ?? null}
               activeThread={activeThread}
+              canvasTabs={canvasTabs}
               activeCanvasId={activeCanvasId}
               onActiveCanvasChange={handleActiveCanvasChange}
+              onCloseCanvas={handleCloseCanvas}
+              onCanvasTabUpdate={updateCanvasTab}
               onOpenDocumentCitation={handleOpenDocumentCitation}
               canvasRefreshVersion={canvasRefreshVersion}
               documents={pdfTabs}

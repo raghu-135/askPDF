@@ -3,6 +3,7 @@ import type {
   ProcessStatus as ProcessStatusValue,
   ThreadFileSourceType as ThreadFileSourceTypeValue,
 } from './enums';
+import { selectedInstanceTabValue } from './instance-tabs';
 import type { WorkspaceTab, TraceWorkspaceTab, ResearchCanvasWorkspaceTab } from '../components/workbench/WorkspaceTabs';
 
 type Sentence = Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] };
@@ -53,10 +54,7 @@ export const isDocumentsWorkspaceActive = (activeTabId: string | null) => (
   activeTabId === DOCUMENTS_TAB_ID
 );
 
-export const selectedWorkspaceTabValue = (
-  tabs: readonly { id: string }[],
-  activeTabId: string | null,
-) => (activeTabId && tabs.some((tab) => tab.id === activeTabId) ? activeTabId : false);
+export const selectedWorkspaceTabValue = selectedInstanceTabValue;
 
 export const buildDocumentWorkspaceTabs = ({
   enabled,
