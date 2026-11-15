@@ -5,10 +5,11 @@
 import { chromium } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
+import { resolveE2eLlmModel } from '../e2e-llm-default.mjs';
 
 const ART = process.env.ASKPDF_E2E_ARTIFACTS || '/opt/cursor/artifacts';
 const BASE = process.env.ASKPDF_E2E_BASE_URL || 'http://127.0.0.1:3000';
-const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'openai/gpt-4.1-mini';
+const MODEL = resolveE2eLlmModel();
 
 async function createThread(page) {
   await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 120000 });
