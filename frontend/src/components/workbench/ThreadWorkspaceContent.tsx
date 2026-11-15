@@ -250,6 +250,7 @@ export default function ThreadWorkspaceContent({
       ) : activeTabId === RESEARCH_CANVAS_TAB_ID ? (
         <ResearchCanvasWorkspace
           threadId={threadId ?? null}
+          projectId={activeThread?.project_id ?? threadProject?.id ?? activeProject?.id ?? null}
           canvasTabs={canvasTabs}
           activeCanvasId={activeCanvasId}
           onActiveCanvasChange={onActiveCanvasChange || (() => undefined)}

@@ -34,6 +34,11 @@ import {
   writeWorkspaceResume,
   type WorkspaceResumeState,
 } from '../lib/workspace-resume-state';
+import {
+  canvasDeepLinkResumeState,
+  parseCanvasWorkspaceDeepLink,
+  stripCanvasWorkspaceDeepLink,
+} from '../lib/workspace-deep-link.ts';
 import { closeInstanceTab } from '../lib/instance-tabs.ts';
 import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
 import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec";
@@ -241,7 +246,10 @@ export default function Home() {
   }, []);
 
   // Handle thread selection
-  const handleThreadSelect = useCallback(async (thread: Thread | null) => {
+  const handleThreadSelect = useCallback(async (
+    thread: Thread | null,
+    options?: { resumeOverride?: WorkspaceResumeState | null },
+  ) => {
     if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;
     const nav = ++workspaceNavRef.current;
     setMemoryManagerIntent(null);
@@ -264,7 +272,7 @@ export default function Home() {
 
     if (thread) {
       const contextKey = `thread:${thread.id}`;
-      const cached = readWorkspaceResume(contextKey);
+      const cached = options?.resumeOverride ?? readWorkspaceResume(contextKey);
       const initialTabId = cached?.tabId && cached.tabId !== 'memory-tab'
         ? cached.tabId
         : THREAD_OVERVIEW_TAB_ID;
@@ -292,6 +300,7 @@ export default function Home() {
         setThreadProject(parentProject);
         setPdfTabs(loadedTabs);
 
+        const resumeCanvasId = cached?.tabId === RESEARCH_CANVAS_TAB_ID ? cached.canvasId ?? null : null;
         const resolved = resolveWorkspaceResume({
           contextKey,
           state: cached,
@@ -303,13 +312,14 @@ export default function Home() {
           }),
           pdfTabs: loadedTabs,
           traceIds: [],
-          canvasIds: [],
+          canvasIds: resumeCanvasId ? [resumeCanvasId] : [],
         });
         setActiveTabId(resolved.tabId);
         setActiveDocumentId(resolved.documentId ?? null);
         setActiveTraceId(resolved.traceId ?? null);
-        if (resolved.canvasId) {
+        if (resolved.tabId === RESEARCH_CANVAS_TAB_ID && resolved.canvasId) {
           openCanvas({ id: resolved.canvasId, title: 'Canvas' }, { activate: false });
+          setCanvasRefreshVersion((value) => value + 1);
         }
         setActiveCanvasId(resolved.canvasId ?? null);
         setIsBrowserActive(resolved.tabId === 'browser-tab');
@@ -339,7 +349,24 @@ export default function Home() {
       setActiveTabId(resolved.tabId);
       setIsBrowserActive(false);
     }
-  }, [clearCanvasTabs, clearTraces, confirmDiscardMemoryCurator, hydrateResumedDocumentTab, memoryManagerIntent, openCanvas, persistWorkspaceResume, setActiveCanvasId, setActiveTraceId]);
+  }, [clearCanvasTabs, clearTraces, confirmDiscardMemoryCurator, hydrateResumedDocumentTab, memoryManagerIntent, openCanvas, persistWorkspaceResume, setActiveCanvasId, setActiveTraceId, setCanvasRefreshVersion]);
+
+  const canvasDeepLinkHandledRef = useRef(false);
+  useEffect(() => {
+    if (canvasDeepLinkHandledRef.current || typeof window === 'undefined') return;
+    const link = parseCanvasWorkspaceDeepLink(window.location.search);
+    if (!link) return;
+    canvasDeepLinkHandledRef.current = true;
+    stripCanvasWorkspaceDeepLink();
+    void getThread(link.threadId)
+      .then((thread) => handleThreadSelect(thread, {
+        resumeOverride: canvasDeepLinkResumeState(link.canvasId),
+      }))
+      .catch((error) => {
+        console.error('Failed to open canvas deep link', error);
+        canvasDeepLinkHandledRef.current = false;
+      });
+  }, [handleThreadSelect]);
 
   const handleProjectSelect = useCallback(async (project: Project) => {
     if (memoryManagerIntent && !confirmDiscardMemoryCurator()) return;

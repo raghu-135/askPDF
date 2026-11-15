@@ -3,14 +3,24 @@ import { Box, CircularProgress, Typography } from '@mui/material';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import { getThreadCanvas } from '../../lib/canvas-api';
 import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
+import { buildCanvasWorkspaceDeepLink } from '../../lib/workspace-deep-link.ts';
 import CanvasDocument from '../canvas/CanvasDocument';
 import NestedInstanceTabs from './NestedInstanceTabs';
 import InstanceTabCloseLabel from './InstanceTabCloseLabel';
 import WorkspaceEmptyState from './WorkspaceEmptyState';
 import type { CanvasRunTab } from './useCanvasTabs';
 
+const copyTextToClipboard = async (text: string) => {
+  try {
+    await navigator.clipboard?.writeText(text);
+  } catch {
+    window.prompt('Copy link', text);
+  }
+};
+
 export default function ResearchCanvasWorkspace({
   threadId,
+  projectId = null,
   canvasTabs,
   activeCanvasId,
   onActiveCanvasChange,
@@ -20,6 +30,7 @@ export default function ResearchCanvasWorkspace({
   refreshVersion = 0,
 }: {
   threadId: string | null;
+  projectId?: string | null;
   canvasTabs: CanvasRunTab[];
   activeCanvasId: string | null;
   onActiveCanvasChange: (canvasId: string) => void;
@@ -81,6 +92,15 @@ export default function ResearchCanvasWorkspace({
     label: (
       <InstanceTabCloseLabel
         title={tab.title}
+        copyLinkTooltip="Copy canvas link"
+        onCopyLink={threadId ? async () => {
+          const url = buildCanvasWorkspaceDeepLink({
+            threadId,
+            projectId,
+            canvasId: tab.id,
+          });
+          await copyTextToClipboard(url);
+        } : undefined}
         onClose={() => onCloseCanvas(tab.id)}
         closeTooltip="Close canvas"
       />
