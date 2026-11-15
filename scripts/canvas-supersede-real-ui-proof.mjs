@@ -86,18 +86,37 @@ async function openCanvasInWorkspace(page, admin, threadId) {
   throw new Error('No canvas was published in this thread');
 }
 
+async function listThreadCanvases(admin, threadId) {
+  const list = await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/canvases?current_only=false`, {
+    admin,
+  });
+  return list.canvases || [];
+}
+
 async function waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord) {
-  const deadline = Date.now() + 600_000;
+  const quoted = String(canvasId).toLowerCase();
+  const deadline = Date.now() + 480_000;
   let afterRecord = beforeRecord;
   while (Date.now() < deadline) {
+    const canvases = await listThreadCanvases(admin, threadId);
+    const child = canvases.find(
+      (row) => String(row.supersedes_id || '').toLowerCase() === quoted,
+    );
+    if (child) {
+      afterRecord = await resolveCanvasRecord(admin, threadId, canvasId);
+      return afterRecord;
+    }
     afterRecord = await resolveCanvasRecord(admin, threadId, canvasId);
-    const beforeSummary = String(beforeRecord.summary || beforeRecord.spec?.summary || '');
-    const afterSummary = String(afterRecord.summary || afterRecord.spec?.summary || '');
+    if (afterRecord.id !== beforeRecord.id) {
+      return afterRecord;
+    }
     const beforeSections = (beforeRecord.spec?.sections || []).map((s) => s.title).join('|');
     const afterSections = (afterRecord.spec?.sections || []).map((s) => s.title).join('|');
     const addedSummarySection = /summary/i.test(afterSections) && !/summary/i.test(beforeSections);
+    const beforeSummary = String(beforeRecord.summary || beforeRecord.spec?.summary || '');
+    const afterSummary = String(afterRecord.summary || afterRecord.spec?.summary || '');
     const summaryChanged = afterSummary.length > beforeSummary.length + 12;
-    if (afterRecord.id !== beforeRecord.id || addedSummarySection || summaryChanged) {
+    if (addedSummarySection || summaryChanged) {
       return afterRecord;
     }
     await page.waitForTimeout(8000);
@@ -199,10 +218,23 @@ async function main() {
 
     await chatRateLimitPause();
     await page.keyboard.press('Enter');
-    const assistantPreview = await waitForAssistantAnswer(page);
+    let assistantPreview = await waitForAssistantAnswer(page);
     await guard.capture(page, shots.assistant, { requireChatWorkspace: true });
 
-    const afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
+    let afterRecord = beforeRecord;
+    try {
+      afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
+    } catch (firstErr) {
+      await focusChatComposer(page);
+      const retryPrompt = `That canvas link still shows the old version. Please update and republish it with a short Summary section at the top.\n\n${deepLink}`;
+      await chatRateLimitPause();
+      await typeAndSendChat(page, retryPrompt);
+      assistantPreview = await waitForAssistantAnswer(page);
+      afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
+      if (String(assistantPreview).length < 20) {
+        throw firstErr;
+      }
+    }
 
     await openCanvasInWorkspace(page, admin, threadId);
     await page.getByRole('heading', { name: afterRecord.title }).first().waitFor({ timeout: 120_000 });
