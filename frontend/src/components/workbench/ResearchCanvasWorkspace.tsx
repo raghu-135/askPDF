@@ -61,7 +61,8 @@ export default function ResearchCanvasWorkspace({
     for (const tab of canvasTabs) {
       void hydrateTab(tab.id);
     }
-  }, [canvasTabs, hydrateTab, refreshVersion, threadId]);
+    // Intentionally omit canvasTabs: updates during hydrate must not re-run this effect.
+  }, [hydrateTab, refreshVersion, threadId]);
 
   const activeTab = canvasTabs.find((tab) => tab.id === activeCanvasId) || canvasTabs[0] || null;
 
@@ -95,9 +96,7 @@ export default function ResearchCanvasWorkspace({
         />
       ) : null}
       <Box sx={{ minHeight: 0, overflow: 'auto' }}>
-        {activeTab?.loading ? (
-          <Box sx={{ display: 'grid', placeItems: 'center', height: '100%' }}><CircularProgress size={24} /></Box>
-        ) : activeTab?.error ? (
+        {activeTab?.error ? (
           <Typography color="error" sx={{ p: 2 }}>{activeTab.error}</Typography>
         ) : activeTab?.record ? (
           <CanvasDocument
@@ -105,6 +104,8 @@ export default function ResearchCanvasWorkspace({
             createdAt={activeTab.record.created_at}
             onOpenDocumentCitation={onOpenDocumentCitation}
           />
+        ) : activeTab?.loading ? (
+          <Box sx={{ display: 'grid', placeItems: 'center', height: '100%' }}><CircularProgress size={24} /></Box>
         ) : (
           <WorkspaceEmptyState
             icon={<DashboardOutlinedIcon sx={{ fontSize: 48, opacity: 0.4 }} />}
