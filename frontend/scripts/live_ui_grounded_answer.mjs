@@ -24,6 +24,10 @@ const ADMIN = loadAdmin();
 const API = process.env.ASKPDF_E2E_API_URL || "http://127.0.0.1:8000";
 const APP = process.env.ASKPDF_E2E_APP_URL || "http://127.0.0.1:3000";
 const PDF = process.env.ASKPDF_E2E_PDF || "/tmp/attention.pdf";
+const FREE_LLM =
+  process.env.ASKPDF_E2E_FREE_LLM_MODEL ||
+  process.env.ASKPDF_E2E_LLM_MODEL ||
+  "inclusionai/ling-3.2-flash:free";
 const RUN_TAG = String(Date.now());
 
 function indexingReady(status) {
@@ -119,7 +123,7 @@ await api("PUT", `/api/threads/${thread.id}/settings`, { agent_workflow: { workf
 const chatBody = await api("POST", `/api/threads/${thread.id}/chat`, {
   thread_id: thread.id,
   question,
-  llm_model: process.env.ASKPDF_E2E_LLM_MODEL || "google/gemini-2.5-flash",
+  llm_model: FREE_LLM,
   use_web_search: false,
   use_reranker: true,
   context_window: 64000,
@@ -165,7 +169,9 @@ try {
     /\b6\b/.test(visible) &&
     !/technical error/i.test(visible) &&
     visible.toLowerCase().includes("encoder");
-  console.log(JSON.stringify({ pass: ok, answer, thread_id: thread.id, screenshot: shot }, null, 2));
+  console.log(
+    JSON.stringify({ pass: ok, answer, thread_id: thread.id, screenshot: shot, llm_model: FREE_LLM }, null, 2),
+  );
   process.exitCode = ok ? 0 : 1;
 } finally {
   await browser.close();

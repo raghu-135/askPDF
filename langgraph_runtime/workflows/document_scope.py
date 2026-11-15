@@ -162,8 +162,6 @@ def decline_when_all_document_packets_irrelevant(state: Mapping[str, Any]) -> st
     worker_scores = worker_document_retrieval_scores(state)
     if worker_scores:
         peak_worker = max(worker_scores)
-        if peak_worker >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
-            return None
         if peak_worker >= ATTACHMENT_WEAK_RETRIEVAL_SCORE and any(
             str(packet.get("content") or "").strip() for packet in doc_packets
         ):

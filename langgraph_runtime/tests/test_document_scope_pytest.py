@@ -236,7 +236,7 @@ def test_relevance_decline_skips_when_weak_scores_but_packets_have_content():
     assert decline_when_all_document_packets_irrelevant(state) is None
 
 
-def test_relevance_decline_skips_when_worker_retrieval_scores_are_strong():
+def test_relevance_decline_when_strong_scores_but_confidently_irrelevant():
     from langgraph_runtime.workflows.document_scope import decline_when_all_document_packets_irrelevant
 
     packet_id = "retrieval_worker:1"
@@ -246,7 +246,7 @@ def test_relevance_decline_skips_when_worker_retrieval_scores_are_strong():
             {
                 "id": packet_id,
                 "source_ids": [f"doc:{'a' * 32}:chunk-1"],
-                "content": "We propose the Transformer architecture.",
+                "content": "The Transformer has six encoder layers.",
                 "raw_retriever_score": 0.88,
             }
         ],
@@ -257,8 +257,9 @@ def test_relevance_decline_skips_when_worker_retrieval_scores_are_strong():
                 "confidence": 0.95,
             }
         ],
+        "question": "What is the population of Tokyo?",
     }
-    assert decline_when_all_document_packets_irrelevant(state) is None
+    assert decline_when_all_document_packets_irrelevant(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
 def test_postprocess_normalizes_attachment_scope_hedges_to_canonical_decline():

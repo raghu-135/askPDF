@@ -12,6 +12,11 @@ ART = Path(os.environ.get("ASKPDF_E2E_ARTIFACTS", "/opt/cursor/artifacts"))
 API = os.environ.get("ASKPDF_E2E_API_URL", "http://127.0.0.1:8000")
 APP = os.environ.get("ASKPDF_E2E_APP_URL", "http://127.0.0.1:3000")
 DEFAULT_PDF = Path(os.environ.get("ASKPDF_E2E_PDF", "/tmp/attention.pdf"))
+# Pinned free model for UI/smoke (fixed context; must support tool calls). Not for quality matrices.
+DEFAULT_FREE_LLM_MODEL = os.environ.get(
+    "ASKPDF_E2E_FREE_LLM_MODEL",
+    "inclusionai/ling-3.2-flash:free",
+)
 
 
 def load_admin_token() -> str:
