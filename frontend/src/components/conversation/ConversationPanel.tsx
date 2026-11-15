@@ -161,7 +161,7 @@ export function ConversationHeader({
 
   return (
     <WorkbenchToolbar
-      sx={[{ mb: 0.5, pt: 0.5, flexShrink: 0 }, ...(Array.isArray(sx) ? sx : sx ? [sx] : [])]}
+      sx={[{ mb: 0.5, flexShrink: 0 }, ...(Array.isArray(sx) ? sx : sx ? [sx] : [])]}
     >
       {leading}
       {beforeModelControls}

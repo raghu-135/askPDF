@@ -5,4 +5,21 @@ export const getTheme = (darkMode: boolean) =>
     palette: {
       mode: darkMode ? 'dark' : 'light',
     },
+    components: {
+      MuiTextField: {
+        defaultProps: {
+          variant: 'filled',
+        },
+      },
+      MuiSelect: {
+        defaultProps: {
+          variant: 'filled',
+        },
+      },
+      MuiFormControl: {
+        defaultProps: {
+          variant: 'filled',
+        },
+      },
+    },
   });

@@ -23,7 +23,7 @@ import {
   CONTEXT_WINDOW_SPLIT_HELP,
   SLICE_HELP,
 } from '../../lib/context-budget-help';
-import { workbenchControlOutlineSx } from '../workbench/WorkbenchToolbar';
+import { workbenchControlSx } from '../workbench/WorkbenchToolbar';
 
 type ContextBudgetMenuProps = {
   contextWindow: number;
@@ -70,7 +70,7 @@ export function ContextBudgetMenu({
           flex: '0 0 auto',
           justifyContent: 'space-between',
           px: 1,
-          ...workbenchControlOutlineSx,
+          ...workbenchControlSx,
         }}
       >
         Context {contextWindow > 0 ? contextWindow.toLocaleString() : '—'}
@@ -95,7 +95,7 @@ export function ContextBudgetMenu({
           flex: '0 0 auto',
           justifyContent: 'space-between',
           px: 1,
-          ...workbenchControlOutlineSx,
+          ...workbenchControlSx,
           borderColor: highlight ? 'primary.main' : 'divider',
           borderWidth: highlight ? 2 : 1,
         }}

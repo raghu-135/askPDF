@@ -14,16 +14,22 @@ function sxList(sx?: SxProps<Theme>) {
   return Array.isArray(sx) ? sx : sx ? [sx] : [];
 }
 
-export const workbenchControlOutlineSx = {
-  '& fieldset': {
-    borderColor: 'transparent',
-    borderWidth: '1px',
+export const workbenchControlSx = {
+  '&:before, &:after': {
+    display: 'none',
   },
-  '&:hover fieldset': {
-    borderColor: 'primary.main',
+  bgcolor: 'action.hover',
+  borderRadius: 1,
+  transition: (theme: Theme) =>
+    theme.transitions.create(['background-color', 'box-shadow'], {
+      duration: theme.transitions.duration.shorter,
+    }),
+  '&:hover:not(.Mui-disabled)': {
+    bgcolor: 'action.selected',
   },
-  '&.Mui-focused fieldset': {
-    borderColor: 'primary.main',
+  '&.Mui-focused': {
+    bgcolor: 'action.selected',
+    boxShadow: (theme: Theme) => `inset 0 0 0 1px ${theme.palette.primary.main}`,
   },
 };
 
@@ -124,7 +130,7 @@ export function WorkbenchSelect({
         label={label}
         aria-label={ariaLabel}
         onChange={(event) => onChange(String(event.target.value))}
-        sx={workbenchControlOutlineSx}
+        sx={workbenchControlSx}
       >
         {children}
       </Select>
@@ -183,7 +189,7 @@ export function WorkbenchAutocomplete({
           aria-label={ariaLabel}
           size="small"
           sx={{
-            '& .MuiOutlinedInput-root': workbenchControlOutlineSx,
+            '& .MuiFilledInput-root': workbenchControlSx,
           }}
         />
       )}
