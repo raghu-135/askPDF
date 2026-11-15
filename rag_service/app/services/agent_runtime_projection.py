@@ -274,6 +274,22 @@ class AgentRuntimeProjection:
                 "duration_ms": duration_ms,
             }
         )
+        if run_id:
+            try:
+                from app.services.canvas_service import CanvasService
+
+                await CanvasService().link_published_canvases_to_turn(
+                    thread_id,
+                    agent_run_id=str(run_id),
+                    chat_turn_id=turn.id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "link_published_canvases_to_turn failed for thread %s run %s: %s",
+                    thread_id,
+                    run_id,
+                    exc,
+                )
         if run_id and repository is not None:
             if hasattr(repository, "update_runtime_projection"):
                 await repository.update_runtime_projection(

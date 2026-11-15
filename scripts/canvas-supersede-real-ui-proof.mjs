@@ -207,6 +207,7 @@ async function main() {
     composer: 'chat-quote-canvas-1440x900.png',
     assistant: 'chat-assistant-reply-1440x900.png',
     after: 'canvas-after-same-id-1440x900.png',
+    reload: 'chat-after-reload-1440x900.png',
   };
 
   try {
@@ -247,52 +248,31 @@ async function main() {
 
     await chatRateLimitPause();
     await page.keyboard.press('Enter');
-
-    async function waitForUpdateOutcome() {
-      return Promise.race([
-        waitForAssistantAnswer(page).then((text) => ({ kind: 'assistant', text })),
-        waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord).then((record) => ({
-          kind: 'superseded',
-          record,
-        })),
-      ]);
+    const assistantPreview = await waitForAssistantAnswer(page);
+    if (!/Open trace|research canvas|Published/i.test(assistantPreview)) {
+      throw new Error(`Assistant reply lacks visible chat content: ${assistantPreview.slice(0, 120)}`);
     }
+    await guard.capture(page, shots.assistant, { requireChatWorkspace: true });
 
-    let outcome = await waitForUpdateOutcome();
-  let assistantPreview = outcome.kind === 'assistant' ? outcome.text : 'Canvas updated.';
-    if (outcome.kind === 'assistant') {
-      await guard.capture(page, shots.assistant, { requireChatWorkspace: true });
-    } else {
-      await page.waitForTimeout(1500);
-      await guard.capture(page, shots.assistant, { requireChatWorkspace: true });
-    }
-
-    let afterRecord = outcome.kind === 'superseded' ? outcome.record : beforeRecord;
-    if (afterRecord.id === beforeRecord.id) {
-      try {
-        afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
-      } catch (firstErr) {
-        await focusChatComposer(page);
-        const retryPrompt =
-          'Please update and republish that canvas with a short summary at the top, keeping all existing claims.\n\n'
-          + deepLink;
-        await chatRateLimitPause();
-        await typeAndSendChat(page, retryPrompt);
-        outcome = await waitForUpdateOutcome();
-        assistantPreview = outcome.kind === 'assistant' ? outcome.text : assistantPreview;
-        afterRecord =
-          outcome.kind === 'superseded'
-            ? outcome.record
-            : await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
-        if (afterRecord.id === beforeRecord.id) {
-          throw firstErr;
-        }
-      }
-    }
+    let afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
 
     await openCanvasInWorkspace(page, admin, threadId);
     await page.getByRole('heading', { name: afterRecord.title }).first().waitFor({ timeout: 120_000 });
     await guard.capture(page, shots.after, { requireChatWorkspace: true });
+
+    const persisted = await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/messages?limit=20`, { admin });
+    const messageCount = Array.isArray(persisted.messages) ? persisted.messages.length : 0;
+    if (messageCount < 4) {
+      throw new Error(`Expected at least 4 persisted messages after update, got ${messageCount}`);
+    }
+
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
+    await waitForNoLoadingShell(page);
+    await waitForThreadWorkspaceReady(page);
+    await page.getByTestId('chat-message-list').waitFor({ timeout: 120_000 });
+    await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
+      .waitFor({ state: 'visible', timeout: 120_000 });
+    await guard.capture(page, shots.reload, { requireChatWorkspace: true });
 
     const afterMetrics = canvasSpecMetrics(afterRecord.spec);
     if (
@@ -329,6 +309,7 @@ async function main() {
       source_count_after: afterMetrics.sourceCount,
       prompts: { create: createPrompt, update: 'Add a short summary section at the top. (+ pasted link)' },
       assistant_preview: assistantPreview.slice(0, 500),
+      persisted_message_count: messageCount,
       screenshots: screenshotMeta,
       captured_at: new Date().toISOString(),
     };

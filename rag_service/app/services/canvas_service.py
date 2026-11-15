@@ -349,19 +349,40 @@ class CanvasService:
                 continue
         return payloads
 
+    async def link_published_canvases_to_turn(
+        self,
+        thread_id: str,
+        *,
+        agent_run_id: str,
+        chat_turn_id: str,
+    ) -> int:
+        if not str(agent_run_id or "").strip() or not str(chat_turn_id or "").strip():
+            return 0
+        return await self._canvases.assign_chat_turn_for_agent_run(
+            thread_id,
+            agent_run_id=str(agent_run_id).strip(),
+            chat_turn_id=str(chat_turn_id).strip(),
+        )
+
     async def refs_by_turn(self, thread_id: str) -> dict[str, dict[str, str]]:
         refs: dict[str, dict[str, str]] = {}
-        canvases = await self._canvases.list_for_thread(thread_id)
-        run_ids = [item.agent_run_id for item in canvases if item.agent_run_id and not item.chat_turn_id]
+        canvases = await self._canvases.list_for_thread(thread_id, current_only=False)
+        run_ids = {str(item.agent_run_id) for item in canvases if item.agent_run_id}
         turns_by_run: dict[str, str] = {}
         for agent_run_id in run_ids:
             turn = await self._messages.get_turn_by_agent_run_id(thread_id, agent_run_id)
             if turn is not None:
-                turns_by_run[agent_run_id] = turn.id
-        for item in canvases:
-            turn_id = item.chat_turn_id or turns_by_run.get(item.agent_run_id or "")
-            if turn_id and turn_id not in refs:
-                refs[turn_id] = {"id": item.id, "title": _canvas_title(item)}
+                turns_by_run[str(agent_run_id)] = turn.id
+        for item in sorted(canvases, key=lambda row: (row.created_at or row.id, row.id)):
+            turn_id = item.chat_turn_id or turns_by_run.get(str(item.agent_run_id or ""))
+            if not turn_id:
+                continue
+            title = _canvas_title(item)
+            entry = {"id": str(item.id), "title": title}
+            if turn_id in refs:
+                refs[turn_id] = entry
+            else:
+                refs[turn_id] = entry
         return refs
 
 
