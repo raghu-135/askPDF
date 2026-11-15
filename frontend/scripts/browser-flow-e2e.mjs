@@ -1,23 +1,32 @@
 #!/usr/bin/env node
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
 
 const BASE = process.env.ASKPDF_E2E_BASE_URL || 'http://127.0.0.1:3000';
-const API_BASE = process.env.ASKPDF_E2E_API_URL || 'http://127.0.0.1:8000';
 const ART = process.env.ASKPDF_E2E_ARTIFACTS || '/opt/cursor/artifacts';
 const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'inclusionai/ling-3.2-flash:free';
 const VP = { width: 1440, height: 900, name: '1440x900' };
 
 fs.mkdirSync(ART, { recursive: true });
 
+const shotMd5s = new Map();
+
 async function verifyShot(filePath) {
   const meta = await sharp(filePath).metadata();
   if (meta.width !== VP.width || meta.height !== VP.height) {
     throw new Error(`${filePath}: expected ${VP.width}x${VP.height}, got ${meta.width}x${meta.height}`);
   }
-  console.log(`verified ${filePath} ${meta.width}x${meta.height}`);
+  const md5 = crypto.createHash('md5').update(fs.readFileSync(filePath)).digest('hex');
+  for (const [other, otherHash] of shotMd5s) {
+    if (otherHash === md5) {
+      throw new Error(`Duplicate screenshot: ${path.basename(filePath)} has the same md5 as ${other} (${md5})`);
+    }
+  }
+  shotMd5s.set(path.basename(filePath), md5);
+  console.log(`verified ${filePath} ${meta.width}x${meta.height} md5=${md5}`);
 }
 
 async function shot(page, file) {
@@ -131,6 +140,21 @@ async function setBrowserAskMode(page) {
   throw new Error('Could not set browser access mode to Ask');
 }
 
+async function captureBrowserAskModeProof(page) {
+  await openConversation(page);
+  await setBrowserAskMode(page);
+  const askBtn = page.getByRole('button', { name: /^Ask before the agent uses the workbench browser$/i });
+  await askBtn.waitFor({ state: 'visible', timeout: 15000 });
+  await askBtn.scrollIntoViewIfNeeded();
+  await askBtn.hover();
+  const tooltip = page.getByRole('tooltip').filter({ hasText: /Ask before the agent uses the workbench browser/i });
+  await tooltip.waitFor({ state: 'visible', timeout: 8000 });
+  const composer = page.getByPlaceholder(/Ask a question about your documents/i).first();
+  await composer.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(600);
+  await shot(page, 'e2e-02-browser-access-ask-mode-1440x900.png');
+}
+
 async function openBrowserTab(page) {
   const browserTab = page.getByRole('tab', { name: /^Browser$/i }).first();
   await browserTab.waitFor({ timeout: 30000 });
@@ -146,19 +170,6 @@ async function openConversation(page) {
 }
 
 let cachedThreadId = null;
-
-async function resolveThreadId(page) {
-  if (cachedThreadId) return cachedThreadId;
-  const fromUrl = await page.evaluate(() => {
-    const m = window.location.pathname.match(/threads\/([^/]+)/);
-    return m ? m[1] : null;
-  });
-  if (fromUrl) {
-    cachedThreadId = fromUrl;
-    return fromUrl;
-  }
-  throw new Error('thread id not found');
-}
 
 async function sendChat(page, text) {
   const composer = page.getByPlaceholder(/Ask a question about your documents/i).first();
@@ -185,29 +196,32 @@ await pickModel(page);
 await selectRouterWorkflow(page);
 await openConversation(page);
 await setWebSearchOff(page);
-await setBrowserAskMode(page);
-await shot(page, 'e2e-02-browser-access-ask-mode-1440x900.png');
+await captureBrowserAskModeProof(page);
 await openBrowserTab(page);
 if (process.env.ASKPDF_E2E_HEADLESS === '0') {
   await page.waitForTimeout(12000);
 }
-await openConversation(page);
-await shot(page, 'e2e-01-browser-workbench-stream-1440x900.png');
-await openBrowserTab(page);
+await shot(page, 'e2e-06-single-agent-browser-tab-1440x900.png');
 
 const prompt =
   'Use the shared workbench browser: open https://example.com and answer in one sentence what this page says is for (quote the line from the page body that explains the domain’s purpose—not the document title). I have no uploaded documents about this page.';
 await openConversation(page);
 await sendChat(page, prompt);
 
+let approve;
 try {
-  var approve = await waitForApproval(page);
+  approve = await waitForApproval(page);
 } catch (error) {
   await shot(page, 'e2e-failure-before-approval-1440x900.png');
   throw error;
 }
+await page.getByTestId('tool-approval-argument-preview').filter({ hasText: /https:\/\/example\.com/i }).waitFor({
+  state: 'visible',
+  timeout: 30000,
+});
 await shot(page, 'e2e-03-tool-approval-card-1440x900.png');
 await approve.click();
+
 const bodyQuote = /documentation examples|without needing permission|illustrative examples/i;
 const answerDeadline = Date.now() + 600000;
 let answerVisible = false;
@@ -234,6 +248,7 @@ await sendChat(
   'Save the current workbench browser page to this thread as a document, then confirm the file name.',
 );
 const saveApprove = await waitForApproval(page, 240000);
+await page.getByTestId('tool-approval-argument-preview').waitFor({ state: 'visible', timeout: 30000 });
 await shot(page, 'e2e-03b-save-tool-approval-card-1440x900.png');
 await saveApprove.click();
 await page
@@ -252,10 +267,8 @@ const savedDoc = page
   .first();
 await savedDoc.waitFor({ state: 'visible', timeout: 240000 });
 await shot(page, 'e2e-05-page-saved-to-thread-1440x900.png');
-await openBrowserTab(page);
-await page.waitForTimeout(2000);
-await shot(page, 'e2e-06-single-agent-browser-tab-1440x900.png');
 
 await context.close();
 await browser.close();
 console.log('browser-flow-e2e complete');
+console.log(JSON.stringify(Object.fromEntries(shotMd5s), null, 2));

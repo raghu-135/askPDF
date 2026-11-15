@@ -7,6 +7,26 @@ import type { AgentRunPendingInterrupt, AgentRunResumeAction } from '../../lib/a
 import { AgentRunResumeAction as ResumeAction, HitlSelectionMode } from '../../lib/enums';
 import { ResizableDecisionPanel } from './ResizableDecisionPanel';
 
+function proposedToolArgumentPreview(
+  proposedTool: Record<string, unknown> | null,
+): string | null {
+  if (!proposedTool?.arguments || typeof proposedTool.arguments !== 'object') {
+    return null;
+  }
+  const args = proposedTool.arguments as Record<string, unknown>;
+  const toolName = String(proposedTool.name || '').trim();
+  if (toolName === 'browser_navigate' && typeof args.url === 'string' && args.url.trim()) {
+    return args.url.trim();
+  }
+  const keys = Object.keys(args);
+  if (keys.length === 1) {
+    const key = keys[0];
+    const value = args[key];
+    return `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`;
+  }
+  return JSON.stringify(args, null, 2);
+}
+
 export type HumanReviewScopeOption = {
   id: string;
   label: string;
@@ -92,7 +112,7 @@ export function HumanReviewDecisionPanel({
     </Box>
   );
 
-  const stickyFooterLayout = isToolApproval;
+  const toolArgumentPreview = isToolApproval ? proposedToolArgumentPreview(proposedTool) : null;
 
   return (
     <ResizableDecisionPanel
@@ -100,28 +120,26 @@ export function HumanReviewDecisionPanel({
       variant="approval"
       rootRef={rootRef}
       horizontalInset={1}
-      fillColumn={stickyFooterLayout}
-      defaultRatio={stickyFooterLayout ? 0.42 : 0.3}
-      narrowDefaultRatio={stickyFooterLayout ? 0.46 : 0.32}
-      showResizeHandle={!stickyFooterLayout}
-      footer={stickyFooterLayout ? (
-        <>
-          {actionButtons}
-          {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
-          {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
-        </>
-      ) : undefined}
+      fillColumn={false}
+      defaultRatio={isToolApproval ? 0.22 : 0.3}
+      narrowDefaultRatio={isToolApproval ? 0.26 : 0.32}
+      showResizeHandle={!isToolApproval}
     >
-      <Box data-testid="chat-human-review-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, minWidth: 0 }}>
-        {(interrupt.prompt || interrupt.body) && (
+      <Box data-testid="chat-human-review-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+        {!isToolApproval && (interrupt.prompt || interrupt.body) && (
           <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {interrupt.prompt || interrupt.body}
           </Typography>
         )}
-        {isToolApproval && proposedTool?.arguments && (
-          <Box component="pre" sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem', maxHeight: 200, overflow: 'auto' }}>
-            {JSON.stringify(proposedTool.arguments, null, 2)}
-          </Box>
+        {isToolApproval && toolArgumentPreview && (
+          <Typography
+            variant="body2"
+            component="div"
+            data-testid="tool-approval-argument-preview"
+            sx={{ px: 0.5, py: 0.25, fontFamily: 'monospace', fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+          >
+            {toolArgumentPreview}
+          </Typography>
         )}
         {selectableOptions.length > 0 && (actions.has(ResumeAction.ApproveSelected) || editingScope) && (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
@@ -150,13 +168,9 @@ export function HumanReviewDecisionPanel({
             sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'action.hover' } }}
           />
         )}
-        {!stickyFooterLayout ? (
-          <>
-            {actionButtons}
-            {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
-            {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
-          </>
-        ) : null}
+        {actionButtons}
+        {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
+        {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
       </Box>
     </ResizableDecisionPanel>
   );

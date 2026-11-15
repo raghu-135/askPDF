@@ -79,6 +79,27 @@ chown -R abc:abc /config/.config/BraveSoftware
 chown -R abc:abc /config/.cache
 rm -f /config/.config/BraveSoftware/Brave-Browser/Singleton*
 
+PREF_DIR="/config/.config/BraveSoftware/Brave-Browser/Default"
+mkdir -p "${PREF_DIR}"
+python3 <<'PY'
+import json
+from pathlib import Path
+prefs_path = Path("/config/.config/BraveSoftware/Brave-Browser/Default/Preferences")
+prefs_path.parent.mkdir(parents=True, exist_ok=True)
+prefs = {}
+if prefs_path.exists():
+    try:
+        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        prefs = {}
+prefs.setdefault("brave", {})["p3a_enabled"] = False
+prefs["brave_stats_reporting_enabled"] = False
+prefs["user_experience_metrics"] = {"personalization_data_consent_enabled": False}
+prefs.setdefault("profile", {}).setdefault("default_content_setting_values", {})["notifications"] = 2
+prefs_path.write_text(json.dumps(prefs), encoding="utf-8")
+PY
+chown -R abc:abc /config/.config/BraveSoftware
+
 exec s6-setuidgid abc /usr/bin/brave-browser \
     --no-first-run \
     --no-sandbox \
@@ -88,10 +109,12 @@ exec s6-setuidgid abc /usr/bin/brave-browser \
     --start-maximized \
     --test-type \
     --user-data-dir=/config/.config/BraveSoftware/Brave-Browser \
+    --disable-features=Translate,TranslateUI,BraveP3A,BraveVPN,BraveAdsInContent,BraveSearchPromotion,BraveOnboarding,BraveIPFS,BraveWaybackMachine \
     "${BRAVE_DISPLAY_ARGS[@]}" \
     --remote-debugging-address=127.0.0.1 \
     --remote-debugging-port=9222 \
     --no-default-browser-check \
+    --lang=en-US \
     about:blank
 EOF
 RUN chmod +x /etc/s6-overlay/s6-rc.d/browser-cdp/run

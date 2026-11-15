@@ -97,7 +97,7 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=Etc/UTC
-      - BRAVE_CLI=--remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --no-first-run --no-default-browser-check --disable-features=Translate,TranslateUI --lang=en-US
+      - BRAVE_CLI=--remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --no-first-run --no-default-browser-check --disable-features=Translate,TranslateUI,BraveP3A,BraveVPN,BraveAdsInContent,BraveSearchPromotion,BraveOnboarding --lang=en-US
       - BROWSER_DEBUG_URL=127.0.0.1:9222
       - CUSTOM_PORT=3000
       - SELKIES_CLIPBOARD_ENABLED=true

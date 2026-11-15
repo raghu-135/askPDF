@@ -1487,7 +1487,6 @@ class NodeRegistry:
         started = time.perf_counter()
         from runtime_protocol.research_gaps import (
             canvas_absence_limitations_suppressed,
-            filter_answer_format_meta_limitations,
             filter_false_canvas_absence_limitations,
         )
 
@@ -1536,6 +1535,11 @@ class NodeRegistry:
             "Evaluate completeness, factual grounding, citation/source alignment, uncertainty, and instruction following. "
             "Do not rewrite the answer. Return only JSON with pass (boolean), reason (string), and "
             "issues (array of concise strings).\n\n"
+            "Evaluation rules:\n"
+            "- List only substantive issues: unsupported claims, wrong facts, or missing required content relative to the question.\n"
+            "- Do not list issues about brevity, sentence count, answer length, formatting, quotation style, or citation layout when the answer is factually grounded.\n"
+            "- Do not criticize title-only vs body evidence when the answer content matches body text in the evidence.\n"
+            "- When the answer satisfies the question using the evidence, set pass to true and return an empty issues array.\n\n"
             f"Question:\n{compact_preview(state.get('question'), limit=3000)}\n\n"
             f"Draft answer:\n{compact_preview(state.get('final_answer'), limit=10000)}\n\n"
             f"Evidence:\n{compact_preview(state.get('evidence') or _format_prefetch_summary(state.get('pre_fetch_bundle') or {}), limit=12000)}"
@@ -1574,7 +1578,6 @@ class NodeRegistry:
         ][:MAX_ANSWER_QUALITY_ISSUES]
         if canvas_absence_limitations_suppressed(state):
             issues = filter_false_canvas_absence_limitations(issues)
-        issues = filter_answer_format_meta_limitations(issues)
         report = {
             "passed": passed,
             "reason": compact_preview(parsed.get("reason"), limit=800),
