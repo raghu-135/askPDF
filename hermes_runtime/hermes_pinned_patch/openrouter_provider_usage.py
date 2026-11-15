@@ -43,11 +43,14 @@ def _usage_mapping(usage: Any) -> Mapping[str, Any] | None:
 def openrouter_usage_accounting_enabled(*, base_url: str, model: str, provider: str | None = None) -> bool:
     """True when chat completions should ask OpenRouter for usage accounting."""
 
+    accounting_flag = os.environ.get("ASKPDF_OPENROUTER_USAGE_ACCOUNTING", "").strip().lower()
+    if accounting_flag in {"0", "false", "no", "off"}:
+        return False
+    if accounting_flag in {"1", "true", "yes", "on"}:
+        return True
     if (provider or "").strip().lower() == "openrouter":
         return True
     if "openrouter.ai" in str(base_url or "").casefold():
-        return True
-    if os.environ.get("ASKPDF_OPENROUTER_USAGE_ACCOUNTING", "").strip().lower() in {"1", "true", "yes", "on"}:
         return True
     parsed = urlparse(str(base_url or "").strip())
     host = (parsed.hostname or "").casefold()

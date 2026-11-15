@@ -9,9 +9,12 @@ from typing import Any, Dict, Mapping
 from langchain_core.runnables import RunnableConfig
 
 from langgraph_runtime.control_plane_client import delegate_sync
-from langgraph_runtime.workflows.corrective_nodes import (
+from langgraph_runtime.workflows.document_scope import (
+    ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE,
     DOCUMENT_SCOPE_DECLINE_ANSWER,
-    ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE,
+    attachment_retrieval_scope_decline,
+    prefetch_document_retrieval_scores,
+    thread_has_attached_documents,
 )
 from langgraph_runtime.workflows.enums import AutoOrchestratorRoute, NodeEventStatus
 from langgraph_runtime.workflows.runtime_invocation import append_event, log_node_end
@@ -68,48 +71,22 @@ def auto_scope_decline(state: Mapping[str, Any], *, workflow_id: str = "") -> st
         return DOCUMENT_SCOPE_DECLINE_ANSWER
     if workflow_id != ROUTER_WORKFLOW_ID:
         return None
-    bundle = state.get("pre_fetch_bundle") or {}
-    attached = bool(state.get("document_sources"))
-    if isinstance(bundle, dict):
-        documents = bundle.get("documents")
-        if isinstance(documents, list) and documents:
-            attached = True
-        document_sources = bundle.get("document_sources")
-        if isinstance(document_sources, list) and document_sources:
-            attached = True
-    if not attached:
+    if not thread_has_attached_documents(state):
         return None
-
-    def _bundle_sources() -> list[Dict[str, Any]]:
-        sources: list[Dict[str, Any]] = []
-        if isinstance(bundle, dict):
-            raw = bundle.get("document_sources")
-            if isinstance(raw, list):
-                sources.extend(item for item in raw if isinstance(item, dict))
-        raw_state = state.get("document_sources")
-        if isinstance(raw_state, list):
-            sources.extend(item for item in raw_state if isinstance(item, dict))
-        return sources
-
-    def _prefetch_has_supporting_evidence() -> bool:
-        for key in ("document_evidence_text", "web_search_evidence_text", "web_evidence_text"):
-            if isinstance(bundle, dict) and str(bundle.get(key) or "").strip():
-                if key != "document_evidence_text":
-                    return True
-                sources = _bundle_sources()
-                scores = [
-                    float(item.get("score"))
-                    for item in sources
-                    if isinstance(item.get("score"), (int, float))
-                ]
-                if not scores:
-                    return True
-                return max(scores) >= ORCHESTRATOR_IRRELEVANT_RETRIEVAL_SCORE
-        return False
-
-    if _prefetch_has_supporting_evidence():
-        return None
-    return DOCUMENT_SCOPE_DECLINE_ANSWER
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    for key in ("web_search_evidence_text", "web_evidence_text"):
+        if str(bundle.get(key) or "").strip():
+            return None
+    if str(bundle.get("document_evidence_text") or "").strip():
+        scores = prefetch_document_retrieval_scores(state)
+        if not scores or max(scores) >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
+            return None
+    score_decline = attachment_retrieval_scope_decline(state)
+    if score_decline:
+        return score_decline
+    if not str(bundle.get("document_evidence_text") or "").strip():
+        return DOCUMENT_SCOPE_DECLINE_ANSWER
+    return None
 
 
 def _document_count(state: Mapping[str, Any]) -> int:

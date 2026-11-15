@@ -43,6 +43,7 @@ from langgraph_runtime.workflows.decision_nodes import (
 from langgraph_runtime.workflows.evidence import (
     append_evidence_packet as _append_evidence_packet,
     combine_evidence as _combine_evidence,
+    evidence_packets,
     evidence_text_limit as _evidence_text_limit,
     format_prefetch_summary as _format_prefetch_summary,
     prefetch_refs as _prefetch_refs,
@@ -123,7 +124,11 @@ from langgraph_runtime.workflows.runtime_invocation import (
     tool_config as _tool_config,
     tool_config_for_node as _tool_config_for_node,
 )
-from langgraph_runtime.workflows.workers import run_tool_worker, tool_worker_spec
+from langgraph_runtime.workflows.workers import (
+    _evidence_packet_scores_for_trace,
+    run_tool_worker,
+    tool_worker_spec,
+)
 from langgraph_runtime.workflows.routes import (
     evaluator_route,
     hitl_gate_route,
@@ -453,6 +458,13 @@ class NodeRegistry:
                 "elapsed_ms": latest_node_event.get("elapsed_ms"),
                 "warnings": latest_node_event.get("warnings") or latest_node_event.get("warning_codes"),
                 "detail": detail,
+                "evidence_packet_scores": latest_node_event.get("evidence_packet_scores"),
+                "evidence_packet_count": latest_node_event.get("evidence_packet_count"),
+                "output_summary": {
+                    **(latest_node_event.get("output_preview") if isinstance(latest_node_event.get("output_preview"), dict) else {}),
+                    "evidence_packet_scores": latest_node_event.get("evidence_packet_scores"),
+                    "evidence_packet_count": latest_node_event.get("evidence_packet_count"),
+                },
             }
             if execution_event_sink is not None:
                 await execution_event_sink.emit(event_name, completion_data)
@@ -647,6 +659,10 @@ class NodeRegistry:
         except Exception as exc:
             _append_failed_node_event(state, config, WorkflowNodeType.CONTEXT_LOADER.value, started, exc)
             raise
+        prefetch_packet_scores = _evidence_packet_scores_for_trace(
+            evidence_packets(state) if state.get("evidence_packets") else [],
+            bundle,
+        )
         data = {
             "status": NodeEventStatus.COMPLETED.value,
             "document_source_count": len(bundle.get("document_sources", [])),
@@ -654,6 +670,7 @@ class NodeRegistry:
             "used_chat_id_count": len(bundle.get("used_chat_ids", [])),
             "used_memory_id_count": len(bundle.get("durable_memory_refs", [])),
             "memory_retrieval": bundle.get("durable_memory_retrieval_debug", {}),
+            "evidence_packet_scores": prefetch_packet_scores,
             "input_preview": {
                 "question": compact_preview(state.get("question")),
                 "settings": {
@@ -668,6 +685,7 @@ class NodeRegistry:
                 "semantic_history": compact_preview(bundle.get("semantic_history_text")),
                 "document_evidence": compact_preview(bundle.get("document_evidence_text")),
                 "durable_memory": compact_preview(bundle.get("durable_memory_text")),
+                "evidence_packet_scores": prefetch_packet_scores,
             },
         }
         _log_node_end(state, WorkflowNodeType.CONTEXT_LOADER.value, started, data)
@@ -1164,12 +1182,16 @@ class NodeRegistry:
             "web_source_count": len(output.get("web_sources") or []),
         })
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        worker_event = (output.get("node_events") or [{}])[-1] if isinstance(output.get("node_events"), list) else {}
+        packet_scores = worker_event.get("evidence_packet_scores") if isinstance(worker_event, dict) else None
         await emit(f"worker.{status}", {
             "attempt": attempt,
             "elapsed_ms": elapsed_ms,
             "evidence_packet_count": len(output.get("evidence_packets") or []),
             "document_source_count": len(output.get("document_sources") or []),
             "web_source_count": len(output.get("web_sources") or []),
+            "evidence_packet_scores": packet_scores,
+            "visit_index": int(item.get("ordinal") or 0) + 1,
         })
         return worker_terminal_delta(
             {**item, "dispatch_node_id": state.get("dispatch_node_id")},
@@ -1489,8 +1511,36 @@ class NodeRegistry:
             canvas_absence_limitations_suppressed,
             filter_false_canvas_absence_limitations,
         )
+        from langgraph_runtime.workflows.answer_numeric_grounding import answer_numeric_grounding_issues
 
         revision_count = max(0, int(state.get("answer_revision_count") or 0))
+        numeric_issues = answer_numeric_grounding_issues(state)
+        if numeric_issues:
+            route = (
+                AnswerQualityRoute.REVISE.value
+                if revision_count < MAX_ANSWER_REVISIONS
+                else AnswerQualityRoute.FINALIZE_CAUTIOUS.value
+            )
+            report = {
+                "passed": False,
+                "reason": "numeric_grounding_violation",
+                "issues": numeric_issues,
+                "revision_count": revision_count,
+                "contract_repair": False,
+            }
+            data = {
+                "status": NodeEventStatus.COMPLETED.value,
+                "answer_quality_route": route,
+                "answer_quality_report": report,
+                "event_name": "numeric_grounding_violation",
+            }
+            _log_node_end(state, WorkflowNodeType.ANSWER_EVALUATOR.value, started, data)
+            return {
+                "answer_quality_route": route,
+                "answer_quality_report": report,
+                "answer_revision_count": revision_count + (1 if route == AnswerQualityRoute.REVISE.value else 0),
+                "node_events": _append_event(state, WorkflowNodeType.ANSWER_EVALUATOR.value, data, started=started, config=config),
+            }
         scope_decline = document_scope_decline(state)
         if state.get("document_scope_declined") and scope_decline and str(state.get("final_answer") or "") == scope_decline:
             report = {
@@ -1586,12 +1636,6 @@ class NodeRegistry:
             "contract_repair": contract_repair,
         }
         final_answer = str(state.get("final_answer") or "")
-        if (
-            route == AnswerQualityRoute.FINALIZE_CAUTIOUS.value
-            and report["issues"]
-            and not canvas_absence_limitations_suppressed(state)
-        ):
-            final_answer = final_answer.rstrip() + "\n\nLimitations: " + "; ".join(report["issues"])
         data = {
             "status": NodeEventStatus.COMPLETED.value,
             "answer_quality_route": route,
