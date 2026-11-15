@@ -236,14 +236,21 @@ await sendChat(
 const saveApprove = await waitForApproval(page, 240000);
 await shot(page, 'e2e-03b-save-tool-approval-card-1440x900.png');
 await saveApprove.click();
-await page.waitForTimeout(30000);
+await page
+  .locator('div.MuiPaper-root')
+  .filter({ hasText: /Saved browser page to thread/i })
+  .last()
+  .waitFor({ state: 'visible', timeout: 420000 });
+await page.waitForTimeout(20000);
+await openConversation(page);
 const docsTab = page.getByRole('tab', { name: /^Documents$/i }).first();
 await docsTab.click();
-await page.waitForTimeout(2500);
-await page
-  .getByRole('button', { name: /Example Domain|example\.com/i })
-  .first()
-  .waitFor({ timeout: 180000 });
+await page.waitForTimeout(3000);
+const savedDoc = page
+  .locator('[aria-label="Open documents"]')
+  .getByRole('tab', { name: /Example Domain/i })
+  .first();
+await savedDoc.waitFor({ state: 'visible', timeout: 240000 });
 await shot(page, 'e2e-05-page-saved-to-thread-1440x900.png');
 await openBrowserTab(page);
 await page.waitForTimeout(2000);
