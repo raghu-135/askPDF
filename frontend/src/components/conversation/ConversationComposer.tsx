@@ -80,6 +80,7 @@ export function ConversationComposer({
     <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch', px: 1 }}>
       <TextField
         inputRef={inputRef}
+        inputProps={{ 'data-testid': 'chat-composer-input' }}
         fullWidth
         variant="outlined"
         multiline
