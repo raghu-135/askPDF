@@ -149,7 +149,11 @@ export function HumanReviewDecisionPanel({
         </Typography>
       )}
       {isToolApproval && proposedTool?.arguments && (
-        <Box component="pre" sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem', maxHeight: 200, overflow: 'auto' }}>
+        <Box
+          data-testid="tool-approval-argument-preview"
+          component="pre"
+          sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem', maxHeight: 200, overflow: 'auto' }}
+        >
           {JSON.stringify(proposedTool.arguments, null, 2)}
         </Box>
       )}

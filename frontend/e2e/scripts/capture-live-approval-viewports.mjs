@@ -46,7 +46,9 @@ async function selectRouter(page) {
   await dialog.waitFor();
   await dialog.getByRole('combobox', { name: /Agent workflow/i }).click();
   await page.getByRole('option', { name: /Router Agent/i }).click();
-  await dialog.getByRole('button', { name: /^Save$/i }).click();
+  const save = dialog.getByRole('button', { name: /^Save$/i });
+  await save.scrollIntoViewIfNeeded();
+  await save.click();
   await dialog.waitFor({ state: 'hidden', timeout: 60000 });
   await pickModel(page);
 }
