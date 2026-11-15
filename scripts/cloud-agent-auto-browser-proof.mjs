@@ -58,19 +58,19 @@ async function ensureAutoWorkflow(page) {
 
 async function waitForApprovalFooter(page) {
   const footer = page.getByTestId('review-decision-footer');
-  for (let attempt = 0; attempt < 90; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     if (await footer.isVisible({ timeout: 1000 }).catch(() => false)) {
       return footer;
     }
     await page.waitForTimeout(5000);
   }
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await footer.waitFor({ state: 'visible', timeout: 120_000 });
+  await footer.waitFor({ state: 'visible', timeout: 30_000 });
   return footer;
 }
 
 async function clickApproveOnce(page) {
-  const footer = await waitForApprovalFooter(page);
+  const footer = page.getByTestId('review-decision-footer');
+  await footer.waitFor({ state: 'visible', timeout: 60_000 });
   const approve = footer.getByRole('button', { name: /^Approve once$/i }).first();
   await approve.evaluate((button) => {
     button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -117,8 +117,10 @@ async function main() {
       page,
       'Use the browser to find papers similar to the attached document. Search scholarly sources and cite real paper titles and URLs you find.',
     );
+    const approvalFooter = await waitForApprovalFooter(page);
+    await approvalFooter.scrollIntoViewIfNeeded();
+    await guard.capture(page, 'auto-browser-03-browser-approval-1440x900.png', { requireChatWorkspace: false });
     await clickApproveOnce(page);
-    await guard.capture(page, 'auto-browser-03-browser-approval-1440x900.png', { requireChatWorkspace: true });
     const browserTab = page.getByRole('tab', { name: /^Browser$/i }).first();
     await browserTab.click();
     await page.waitForTimeout(45_000);
