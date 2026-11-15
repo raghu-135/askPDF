@@ -228,7 +228,10 @@ await page.waitForTimeout(25000);
 const docsTab = page.getByRole('tab', { name: /^Documents$/i }).first();
 await docsTab.click();
 await page.waitForTimeout(2500);
-await page.getByText(/example\.com/i).first().waitFor({ timeout: 180000 });
+await page
+  .getByRole('button', { name: /Example Domain|example\.com/i })
+  .first()
+  .waitFor({ timeout: 180000 });
 await shot(page, 'e2e-05-page-saved-to-thread-1440x900.png');
 
 await context.close();
