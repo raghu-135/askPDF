@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useLayoutEffect, useMemo, useRef } from 'react';
 import { Box, Tab, Tabs } from '@mui/material';
+import type { TabsActions } from '@mui/material/Tabs';
 import { selectedInstanceTabValue } from '../../lib/instance-tabs.ts';
 
 export type NestedInstanceTab = {
@@ -59,12 +60,53 @@ export default function NestedInstanceTabs({
   trailingAction?: React.ReactNode;
   minHeight?: number;
 }) {
-  if (tabs.length === 0 && !trailingAction) return null;
-
   const selectedTabValue = selectedInstanceTabValue(tabs, activeId);
+  const tabIds = useMemo(() => tabs.map((tab) => tab.id).join('\0'), [tabs]);
+  const tabsActionsRef = useRef<TabsActions>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (tabs.length === 0) return undefined;
+
+    const syncIndicator = () => {
+      tabsActionsRef.current?.updateIndicator();
+    };
+
+    syncIndicator();
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = requestAnimationFrame(() => {
+      syncIndicator();
+      raf2 = requestAnimationFrame(syncIndicator);
+    });
+
+    const strip = stripRef.current;
+    const flexContainer = strip?.querySelector('.MuiTabs-flexContainer');
+    if (!flexContainer) {
+      return () => {
+        cancelAnimationFrame(raf1);
+        cancelAnimationFrame(raf2);
+      };
+    }
+
+    const resizeObserver = new ResizeObserver(syncIndicator);
+    resizeObserver.observe(flexContainer);
+    flexContainer.querySelectorAll('[role="tab"]').forEach((tab) => {
+      resizeObserver.observe(tab);
+    });
+
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      resizeObserver.disconnect();
+    };
+  }, [selectedTabValue, tabIds, tabs.length]);
+
+  if (tabs.length === 0 && !trailingAction) return null;
 
   return (
     <Box
+      ref={stripRef}
       sx={{
         display: 'flex',
         alignItems: 'stretch',
@@ -79,6 +121,7 @@ export default function NestedInstanceTabs({
     >
       {tabs.length > 0 ? (
         <Tabs
+          action={tabsActionsRef}
           value={selectedTabValue}
           onChange={(_, tabId) => typeof tabId === 'string' && onActiveChange(tabId)}
           variant="scrollable"

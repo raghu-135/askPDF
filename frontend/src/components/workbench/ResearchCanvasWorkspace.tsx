@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import { getThreadCanvas } from '../../lib/canvas-api';
@@ -47,6 +47,9 @@ export default function ResearchCanvasWorkspace({
     }
   }, [onCanvasTabUpdate, threadId]);
 
+  const canvasTabsRef = useRef(canvasTabs);
+  canvasTabsRef.current = canvasTabs;
+
   useEffect(() => {
     if (!threadId) return;
     for (const tab of canvasTabs) {
@@ -58,10 +61,9 @@ export default function ResearchCanvasWorkspace({
 
   useEffect(() => {
     if (!threadId || refreshVersion <= 0) return;
-    for (const tab of canvasTabs) {
+    for (const tab of canvasTabsRef.current) {
       void hydrateTab(tab.id);
     }
-    // Intentionally omit canvasTabs: updates during hydrate must not re-run this effect.
   }, [hydrateTab, refreshVersion, threadId]);
 
   const activeTab = canvasTabs.find((tab) => tab.id === activeCanvasId) || canvasTabs[0] || null;
