@@ -88,7 +88,12 @@ async function captureThreadHeaderComposer(page, vp) {
   await header.waitFor({ timeout: 10000 });
   const box = await header.evaluate((el) => {
     const r = el.getBoundingClientRect();
-    return { top: Math.max(0, r.top - 12), left: 0, width: window.innerWidth, height: Math.min(window.innerHeight, 520) };
+    return {
+      x: 0,
+      y: Math.max(0, r.top - 12),
+      width: window.innerWidth,
+      height: Math.min(window.innerHeight, 520),
+    };
   });
   await page.screenshot({
     path: path.join(ART, `${PHASE}-thread-header-composer-${vp.name}.png`),
@@ -103,7 +108,9 @@ async function captureSettingsDialog(page, vp) {
   const settings = page.getByRole('button', { name: /AI prompt settings for this thread/i }).first();
   await settings.waitFor({ timeout: 20000 });
   await settings.click();
-  await page.getByLabel(/Agent workflow/i).waitFor({ timeout: 15000 });
+  const dialog = page.getByRole('dialog');
+  await dialog.waitFor({ timeout: 15000 });
+  await dialog.getByRole('combobox', { name: /^Agent workflow/i }).waitFor({ timeout: 15000 });
   await page.waitForTimeout(400);
   await shot(page, `${PHASE}-settings-agent-workflow-${vp.name}.png`, vp.width);
   await page.keyboard.press('Escape');
@@ -118,19 +125,20 @@ async function captureWorkflowToolbar(page, vp) {
 
 async function captureEmbeddingsSelects(page, vp) {
   await ensureThread(page);
-  const embeddingsTab = page.getByRole('tab', { name: /^Embeddings$/i }).first();
-  await embeddingsTab.waitFor({ timeout: 15000 });
-  await embeddingsTab.click();
-  await page.getByRole('combobox', { name: /^Source$/i }).first().waitFor({ timeout: 60000 });
-  await page.waitForTimeout(800);
-  const source = page.getByRole('combobox', { name: /^Source$/i }).first();
-  const chrome = await source.evaluate((el) => {
+  await page.getByRole('tab', { name: 'Documents', exact: true }).first().click();
+  await page.waitForTimeout(400);
+  await page.getByRole('tab', { name: 'Embeddings', exact: true }).first().click();
+  await page.getByLabel('Filter chunks').first().waitFor({ timeout: 120000 });
+  const refresh = page.getByRole('button', { name: 'Refresh' }).first();
+  await refresh.waitFor({ timeout: 30000 });
+  await page.waitForTimeout(1200);
+  const chrome = await refresh.evaluate((el) => {
     const r = el.getBoundingClientRect();
     return {
-      x: Math.max(0, r.left - 24),
-      y: Math.max(0, r.top - 48),
-      width: Math.min(window.innerWidth, 720),
-      height: Math.min(window.innerHeight - Math.max(0, r.top - 48), 120),
+      x: 0,
+      y: Math.max(0, r.top - 10),
+      width: window.innerWidth,
+      height: Math.min(window.innerHeight - Math.max(0, r.top - 10), 200),
     };
   });
   await page.screenshot({
