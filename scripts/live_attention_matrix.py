@@ -14,7 +14,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-from live_e2e_lib import http_json as lib_http_json, pace_live_llm_requests, wait_langgraph_ready  # noqa: E402
+from live_e2e_lib import http_json as lib_http_json, wait_langgraph_ready  # noqa: E402
 ART = Path(os.environ.get("ASKPDF_E2E_ARTIFACTS", "/opt/cursor/artifacts"))
 ART.mkdir(parents=True, exist_ok=True)
 API = os.environ.get("ASKPDF_E2E_API_URL", "http://127.0.0.1:8000")
