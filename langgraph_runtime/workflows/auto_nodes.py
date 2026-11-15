@@ -16,10 +16,7 @@ from langgraph_runtime.workflows.document_scope import (
     prefetch_document_retrieval_scores,
     thread_has_attached_documents,
 )
-from langgraph_runtime.workflows.external_research import (
-    attachment_document_scope_bypass,
-    question_requests_external_research,
-)
+from langgraph_runtime.workflows.external_research import attachment_document_scope_bypass
 from langgraph_runtime.workflows.enums import AutoOrchestratorRoute, NodeEventStatus
 from langgraph_runtime.workflows.runtime_invocation import append_event, log_node_end
 from langgraph_runtime.workflows.state import RouterRagState
@@ -121,9 +118,7 @@ def _choose_delegate_workflow(state: Mapping[str, Any], *, catalog_ids: set[str]
         if PLAN_EXECUTE_WORKFLOW_ID in catalog_ids:
             return PLAN_EXECUTE_WORKFLOW_ID, "Run the planner workflow for a multi-step document answer."
     if ROUTER_WORKFLOW_ID in catalog_ids:
-        if question_requests_external_research(question):
-            return ROUTER_WORKFLOW_ID, "Run the router workflow for live web or browser research."
-        return ROUTER_WORKFLOW_ID, "Run the router workflow for a direct document question."
+        return ROUTER_WORKFLOW_ID, "Run the router workflow for this question."
     for workflow_id in sorted(catalog_ids):
         if workflow_id not in {AUTO_WORKFLOW_ID, DEEP_RESEARCH_WORKFLOW_ID}:
             return workflow_id, f"Run workflow {workflow_id}."

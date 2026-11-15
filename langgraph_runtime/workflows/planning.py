@@ -8,7 +8,6 @@ from langgraph_runtime.workflows.enums import PlannerRiskLevel, PlannerRoute, PL
 from langgraph_runtime.workflows.trace import compact_preview
 from langgraph_runtime.workflows.external_research import (
     BROWSER_TOOL_CONTRACT_IDS,
-    question_requests_external_research,
     web_worker_enabled_flags,
 )
 
@@ -85,8 +84,6 @@ def infer_required_plan_steps(question: Optional[str]) -> List[str]:
         required.append(WorkflowNodeType.DURABLE_MEMORY_WORKER.value)
     if DOCUMENT_PLAN_RE.search(text) and WorkflowNodeType.RETRIEVAL_WORKER.value not in required:
         required.append(WorkflowNodeType.RETRIEVAL_WORKER.value)
-    if question_requests_external_research(text) and WorkflowNodeType.WEB_WORKER.value not in required:
-        required.append(WorkflowNodeType.WEB_WORKER.value)
     return required
 
 

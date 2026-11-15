@@ -882,19 +882,6 @@ class NodeRegistry:
         else:
             route = requested_route
         clarification_options = parsed.get("clarification_options")
-        from langgraph_runtime.workflows.external_research import (
-            question_requests_external_research,
-            web_worker_enabled,
-        )
-
-        if (
-            route == RouterRoute.CLARIFY.value
-            and web_worker_enabled(state)
-            and question_requests_external_research(str(state.get("question") or ""))
-            and RouterRoute.WEB.value in allowed_routes
-        ):
-            route = RouterRoute.WEB.value
-            clarification_options = None
         if route == RouterRoute.CLARIFY.value:
             clarification_options = _normalize_clarification_options(clarification_options)
             if len(clarification_options) < 2:

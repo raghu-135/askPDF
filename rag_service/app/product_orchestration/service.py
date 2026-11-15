@@ -938,6 +938,12 @@ class AgentRunService:
         )
         runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
         runtime_result = await adapter.start(runtime_request, context=runtime_context)
+        if runtime_result.continuation is not None:
+            await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
+        if runtime_result.checkpoint_boundary_available is not None:
+            await self.repository.update_run_metadata_fields(run.id, {
+                "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
+            })
         result = result_to_product_payload(runtime_result)
         status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
         answer = str(result.get("answer") or result.get("final_answer") or "").strip()
