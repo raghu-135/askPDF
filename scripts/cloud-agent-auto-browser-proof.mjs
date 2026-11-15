@@ -25,7 +25,7 @@ import {
 const requireFromFrontend = createRequire(path.join(REPO_ROOT, 'frontend/package.json'));
 const { chromium } = requireFromFrontend('@playwright/test');
 
-const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'google/gemma-4-e4b';
+const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'inclusionai/ling-3.2-flash:free';
 const FALLBACK_MODEL = 'inclusionai/ling-3.2-flash:free';
 const PDF_PATH = process.env.ASKPDF_E2E_PDF || path.join(REPO_ROOT, 'rag_service/tests/01030000000000.pdf');
 const ART_DIR = DEFAULT_ART_DIR;
@@ -123,13 +123,19 @@ async function main() {
     await clickApproveOnce(page);
     const browserTab = page.getByRole('tab', { name: /^Browser$/i }).first();
     await browserTab.click();
-    await page.waitForTimeout(45_000);
+    for (let attempt = 0; attempt < 36; attempt += 1) {
+      const frameText = await page.locator('body').innerText().catch(() => '');
+      if (/semantic scholar|scholar\.ly|papers?\s+about|scene text recognition/i.test(frameText)) {
+        break;
+      }
+      await page.waitForTimeout(5_000);
+    }
     await guard.capture(page, 'auto-browser-04-browser-tab-1440x900.png');
     const chatTab = page.getByRole('tab', { name: /^Chat$/i }).first();
     if (await chatTab.isVisible({ timeout: 5000 }).catch(() => false)) {
       await chatTab.click();
     }
-    const answer = await waitForAssistantAnswer(page);
+    const answer = await waitForAssistantAnswer(page, { mustMatch: /semantic scholar|https?:\/\//i });
     if (/technical error|do not address this question/i.test(answer)) {
       throw new Error(`Unexpected assistant answer: ${answer.slice(0, 240)}`);
     }

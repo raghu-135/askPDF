@@ -327,12 +327,13 @@ export async function typeAndSendChat(page, text) {
 /**
  * @param {import('playwright').Page} page
  */
-export async function waitForAssistantAnswer(page) {
+export async function waitForAssistantAnswer(page, options = {}) {
+  const mustMatch = options.mustMatch;
   const composer = page.getByTestId('chat-composer-input');
   await composer.waitFor({ timeout: 180_000 });
   const sending = page.getByPlaceholder(/Sending/i);
   if (await sending.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await sending.waitFor({ state: 'hidden', timeout: 300_000 });
+    await sending.waitFor({ state: 'hidden', timeout: mustMatch ? 600_000 : 300_000 });
   }
   await page.waitForFunction(
     () => {
@@ -352,6 +353,9 @@ export async function waitForAssistantAnswer(page) {
   const body = await answer.innerText();
   if (body.length < 20) {
     throw new Error('Assistant answer too short for UI proof');
+  }
+  if (mustMatch instanceof RegExp && !mustMatch.test(body)) {
+    throw new Error(`Assistant answer did not match required pattern: ${body.slice(0, 280)}`);
   }
   return body;
 }
