@@ -60,8 +60,20 @@ async def browser_snapshot(_request: EmptyBrowserRequest, context: ToolInvocatio
         state = await pelorus_state()
         screenshot = await pelorus_screenshot()
         page = await capture_read_page()
+        desktop_ok = bool(state.get("desktop_control", True)) and bool(
+            screenshot.get("desktop_control", True)
+        )
         summary = str(state.get("summary") or state.get("state") or state)[:4000]
-        shot = str(screenshot.get("image") or screenshot.get("screenshot") or "")[:8000]
+        shot = (
+            str(screenshot.get("image") or screenshot.get("screenshot") or "")[:8000]
+            if desktop_ok
+            else ""
+        )
+        warnings = (
+            []
+            if desktop_ok
+            else [ToolWarningCode.BROWSER_DESKTOP_CONTROL_UNAVAILABLE]
+        )
         content = "\n".join(
             part
             for part in [
@@ -83,6 +95,7 @@ async def browser_snapshot(_request: EmptyBrowserRequest, context: ToolInvocatio
                 "browser_page_text": page,
             },
             sources=[{"url": page.get("url"), "title": page.get("title")}],
+            warnings=warnings,
         )
     except BrowserCaptureClientError as exc:
         return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started)
@@ -93,7 +106,8 @@ async def browser_act(request: BrowserActRequest, context: ToolInvocationContext
     tool_name = "browser_act"
     if not context.use_browser_access:
         return _browser_disabled(tool_name, context, started)
-    body = {"action": request.action}
+    action = "left_click" if request.action == "click" else request.action
+    body = {"action": action}
     if request.coordinate is not None:
         body["coordinate"] = request.coordinate
     if request.text is not None:
@@ -106,6 +120,18 @@ async def browser_act(request: BrowserActRequest, context: ToolInvocationContext
         body["duration"] = request.duration
     try:
         result = await pelorus_control(body)
+        if result.get("desktop_control") is False:
+            return make_tool_result(
+                tool_name=tool_name,
+                content=str(
+                    result.get("message")
+                    or "Desktop control is unavailable; use browser_navigate and browser_read instead."
+                ),
+                context=context,
+                started=started,
+                artifacts={"browser_control_result": result},
+                warnings=[ToolWarningCode.BROWSER_DESKTOP_CONTROL_UNAVAILABLE],
+            )
         return make_tool_result(
             tool_name=tool_name,
             content=f"Browser action {request.action} completed.",

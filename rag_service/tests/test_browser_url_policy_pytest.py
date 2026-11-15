@@ -1,15 +1,17 @@
+import importlib.util
 import os
-import sys
 from pathlib import Path
 
 import pytest
 
 _REPO_ROOT = Path(os.environ.get("ASKPDF_REPO_DIR", Path(__file__).resolve().parents[2]))
-_SERVICE_DIR = _REPO_ROOT / "browser_capture" / "service"
-if str(_SERVICE_DIR) not in sys.path:
-    sys.path.insert(0, str(_SERVICE_DIR))
-
-from url_policy import BrowserUrlPolicyError, validate_navigation_url
+_POLICY_PATH = _REPO_ROOT / "browser_capture" / "service" / "url_policy.py"
+_spec = importlib.util.spec_from_file_location("browser_capture_url_policy", _POLICY_PATH)
+assert _spec and _spec.loader
+_url_policy = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_url_policy)
+BrowserUrlPolicyError = _url_policy.BrowserUrlPolicyError
+validate_navigation_url = _url_policy.validate_navigation_url
 
 
 def test_validate_navigation_url_accepts_https():

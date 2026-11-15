@@ -18,7 +18,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from url_policy import BrowserUrlPolicyError, validate_navigation_url
-from pelorus_client import pelorus_get, pelorus_post, pelorus_ready
+from pelorus_client import (
+    DESKTOP_CONTROL_UNAVAILABLE_MESSAGE,
+    desktop_screenshot,
+    pelorus_get,
+    pelorus_post,
+    pelorus_ready,
+)
 import requests
 import websockets
 from pypdf import PdfReader, PdfWriter
@@ -556,6 +562,12 @@ async def health():
             "tabs_count": len(tabs),
             "method": "direct_cdp_websocket",
             "pelorus": "ready" if pelorus_ok else "unavailable",
+            "desktop_control": pelorus_ok,
+            **(
+                {}
+                if pelorus_ok
+                else {"desktop_control_reason": DESKTOP_CONTROL_UNAVAILABLE_MESSAGE}
+            ),
         }
         
     except Exception as e:
@@ -583,29 +595,50 @@ async def navigate_page(body: NavigateRequest):
 @app.get("/pelorus/state")
 async def pelorus_state():
     if not await pelorus_ready():
-        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": "Pelorus is not available"})
+        return await pelorus_get("/api/state")
     try:
         return await pelorus_get("/api/state")
     except Exception as exc:
         logger.error("Pelorus state failed: %s", exc)
-        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": str(exc)}) from exc
+        return {
+            "desktop_control": False,
+            "code": "desktop_control_unavailable",
+            "message": str(exc),
+        }
 
 
 @app.get("/pelorus/screenshot")
 async def pelorus_screenshot():
     if not await pelorus_ready():
-        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": "Pelorus is not available"})
+        return {
+            "desktop_control": False,
+            "code": "desktop_control_unavailable",
+            "message": DESKTOP_CONTROL_UNAVAILABLE_MESSAGE,
+            "image": None,
+        }
     try:
-        return await pelorus_get("/api/desktop/screenshot")
+        payload = await desktop_screenshot()
+        if isinstance(payload, dict):
+            payload.setdefault("desktop_control", True)
+        return payload
     except Exception as exc:
         logger.error("Pelorus screenshot failed: %s", exc)
-        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": str(exc)}) from exc
+        return {
+            "desktop_control": False,
+            "code": "desktop_control_unavailable",
+            "message": str(exc),
+            "image": None,
+        }
 
 
 @app.post("/pelorus/control")
 async def pelorus_control(body: PelorusControlRequest):
     if not await pelorus_ready():
-        raise HTTPException(status_code=503, detail={"code": "pelorus_unavailable", "message": "Pelorus is not available"})
+        return {
+            "desktop_control": False,
+            "code": "desktop_control_unavailable",
+            "message": DESKTOP_CONTROL_UNAVAILABLE_MESSAGE,
+        }
     payload: dict[str, Any] = {"action": body.action}
     if body.coordinate is not None:
         payload["coordinate"] = body.coordinate

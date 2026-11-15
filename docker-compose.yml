@@ -511,8 +511,12 @@ services:
       - SELKIES_UI_SIDEBAR_SHOW_SHARING=${SELKIES_UI_SIDEBAR_SHOW_SHARING:-false}
       # Disable Selkies apps features
       - SELKIES_UI_SIDEBAR_SHOW_APPS=${SELKIES_UI_SIDEBAR_SHOW_APPS:-false}
-      - PELORUS=true
+      # Pelorus HTTP (/pelorus/) is Wayland-first; on X11 enable Pixelflux Computer Use directly.
+      - PELORUS=false
+      - PIXELFLUX_CU=5000
+      - SELKIES_COMPUTER_USE_BIND=5000
       - PIXELFLUX_CU_TOKEN=${PIXELFLUX_CU_TOKEN:-askpdf-pelorus-cu-dev-token}
+      - SELKIES_COMPUTER_USE_TOKEN=${PIXELFLUX_CU_TOKEN:-askpdf-pelorus-cu-dev-token}
       - PELORUS_INTERNAL_URL=http://127.0.0.1:3000/pelorus
     shm_size: '2gb'
     volumes:

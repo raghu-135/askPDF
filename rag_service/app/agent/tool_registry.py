@@ -191,7 +191,10 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "allowed_node_types": [NODE_WEB_WORKER],
         "required_node_capabilities": [CAP_RETRIEVAL_WEB],
         "artifact_keys": ["browser_state", "browser_screenshot_b64", "browser_page_text"],
-        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+        "warning_codes": [
+            ToolWarningCode.BROWSER_ACCESS_DISABLED,
+            ToolWarningCode.BROWSER_DESKTOP_CONTROL_UNAVAILABLE,
+        ],
     },
     TOOL_NAME_BROWSER_ACT: {
         "id": TOOL_BROWSER_ACT,
@@ -200,7 +203,10 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "allowed_node_types": [NODE_WEB_WORKER],
         "required_node_capabilities": [CAP_RETRIEVAL_WEB],
         "artifact_keys": ["browser_control_result"],
-        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+        "warning_codes": [
+            ToolWarningCode.BROWSER_ACCESS_DISABLED,
+            ToolWarningCode.BROWSER_DESKTOP_CONTROL_UNAVAILABLE,
+        ],
     },
     TOOL_NAME_BROWSER_READ: {
         "id": TOOL_BROWSER_READ,
