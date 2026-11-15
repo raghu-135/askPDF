@@ -1,6 +1,6 @@
 import type { FormattedSelection } from "@embedpdf/plugin-selection/react";
 import type { SearchResult } from "@embedpdf/models";
-import { closeInstanceTab } from "./instance-tabs";
+import { closeInstanceTab } from "./instance-tabs.ts";
 import type { PdfTab } from "./document-tabs";
 
 export type PdfSelectionBBox = {

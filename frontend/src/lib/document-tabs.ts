@@ -3,7 +3,7 @@ import type {
   ProcessStatus as ProcessStatusValue,
   ThreadFileSourceType as ThreadFileSourceTypeValue,
 } from './enums';
-import { selectedInstanceTabValue } from './instance-tabs';
+import { selectedInstanceTabValue } from './instance-tabs.ts';
 import type { WorkspaceTab, TraceWorkspaceTab, ResearchCanvasWorkspaceTab } from '../components/workbench/WorkspaceTabs';
 
 type Sentence = Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] };

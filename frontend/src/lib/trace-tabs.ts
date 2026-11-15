@@ -3,7 +3,7 @@ import {
   mergeInstanceTab,
   upsertInstanceTab,
   type IdentifiedInstanceTab,
-} from './instance-tabs';
+} from './instance-tabs.ts';
 
 export type IdentifiedTraceTab = IdentifiedInstanceTab & { messageId?: string; liveTraceView?: unknown };
 

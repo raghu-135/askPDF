@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Tab, Tabs } from '@mui/material';
-import { selectedInstanceTabValue } from '../../lib/instance-tabs';
+import { selectedInstanceTabValue } from '../../lib/instance-tabs.ts';
 
 export type NestedInstanceTab = {
   id: string;

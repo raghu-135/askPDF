@@ -34,7 +34,7 @@ import {
   writeWorkspaceResume,
   type WorkspaceResumeState,
 } from '../lib/workspace-resume-state';
-import { closeInstanceTab } from '../lib/instance-tabs';
+import { closeInstanceTab } from '../lib/instance-tabs.ts';
 import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
 import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec";
 import {

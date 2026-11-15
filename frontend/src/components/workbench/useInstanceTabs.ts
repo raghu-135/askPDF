@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import {
   closeInstanceTab,
   type IdentifiedInstanceTab,
-} from '../../lib/instance-tabs';
+} from '../../lib/instance-tabs.ts';
 
 export default function useInstanceTabs<T extends IdentifiedInstanceTab>() {
   const [tabs, setTabs] = useState<T[]>([]);

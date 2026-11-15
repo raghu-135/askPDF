@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import type { CanvasRef } from '../../lib/canvas-spec';
 import type { ThreadCanvasRecord } from '../../lib/canvas-spec';
-import { upsertInstanceTab } from '../../lib/instance-tabs';
+import { upsertInstanceTab } from '../../lib/instance-tabs.ts';
 import useInstanceTabs from './useInstanceTabs';
 
 export type CanvasRunTab = {
