@@ -51,6 +51,11 @@ Revisions use `supersedes_id`. List defaults to current (non-superseded)
 documents. Idempotent creates use `idempotency_key` (agent publishes hash the
 spec when the caller omits one).
 
+When the user quotes a canvas id or share URL (`?canvas=<id>`) and asks for
+changes, `publish_canvas` supersedes that canvas automatically (version history
+is retained). `GET /threads/{id}/canvases/{canvas_id}` follows the lineage to
+the current head so an open tab can refresh in place.
+
 The introducing migration is `c7f2a9d4e1b8_store_research_canvases_as_artifacts`.
 Implementation: rag_service/app/services/canvas_service.py and
 rag_service/app/api/canvases.py.

@@ -61,6 +61,24 @@ class CanvasRepository:
                 session.expunge(artifact)
             return artifact
 
+    async def get_successor(self, canvas_id: str) -> Optional[AgentTaskArtifact]:
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(AgentTaskArtifact)
+                .where(
+                    AgentTaskArtifact.supersedes_id == canvas_id,
+                    AgentTaskArtifact.kind == RESEARCH_CANVAS_ARTIFACT_KIND,
+                    AgentTaskArtifact.validity != "deleted",
+                )
+                .order_by(AgentTaskArtifact.created_at.desc(), AgentTaskArtifact.id.desc())
+                .limit(1)
+            )
+            artifact = result.scalar_one_or_none()
+            if artifact is not None:
+                session.expunge(artifact)
+            return artifact
+
     async def list_for_thread(self, thread_id: str, *, current_only: bool = True) -> list[AgentTaskArtifact]:
         session = await self._get_session()
         async with session.begin():

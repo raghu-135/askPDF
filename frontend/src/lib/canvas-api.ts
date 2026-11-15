@@ -32,8 +32,19 @@ export async function listThreadCanvases(
   return res.json();
 }
 
-export async function getThreadCanvas(threadId: string, canvasId: string): Promise<ThreadCanvasRecord> {
-  const res = await fetch(`${API_BASE}/api/threads/${threadId}/canvases/${canvasId}`);
+export async function getThreadCanvas(
+  threadId: string,
+  canvasId: string,
+  options?: { resolveCurrent?: boolean },
+): Promise<ThreadCanvasRecord> {
+  const params = new URLSearchParams();
+  if (options?.resolveCurrent !== false) {
+    params.set('resolve_current', 'true');
+  }
+  const query = params.toString();
+  const res = await fetch(
+    `${API_BASE}/api/threads/${threadId}/canvases/${canvasId}${query ? `?${query}` : ''}`,
+  );
   if (!res.ok) throw new Error(await readError(res));
   return res.json();
 }

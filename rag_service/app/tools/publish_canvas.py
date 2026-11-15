@@ -28,7 +28,12 @@ from app.services.agent_task_canvas_chat import (
     ensure_deep_task_canvas_chat_turn,
     resolve_task_canvas_supersedes_id,
 )
-from app.services.canvas_service import CanvasService, CanvasValidationError, resolve_publish_supersedes_id
+from app.services.canvas_service import (
+    CanvasService,
+    CanvasValidationError,
+    resolve_publish_supersedes_id,
+    resolve_quoted_canvas_supersedes_id,
+)
 from app.tools.context import ToolInvocationContext
 
 
@@ -166,7 +171,16 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
                 ).scalar_one_or_none()
         if run is not None and run.task_id:
             task_id = str(run.task_id)
+    extensions = dict(context.extensions or {})
+    user_question = str(extensions.get("user_question") or "").strip()
     resolved_supersedes_id = request.supersedes_id
+    quoted_warnings: list[str] = []
+    if not resolved_supersedes_id and user_question and context.thread_id:
+        resolved_supersedes_id, quoted_warnings = await resolve_quoted_canvas_supersedes_id(
+            service._canvases,
+            context.thread_id,
+            user_question,
+        )
     if not resolved_supersedes_id and task_id and context.thread_id:
         resolved_supersedes_id = await resolve_task_canvas_supersedes_id(context.thread_id, task_id)
     try:
@@ -225,5 +239,5 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
         context=context,
         started=started,
         artifacts={"canvas": created},
-        warnings=supersedes_warnings,
+        warnings=[*supersedes_warnings, *quoted_warnings],
     )

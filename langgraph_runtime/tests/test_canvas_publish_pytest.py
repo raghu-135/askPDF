@@ -13,6 +13,7 @@ _CANVAS_SYNTHESIS_STATE = {
 }
 
 from langgraph_runtime.workflows.canvas_publish import (
+    resolve_supersedes_id_from_state,
     CanvasSpecNormalizeError,
     canvas_idempotency_key,
     prepare_publish_canvas_tool_input,
@@ -448,6 +449,13 @@ async def test_failed_publish_with_empty_content_reinvokes_unbound_for_prose(mon
     assert unbound_calls == 1
     assert "Factual answer from recovery." in result["answer"]
     assert "could not be published" in result["answer"]
+
+
+def test_resolve_supersedes_id_from_state_reads_quoted_canvas():
+    canvas_id = "41a7cdc2-1234-5678-9abc-def012345678"
+    state = {"question": f"Please update {canvas_id} with a stronger summary."}
+    assert resolve_supersedes_id_from_state(state, None) == canvas_id
+    assert resolve_supersedes_id_from_state(state, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
 
 def test_sanitize_supersedes_id_drops_file_hash_and_garbage():

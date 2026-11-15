@@ -179,6 +179,42 @@ async def test_publish_canvas_compiles_draft(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_publish_canvas_supersedes_quoted_canvas_in_user_question(monkeypatch):
+    monkeypatch.setattr(
+        "app.tools.publish_canvas.get_thread_files",
+        AsyncMock(
+            return_value=[
+                SimpleNamespace(file_hash="file-a"),
+                SimpleNamespace(file_hash="file-b"),
+            ]
+        ),
+    )
+    canvas_id = "41a7cdc2-1234-5678-9abc-def012345678"
+    create = AsyncMock(return_value={"id": "canvas-2", "title": "Skills"})
+    monkeypatch.setattr("app.tools.publish_canvas.CanvasService.create", create)
+
+    async def fake_resolve(canvases, thread_id, text):
+        assert canvas_id in text
+        return canvas_id, []
+
+    monkeypatch.setattr("app.tools.publish_canvas.resolve_quoted_canvas_supersedes_id", AsyncMock(side_effect=fake_resolve))
+    monkeypatch.setattr(
+        "app.tools.publish_canvas.resolve_publish_supersedes_id",
+        AsyncMock(return_value=(canvas_id, [])),
+    )
+    result = await invoke_publish_canvas(
+        PublishCanvasRequest.model_validate({"spec": valid_spec()}),
+        ToolInvocationContext(
+            thread_id="thread-1",
+            run_id="run-1",
+            extensions={"user_question": f"Revise canvas {canvas_id} please."},
+        ),
+    )
+    assert result.ok is True
+    assert create.await_args[0][1].supersedes_id == canvas_id
+
+
+@pytest.mark.asyncio
 async def test_publish_canvas_persists_admitted_spec(monkeypatch):
     monkeypatch.setattr(
         "app.tools.publish_canvas.get_thread_files",

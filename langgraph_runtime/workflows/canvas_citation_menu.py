@@ -139,7 +139,7 @@ def format_current_canvases_section(state: Mapping[str, Any]) -> str:
     lines = [
         "## Current canvases on this thread",
         "",
-        "Use supersedes_id only when replacing one of these (copy id exactly).",
+        "Use supersedes_id when revising one of these (copy id or share link exactly).",
         "",
     ]
     for item in canvases:

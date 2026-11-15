@@ -27,6 +27,7 @@ from app.models.canvas import (
 from app.services.content_store import get_content_store, thread_artifact_content_key
 from app.services.task_artifact_service import MAX_SINGLE_ARTIFACT_BYTES
 from app.time_utils import iso_utc_z
+from runtime_protocol.canvas_reference import extract_canvas_references
 
 
 class CanvasNotFoundError(LookupError):
@@ -46,6 +47,60 @@ _FILE_HASH_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
 
 def is_canvas_artifact_id(value: str) -> bool:
     return bool(_CANVAS_ARTIFACT_ID_RE.fullmatch(str(value or "").strip()))
+
+
+async def resolve_canvas_lineage_head(
+    canvases: CanvasRepository,
+    canvas_id: str,
+    *,
+    max_hops: int = 32,
+) -> str:
+    """Follow supersede links forward until there is no newer successor."""
+
+    current_id = str(canvas_id or "").strip()
+    if not current_id:
+        return current_id
+    visited: set[str] = set()
+    for _ in range(max_hops):
+        if current_id in visited:
+            break
+        visited.add(current_id)
+        successor = await canvases.get_successor(current_id)
+        if successor is None:
+            break
+        current_id = successor.id
+    return current_id
+
+
+async def resolve_quoted_canvas_supersedes_id(
+    canvases: CanvasRepository,
+    thread_id: str,
+    text: str,
+) -> tuple[str | None, list[str]]:
+    current_rows = await canvases.list_for_thread(thread_id, current_only=True)
+    current_ids = {row.id for row in current_rows}
+    refs = extract_canvas_references(text)
+
+    async def head_resolver(canvas_id: str) -> str | None:
+        artifact = await canvases.get(canvas_id)
+        if artifact is None or artifact.thread_id != thread_id:
+            return None
+        return await resolve_canvas_lineage_head(canvases, canvas_id)
+
+    picked: str | None = None
+    warnings: list[str] = []
+    for canvas_id in reversed(refs):
+        head = await head_resolver(canvas_id)
+        if head is None:
+            continue
+        if head in current_ids:
+            picked = head
+            if head != canvas_id:
+                warnings.append("quoted_canvas_resolved_to_current_head")
+            break
+    if not picked and refs:
+        warnings.append("quoted_canvas_not_current")
+    return picked, warnings
 
 
 async def resolve_publish_supersedes_id(
@@ -221,14 +276,29 @@ class CanvasService:
             raise
         return await serialize_canvas(saved, current=True)
 
-    async def get(self, thread_id: str, canvas_id: str) -> dict[str, Any]:
+    async def get(
+        self,
+        thread_id: str,
+        canvas_id: str,
+        *,
+        resolve_current: bool = True,
+    ) -> dict[str, Any]:
         await self._require_thread(thread_id)
         canvas = await self._canvases.get(canvas_id)
         if canvas is None or canvas.thread_id != thread_id:
             raise CanvasNotFoundError("Canvas not found")
         current_ids = {item.id for item in await self._canvases.list_for_thread(thread_id)}
+        requested_id = canvas.id
+        head_id = await resolve_canvas_lineage_head(self._canvases, requested_id)
+        if resolve_current and head_id != requested_id:
+            head = await self._canvases.get(head_id)
+            if head is not None and head.thread_id == thread_id:
+                canvas = head
         try:
-            return await serialize_canvas(canvas, current=canvas.id in current_ids)
+            payload = await serialize_canvas(canvas, current=canvas.id in current_ids)
+            if requested_id != canvas.id:
+                payload["requested_id"] = requested_id
+            return payload
         except FileNotFoundError as exc:
             raise CanvasNotFoundError("Canvas content is unavailable") from exc
 
