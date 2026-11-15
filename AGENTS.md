@@ -82,3 +82,11 @@ flaky. CI does not set this file.
 
 - App: `http://127.0.0.1:3000`
 - API: `http://127.0.0.1:8000`
+
+### Browser workbench control backend
+
+The `browser-capture` container exposes screenshot/act via **CDP** on the shared Brave
+debug port (`control_backend: cdp` in `/health`). Pelorus / Pixelflux Computer Use is
+**deferred** on the current X11 + Brave image (`PELORUS=false` in Compose); do not add
+Pelorus-only paths in feature PRs unless the image gains a supported desktop-control
+stack again.

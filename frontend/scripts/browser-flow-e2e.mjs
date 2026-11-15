@@ -186,16 +186,18 @@ await selectRouterWorkflow(page);
 await openConversation(page);
 await setWebSearchOff(page);
 await setBrowserAskMode(page);
+await shot(page, 'e2e-02-browser-access-ask-mode-1440x900.png');
 await openBrowserTab(page);
 if (process.env.ASKPDF_E2E_HEADLESS === '0') {
   await page.waitForTimeout(12000);
 }
-await shot(page, 'e2e-01-browser-workbench-tab-1440x900.png');
-
-await shot(page, 'e2e-02-browser-access-ask-mode-1440x900.png');
+await openConversation(page);
+await shot(page, 'e2e-01-browser-workbench-stream-1440x900.png');
+await openBrowserTab(page);
 
 const prompt =
-  'Use the shared workbench browser: open https://example.com and answer in one sentence what the main heading on the page says (the visible h1 text). I have no uploaded documents about this page.';
+  'Use the shared workbench browser: open https://example.com and answer in one sentence what this page says is for (quote the line from the page body that explains the domain’s purpose—not the document title). I have no uploaded documents about this page.';
+await openConversation(page);
 await sendChat(page, prompt);
 
 try {
@@ -206,11 +208,11 @@ try {
 }
 await shot(page, 'e2e-03-tool-approval-card-1440x900.png');
 await approve.click();
-await page
+const answer = page
   .locator('div.MuiPaper-root')
-  .filter({ hasText: /Example Domain/i })
-  .last()
-  .waitFor({ state: 'visible', timeout: 300000 });
+  .filter({ hasText: /illustrative examples|IANA-managed|reserved for use in documentation/i })
+  .last();
+await answer.waitFor({ state: 'visible', timeout: 300000 });
 await page.waitForTimeout(2000);
 await shot(page, 'e2e-04-agent-answer-from-page-1440x900.png');
 
@@ -218,13 +220,10 @@ await sendChat(
   page,
   'Save the current workbench browser page to this thread as a document, then confirm the file name.',
 );
-try {
-  const saveApprove = await waitForApproval(page, 120000);
-  await saveApprove.click();
-} catch {
-  /* browser_save_to_thread may be on without a second approval card */
-}
-await page.waitForTimeout(25000);
+const saveApprove = await waitForApproval(page, 240000);
+await shot(page, 'e2e-03b-save-tool-approval-card-1440x900.png');
+await saveApprove.click();
+await page.waitForTimeout(30000);
 const docsTab = page.getByRole('tab', { name: /^Documents$/i }).first();
 await docsTab.click();
 await page.waitForTimeout(2500);
@@ -233,6 +232,9 @@ await page
   .first()
   .waitFor({ timeout: 180000 });
 await shot(page, 'e2e-05-page-saved-to-thread-1440x900.png');
+await openBrowserTab(page);
+await page.waitForTimeout(2000);
+await shot(page, 'e2e-06-single-agent-browser-tab-1440x900.png');
 
 await context.close();
 await browser.close();

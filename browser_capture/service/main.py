@@ -13,7 +13,7 @@ import asyncio
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -55,6 +55,59 @@ _cdp_session.headers.update({
     "Accept": "application/json"
 })
 
+_AGENT_TAB_TARGET_ID: str | None = None
+_SYSTEM_URL_PREFIXES = ("chrome://", "chrome-extension://", "brave://", "about:")
+
+
+def _fetch_debug_tabs() -> list[dict[str, Any]]:
+    response = _cdp_session.get(f"http://{BROWSER_DEBUG_URL}/json", timeout=5)
+    if response.status_code != 200:
+        raise Exception("Failed to get tabs from debug interface")
+    tabs = response.json()
+    return tabs if isinstance(tabs, list) else []
+
+
+def _is_http_content_tab(tab: Mapping[str, Any]) -> bool:
+    url = str(tab.get("url") or "")
+    return url.startswith(("http://", "https://"))
+
+
+def _close_debug_tab(target_id: str) -> None:
+    try:
+        _cdp_session.get(f"http://{BROWSER_DEBUG_URL}/json/close/{target_id}", timeout=5)
+    except Exception as exc:
+        logger.warning("Failed to close browser tab %s: %s", target_id, exc)
+
+
+async def ensure_agent_tab() -> dict[str, Any]:
+    """Keep one agent-controlled content tab per capture service process."""
+    global _AGENT_TAB_TARGET_ID
+    tabs = _fetch_debug_tabs()
+    if not tabs:
+        raise Exception("No tabs available")
+    content_tabs = [tab for tab in tabs if _is_http_content_tab(tab)]
+    if _AGENT_TAB_TARGET_ID:
+        if not any(str(tab.get("id")) == _AGENT_TAB_TARGET_ID for tab in tabs):
+            _AGENT_TAB_TARGET_ID = None
+    if _AGENT_TAB_TARGET_ID is None:
+        fallback = next(
+            (tab for tab in tabs if not str(tab.get("url") or "").startswith(_SYSTEM_URL_PREFIXES)),
+            tabs[0],
+        )
+        chosen = content_tabs[0] if content_tabs else fallback
+        _AGENT_TAB_TARGET_ID = str(chosen.get("id"))
+    for tab in content_tabs:
+        tab_id = str(tab.get("id") or "")
+        if tab_id and tab_id != _AGENT_TAB_TARGET_ID:
+            _close_debug_tab(tab_id)
+    tabs = _fetch_debug_tabs()
+    agent = next((tab for tab in tabs if str(tab.get("id")) == _AGENT_TAB_TARGET_ID), None)
+    if agent is None:
+        _AGENT_TAB_TARGET_ID = None
+        return await ensure_agent_tab()
+    logger.info("Agent tab: %s — %s", agent.get("url"), agent.get("title"))
+    return agent
+
 
 class CaptureResponse(BaseModel):
     file_hash: str
@@ -75,6 +128,7 @@ class NavigateRequest(BaseModel):
 class NavigateResponse(BaseModel):
     url: str
     title: str
+    text: str = ""
 
 
 class PelorusControlRequest(BaseModel):
@@ -108,62 +162,28 @@ async def _send_cdp_command(websocket, msg_id, method, params=None):
 
 
 async def get_active_tab_via_cdp():
-    """Get the currently active tab using direct CDP calls"""
+    """Return the pinned agent tab (reused across navigations in this service)."""
     try:
-        # Get all tabs from debug interface (using pooled session)
-        response = _cdp_session.get(f"http://{BROWSER_DEBUG_URL}/json", timeout=5)
-        if response.status_code != 200:
-            raise Exception("Failed to get tabs from debug interface")
-        
-        tabs = response.json()
-        if not tabs:
-            raise Exception("No tabs available")
-        
-        # Log all available tabs for debugging
-        logger.info(f"Available tabs: {[tab.get('url', 'unknown') for tab in tabs]}")
-        
-        # Find the best tab to capture - prefer content tabs over system panels
-        content_tab = None
-        speedreader_tab = None
-        
-        for tab in tabs:
-            url = tab.get('url', '')
-            title = tab.get('title', '')
-            
-            # Skip system/internal pages
-            if url.startswith(('chrome://', 'chrome-extension://', 'about:')):
-                continue
-                
-            # Look for reader mode content
-            if 'speedreader' in title.lower() or 'reader' in title.lower():
-                if url.startswith('http'):
-                    content_tab = tab
-                    break
-                    
-            # Look for regular web content as fallback
-            if url.startswith(('http://', 'https://')):
-                if not content_tab:  # First content tab
-                    content_tab = tab
-        
-        # If we found a content tab, use it
-        if content_tab:
-            logger.info(f"Selected content tab: {content_tab.get('url')} - {content_tab.get('title')}")
-            return content_tab
-        
-        # Fallback to first non-system tab
-        for tab in tabs:
-            url = tab.get('url', '')
-            if not url.startswith(('chrome://', 'chrome-extension://', 'about:')):
-                logger.info(f"Fallback to tab: {url} - {tab.get('title')}")
-                return tab
-        
-        raise Exception(
-            "No capturable browser tab found. Open an http(s) page in Brave before capturing."
-        )
-        
+        return await ensure_agent_tab()
     except Exception as e:
         logger.error(f"Failed to get active tab: {e}")
         raise
+
+
+async def _read_page_text_from_websocket(websocket) -> str:
+    await _send_cdp_command(websocket, 90, "Runtime.enable")
+    await _wait_for_content_ready(websocket)
+    result = await _send_cdp_command(
+        websocket,
+        91,
+        "Runtime.evaluate",
+        {
+            "expression": "(() => { const t = document.body ? document.body.innerText : ''; return t.slice(0, 120000); })()",
+            "returnByValue": True,
+        },
+    )
+    value = result.get("result", {}).get("result", {}).get("value")
+    return str(value or "")
 
 
 async def _with_active_tab_websocket():
@@ -174,8 +194,8 @@ async def _with_active_tab_websocket():
     return active_tab, websocket_url
 
 
-async def navigate_active_tab(url: str) -> tuple[str, str]:
-    """Navigate the active Brave tab via CDP."""
+async def navigate_active_tab(url: str) -> tuple[str, str, str]:
+    """Navigate the pinned agent tab via CDP and return url, title, and body text."""
     validated = validate_navigation_url(url)
     _active_tab, websocket_url = await _with_active_tab_websocket()
     async with websockets.connect(websocket_url, max_size=100 * 1024 * 1024) as websocket:
@@ -201,7 +221,8 @@ async def navigate_active_tab(url: str) -> tuple[str, str]:
             tab_title = str(payload.get("title") or tab_url)
         except (KeyError, TypeError, json.JSONDecodeError):
             pass
-        return tab_url, tab_title
+        tab_text = await _read_page_text_from_websocket(websocket)
+        return tab_url, tab_title, tab_text
 
 
 async def _wait_for_content_ready(websocket, max_wait_ms=5000, poll_interval_ms=200):
@@ -592,8 +613,8 @@ async def health():
 @app.post("/navigate", response_model=NavigateResponse)
 async def navigate_page(body: NavigateRequest):
     try:
-        url, title = await navigate_active_tab(body.url)
-        return NavigateResponse(url=url, title=title)
+        url, title, text = await navigate_active_tab(body.url)
+        return NavigateResponse(url=url, title=title, text=text)
     except BrowserUrlPolicyError as exc:
         raise HTTPException(
             status_code=422,

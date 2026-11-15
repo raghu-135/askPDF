@@ -227,6 +227,23 @@ def filter_false_canvas_absence_limitations(issues: list[str]) -> list[str]:
     return [issue for issue in issues if not is_false_canvas_absence_limitation(issue)]
 
 
+_ANSWER_FORMAT_META_LIMITATION = re.compile(
+    r"(?i)"
+    r"(\bone sentence\b|\bshort answer\b|\bconcise\b|\bbrevity\b|\bformatting\b|\blength\b|"
+    r"\bonly (?:the )?title\b|\bpage title\b|\bh1\b|\bheading\b.*\b(?:not|missing|uncaptured)\b|"
+    r"\bevidence\b.*\b(?:insufficient|missing|incomplete)\b.*\b(?:body|page text)\b|"
+    r"\blimitations?\b.*\b(?:paragraph|section)\b)",
+)
+
+
+def is_answer_format_meta_limitation(text: str) -> bool:
+    return bool(_ANSWER_FORMAT_META_LIMITATION.search(str(text or "").strip()))
+
+
+def filter_answer_format_meta_limitations(issues: list[str]) -> list[str]:
+    return [issue for issue in issues if not is_answer_format_meta_limitation(issue)]
+
+
 def strip_false_canvas_limitations_block(text: str) -> str:
     raw = str(text or "")
     match = re.search(r"(?:^|\n\n)Limitations:\s*(.+)$", raw, flags=re.IGNORECASE | re.DOTALL)

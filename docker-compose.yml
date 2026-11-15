@@ -497,7 +497,7 @@ services:
       - PGID=1000
       - TZ=Etc/UTC
       # CDP is loopback-only inside this container; rag-service talks to the capture API over Docker DNS.
-      - BRAVE_CLI=--remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --no-first-run --no-default-browser-check
+      - BRAVE_CLI=--remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --no-first-run --no-default-browser-check --disable-features=Translate,TranslateUI --lang=en-US
       - BROWSER_DEBUG_URL=127.0.0.1:9222
       - CUSTOM_PORT=3000
       # Enable Selkies clipboard functionality

@@ -1832,6 +1832,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         humanReviewSubmissionKeyRef.current = submissionKey;
         setHumanReviewSubmitting(action);
         setHumanReviewError(null);
+        let activeInterrupt = interrupt;
+        try {
+            const freshRun = await getAgentRun(pendingHumanReview.runId, activeThread.id);
+            const freshInterrupt = freshRun.pending_interrupt;
+            if (
+                freshInterrupt?.status === InterruptStatus.Pending
+                && freshInterrupt.interrupt_id
+            ) {
+                activeInterrupt = freshInterrupt as AgentRunPendingInterrupt;
+                setPendingHumanReview((current) => (
+                    current ? { ...current, interrupt: activeInterrupt } : current
+                ));
+            }
+        } catch {
+            /* Fall back to the interrupt shown in the approval card. */
+        }
         const liveMessageId = pendingHumanReview.localAssistantMessageId;
         resetLiveExecutionEvents();
         setLiveExecution({ messageId: liveMessageId, runId: pendingHumanReview.runId, running: true });
@@ -1841,9 +1857,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             let terminalError: string | undefined;
             await streamResumeAgentRun(pendingHumanReview.runId, {
                 action,
-                interrupt_id: interrupt.interrupt_id,
-                resume_token: interrupt.resume_token || undefined,
-                resume_version: interrupt.resume_version || undefined,
+                interrupt_id: activeInterrupt.interrupt_id,
+                resume_token: activeInterrupt.resume_token || undefined,
+                resume_version: activeInterrupt.resume_version || undefined,
                 selected_option_ids: selectedOptionIds,
                 thread_id: activeThread.id,
                 edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,

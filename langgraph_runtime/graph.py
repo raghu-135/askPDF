@@ -1487,6 +1487,7 @@ class NodeRegistry:
         started = time.perf_counter()
         from runtime_protocol.research_gaps import (
             canvas_absence_limitations_suppressed,
+            filter_answer_format_meta_limitations,
             filter_false_canvas_absence_limitations,
         )
 
@@ -1573,6 +1574,7 @@ class NodeRegistry:
         ][:MAX_ANSWER_QUALITY_ISSUES]
         if canvas_absence_limitations_suppressed(state):
             issues = filter_false_canvas_absence_limitations(issues)
+        issues = filter_answer_format_meta_limitations(issues)
         report = {
             "passed": passed,
             "reason": compact_preview(parsed.get("reason"), limit=800),

@@ -38,14 +38,27 @@ async def browser_navigate(request: BrowserNavigateRequest, context: ToolInvocat
         return _browser_disabled(tool_name, context, started)
     try:
         payload = await capture_navigate(request.url)
-        content = f"Navigated to {payload.get('title') or payload.get('url')} ({payload.get('url')})"
+        page_text = str(payload.get("text") or "").strip()
+        if not page_text:
+            read = await capture_read_page()
+            page_text = str(read.get("text") or "").strip()
+            payload = {**payload, "text": page_text, "url": read.get("url") or payload.get("url"), "title": read.get("title") or payload.get("title")}
+        body_preview = page_text[:12000]
+        content = "\n".join(
+            part
+            for part in [
+                f"Navigated to {payload.get('title') or payload.get('url')} ({payload.get('url')})",
+                body_preview,
+            ]
+            if part
+        )
         return make_tool_result(
             tool_name=tool_name,
             content=content,
             context=context,
             started=started,
-            artifacts={"browser_page": payload},
-            sources=[{"url": payload.get("url"), "title": payload.get("title")}],
+            artifacts={"browser_page": payload, "browser_page_text": {"url": payload.get("url"), "title": payload.get("title"), "text": body_preview}},
+            sources=[{"url": payload.get("url"), "title": payload.get("title"), "text": body_preview[:2000]}],
         )
     except BrowserCaptureClientError as exc:
         return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started)
