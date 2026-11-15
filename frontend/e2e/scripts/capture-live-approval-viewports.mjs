@@ -109,7 +109,7 @@ async function captureViewport(vp) {
     await dismissClarify(page);
     const title = page.getByText(/Allow a web search\?/i).first();
     const approve = page.getByRole('button', { name: /Approve once/i });
-    const skip = page.getByRole('button', { name: /Skip this tool for this/i });
+    const skip = page.getByRole('button', { name: /^Skip$/i });
     await title.waitFor({ state: 'visible', timeout: 180000 });
     await title.scrollIntoViewIfNeeded();
     await approve.scrollIntoViewIfNeeded();

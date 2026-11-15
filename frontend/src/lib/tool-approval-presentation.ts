@@ -55,6 +55,37 @@ function primaryArgumentPhrase(argumentsJson: Record<string, unknown> | undefine
   return typeof firstString === 'string' ? firstString.trim() : null;
 }
 
+/** Readable target line on the lean tool-approval card (URL, query, or save hint). */
+export function toolApprovalTargetPreview(
+  toolName: string,
+  argumentsJson: Record<string, unknown> | undefined | null,
+): string | null {
+  const args = argumentsJson && typeof argumentsJson === 'object' ? argumentsJson : {};
+  if (toolName === 'browser_save_to_thread') {
+    return 'Save current browser page to this thread';
+  }
+  if (toolName === 'browser_navigate' && typeof args.url === 'string' && args.url.trim()) {
+    return args.url.trim();
+  }
+  const phrase = primaryArgumentPhrase(args);
+  if (phrase) {
+    return phrase;
+  }
+  const keys = Object.keys(args);
+  if (!keys.length) {
+    return null;
+  }
+  if (keys.length === 1) {
+    const key = keys[0];
+    const value = args[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+    return `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`;
+  }
+  return JSON.stringify(args, null, 2);
+}
+
 export function toolApprovalSummaryLine(
   toolName: string,
   argumentsJson: Record<string, unknown> | undefined,

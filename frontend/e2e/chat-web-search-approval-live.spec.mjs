@@ -141,7 +141,7 @@ async function assertApprovalCard(page) {
   await title.scrollIntoViewIfNeeded();
   await expect(title).toBeVisible({ timeout: 180000 });
   const approveOnce = page.getByRole('button', { name: /Approve once/i });
-  const skip = page.getByRole('button', { name: /Skip this tool for this/i });
+  const skip = page.getByRole('button', { name: /^Skip$/i });
   await approveOnce.scrollIntoViewIfNeeded();
   await expect(approveOnce).toBeVisible();
   await expect(skip).toBeVisible();

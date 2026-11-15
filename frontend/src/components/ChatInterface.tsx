@@ -2923,12 +2923,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
+            transcriptDataTestId="chat-message-list"
             sx={{
                 p: 1,
                 cursor: 'default',
                 ...(chatHumanReviewOpen ? { overflow: 'hidden', overflowX: 'hidden' } : {}),
             }}
-            decisionBeforeTranscript={chatHumanReviewOpen}
+            decisionBeforeTranscript={chatHumanReviewOpen && !isToolApprovalReview}
             transcriptSx={chatHumanReviewOpen ? {
                 flex: '0 0 auto',
                 maxHeight: reviewTranscriptMaxHeight,
