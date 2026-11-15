@@ -118,6 +118,7 @@ export function HumanReviewDecisionPanel({
   );
 
   const toolArgumentPreview = isToolApproval ? proposedToolArgumentPreview(proposedTool) : null;
+  const stickyFooterLayout = isToolApproval;
 
   return (
     <ResizableDecisionPanel
@@ -130,6 +131,13 @@ export function HumanReviewDecisionPanel({
       defaultRatio={isToolApproval ? 0.22 : 0.3}
       narrowDefaultRatio={isToolApproval ? 0.26 : 0.32}
       showResizeHandle={!isToolApproval}
+      footer={stickyFooterLayout ? (
+        <>
+          {actionButtons}
+          {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
+          {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
+        </>
+      ) : undefined}
     >
       <Box data-testid="chat-human-review-panel" sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
         {!isToolApproval && (interrupt.prompt || interrupt.body) && (
@@ -138,14 +146,13 @@ export function HumanReviewDecisionPanel({
           </Typography>
         )}
         {isToolApproval && toolArgumentPreview && (
-          <Typography
-            variant="body2"
-            component="div"
+          <Box
             data-testid="tool-approval-argument-preview"
-            sx={{ px: 0.5, py: 0.25, fontFamily: 'monospace', fontSize: '0.8rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+            component="pre"
+            sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem' }}
           >
             {toolArgumentPreview}
-          </Typography>
+          </Box>
         )}
         {selectableOptions.length > 0 && (actions.has(ResumeAction.ApproveSelected) || editingScope) && (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
@@ -174,9 +181,13 @@ export function HumanReviewDecisionPanel({
             sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'action.hover' } }}
           />
         )}
-        {actionButtons}
-        {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
-        {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
+        {!stickyFooterLayout ? (
+          <>
+            {actionButtons}
+            {disabled && disabledReason ? <Typography variant="caption" color="text.secondary">Human input is currently unavailable: {disabledReason}</Typography> : null}
+            {error ? <Typography variant="caption" color="error">{error}</Typography> : null}
+          </>
+        ) : null}
       </Box>
     </ResizableDecisionPanel>
   );

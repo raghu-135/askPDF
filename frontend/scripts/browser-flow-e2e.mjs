@@ -197,11 +197,6 @@ await selectRouterWorkflow(page);
 await openConversation(page);
 await setWebSearchOff(page);
 await captureBrowserAskModeProof(page);
-await openBrowserTab(page);
-if (process.env.ASKPDF_E2E_HEADLESS === '0') {
-  await page.waitForTimeout(12000);
-}
-await shot(page, 'e2e-06-single-agent-browser-tab-1440x900.png');
 
 const prompt =
   'Use the shared workbench browser: open https://example.com and answer in one sentence what this page says is for (quote the line from the page body that explains the domain’s purpose—not the document title). I have no uploaded documents about this page.';
@@ -221,6 +216,10 @@ await page.getByTestId('tool-approval-argument-preview').filter({ hasText: /http
 });
 await shot(page, 'e2e-03-tool-approval-card-1440x900.png');
 await approve.click();
+await openBrowserTab(page);
+await page.waitForTimeout(8000);
+await shot(page, 'e2e-06-single-agent-browser-tab-1440x900.png');
+await openConversation(page);
 
 const bodyQuote = /documentation examples|without needing permission|illustrative examples/i;
 const answerDeadline = Date.now() + 600000;

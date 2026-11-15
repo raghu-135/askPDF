@@ -2897,12 +2897,15 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
         : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
     const chatHumanReviewOpen = Boolean(pendingReviewInterrupt);
+    const isToolApprovalReview = pendingReviewInterrupt?.type === 'tool_approval';
     const reviewTranscriptMaxHeight = chatHumanReviewOpen && stackedWorkbench
         ? REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT
         : REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT;
-    const reviewDecisionMinHeight = chatHumanReviewOpen && stackedWorkbench
-        ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
-        : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
+    const reviewDecisionMinHeight = isToolApprovalReview
+        ? 0
+        : chatHumanReviewOpen && stackedWorkbench
+            ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
+            : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
 
     return (
         <ConversationPanelTemplate
@@ -2922,7 +2925,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 minHeight: 'min(44vh, 320px)',
             } : undefined}
             decisionSx={chatHumanReviewOpen ? {
-                flex: '1 1 0',
+                flex: isToolApprovalReview ? '0 0 auto' : '1 1 0',
                 minHeight: reviewDecisionMinHeight,
                 overflow: 'hidden',
                 display: 'flex',

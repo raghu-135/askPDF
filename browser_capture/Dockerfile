@@ -1,5 +1,7 @@
 FROM lscr.io/linuxserver/brave:1.91.175-ls106@sha256:4757ede17ac763746b4863a63124a3147084461591bc53679ddb67bf1fdfd755
 
+COPY brave-managed-policy.json /etc/brave/policies/managed/askpdf.json
+
 USER root
 
 # The July 2026 linuxserver/brave base defaults to PixelFlux/Wayland, where

@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import asyncio
+from contextlib import asynccontextmanager
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -36,7 +37,21 @@ from weasyprint import HTML, CSS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Browser Capture Service - Direct CDP")
+@asynccontextmanager
+async def _capture_service_lifespan(_app: FastAPI):
+    for delay in (0, 2, 5):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await navigate_active_tab("https://example.com")
+            logger.info("Browser warmup navigation complete")
+            break
+        except Exception as exc:
+            logger.warning("Browser warmup navigate failed (delay=%ss): %s", delay, exc)
+    yield
+
+
+app = FastAPI(title="Browser Capture Service - Direct CDP", lifespan=_capture_service_lifespan)
 
 # Thread pool for CPU-bound operations (WeasyPrint)
 _thread_pool = ThreadPoolExecutor(max_workers=4)
@@ -170,6 +185,32 @@ async def get_active_tab_via_cdp():
         raise
 
 
+async def _dismiss_brave_content_promos(websocket) -> None:
+    """Click in-page Brave consent / promo controls when they appear on a loaded tab."""
+    for msg_id in (80, 81, 82):
+        try:
+            await _send_cdp_command(
+                websocket,
+                msg_id,
+                "Runtime.evaluate",
+                {
+                    "expression": """(() => {
+                      const labels = ['Disable', 'Got it', 'No thanks', 'Block', 'Not now'];
+                      for (const node of document.querySelectorAll('button, [role=button], a')) {
+                        const text = (node.textContent || '').trim();
+                        if (labels.some((label) => text === label || text.startsWith(label))) {
+                          node.click();
+                          return text;
+                        }
+                      }
+                      return '';
+                    })()""",
+                },
+            )
+        except Exception:
+            break
+
+
 async def _read_page_text_from_websocket(websocket) -> str:
     await _send_cdp_command(websocket, 90, "Runtime.enable")
     await _wait_for_content_ready(websocket)
@@ -207,6 +248,7 @@ async def navigate_active_tab(url: str) -> tuple[str, str, str]:
             {"url": validated},
         )
         await _wait_for_content_ready(websocket, max_wait_ms=15000, poll_interval_ms=250)
+        await _dismiss_brave_content_promos(websocket)
         title_result = await _send_cdp_command(
             websocket,
             3,
@@ -701,6 +743,7 @@ async def read_active_page():
         async with websockets.connect(websocket_url, max_size=100 * 1024 * 1024) as websocket:
             await _send_cdp_command(websocket, 1, "Runtime.enable")
             await _wait_for_content_ready(websocket)
+            await _dismiss_brave_content_promos(websocket)
             result = await _send_cdp_command(
                 websocket,
                 2,
