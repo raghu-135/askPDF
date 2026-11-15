@@ -71,12 +71,19 @@ async def _finish_human_review_boundary(
     if execution_event_sink is None:
         return
     if hasattr(execution_event_sink, "emit"):
+        compact_run = {
+            "id": run_id,
+            "status": str(result.get("status") or AgentRunStatus.AWAITING_HUMAN.value),
+            "pending_interrupt": result.get("pending_interrupt"),
+        }
+        product_response = {**result, "agent_run": compact_run}
         await execution_event_sink.emit(
             "interrupt.requested",
             {
                 "run_id": run_id,
                 "status": AgentRunStatus.AWAITING_HUMAN.value,
-                "response": result,
+                "agent_run": compact_run,
+                "response": product_response,
             },
         )
     if hasattr(execution_event_sink, "finish_boundary"):

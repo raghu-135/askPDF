@@ -236,7 +236,7 @@ try {
 const urlPreview = page.getByTestId('tool-approval-argument-preview').filter({ hasText: /https:\/\/example\.com/i });
 await urlPreview.waitFor({ state: 'visible', timeout: 30000 });
 await page.getByTestId('review-decision-footer').waitFor({ state: 'visible', timeout: 30000 });
-await page.getByText(/Approve browser_navigate/i).scrollIntoViewIfNeeded();
+await page.getByText(/Allow opening a web page|Approve browser_navigate/i).scrollIntoViewIfNeeded();
 await urlPreview.scrollIntoViewIfNeeded();
 await page.waitForTimeout(400);
 await shot(page, 'e2e-03-tool-approval-card-1440x900.png');

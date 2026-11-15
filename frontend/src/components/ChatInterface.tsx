@@ -131,6 +131,8 @@ import {
     WORKBENCH_AUTO_SIDE_MIN_WIDTH,
 } from '../lib/deep-research-review-panel-layout';
 import { shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
+import { isAgentRunResumeProductTerminal, parseAgentRunResumeStreamEvent } from '../lib/agent-run-resume-stream';
+import type { ToolDisplayCatalog } from '../lib/tool-approval-presentation';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
 import type { DocumentSource } from '../lib/api';
 
@@ -799,6 +801,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultCustomInstructions, setDefaultCustomInstructions] = useState('');
     const [systemRole, setSystemRole] = useState('');
     const [toolCatalog, setToolCatalog] = useState<PromptToolDefinition[]>([]);
+    const [toolDisplayCatalog, setToolDisplayCatalog] = useState<ToolDisplayCatalog>({});
     const [toolInstructions, setToolInstructions] = useState<Record<string, string>>({});
     const [customInstructions, setCustomInstructions] = useState('');
     const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
@@ -923,6 +926,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     });
 
     const stackedWorkbench = useMediaQuery(`(max-width:${WORKBENCH_AUTO_SIDE_MIN_WIDTH - 1}px)`);
+
+    useEffect(() => {
+        let cancelled = false;
+        void getPromptTools().then(({ tools }) => {
+            if (cancelled) return;
+            setToolDisplayCatalog(Object.fromEntries(
+                (tools || []).map((tool: PromptToolDefinition) => [tool.id, { display_name: tool.display_name, description: tool.description }]),
+            ));
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, []);
 
     useEffect(() => {
         if (!pendingHumanReview?.interrupt || !stackedWorkbench) return undefined;
@@ -1870,79 +1884,55 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             let response: any;
             let terminalError: string | undefined;
-            await streamResumeAgentRun(pendingHumanReview.runId, {
-                action,
-                interrupt_id: activeInterrupt.interrupt_id,
-                resume_token: activeInterrupt.resume_token || undefined,
-                resume_version: activeInterrupt.resume_version || undefined,
-                selected_option_ids: selectedOptionIds,
-                thread_id: activeThread.id,
-                edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
-                client_metadata: { source: 'chat_pending_review_panel' },
-            }, (event) => {
-                if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
-                if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
-                    setHumanReviewCapabilityRevision((revision) => revision + 1);
-                    void refreshHumanReviewCapabilities();
-                }
-                if (event.event === '__result__' && event.data?.response) {
-                    const envelope = event.data.response as Record<string, unknown>;
-                    const agentRun = envelope.agent_run as Record<string, unknown> | undefined;
-                    const outcome = envelope.outcome as Record<string, unknown> | undefined;
-                    const resultJson = agentRun?.result_json as { answer?: string; final_answer?: string } | undefined;
-                    response = {
-                        ...envelope,
-                        agent_run: agentRun,
-                        answer: String(
-                            outcome?.answer
-                            || outcome?.final_answer
-                            || resultJson?.answer
-                            || resultJson?.final_answer
-                            || '',
-                        ),
-                    };
-                    setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: undefined }
-                        : current);
-                    return;
-                }
-                if (event.event === '__error__') {
-                    const rawError = event.data?.error;
-                    terminalError = String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.');
-                    setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: terminalError }
-                        : current);
-                    return;
-                }
-                if (['run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'].includes(event.event)) {
-                    if (event.data?.response) {
-                        response = event.data.response;
-                    } else if (event.data?.agent_run) {
-                        const envelope = event.data as Record<string, unknown>;
-                        const agentRun = envelope.agent_run as Record<string, unknown> | undefined;
-                        const outcome = envelope.outcome as Record<string, unknown> | undefined;
-                        const resultJson = agentRun?.result_json as { answer?: string; final_answer?: string } | undefined;
-                        response = {
-                            ...envelope,
-                            agent_run: agentRun,
-                            answer: String(
-                                outcome?.answer
-                                || outcome?.final_answer
-                                || resultJson?.answer
-                                || resultJson?.final_answer
-                                || '',
-                            ),
-                        };
+            const resumeAbort = new AbortController();
+            let resumeTerminalReceived = false;
+            try {
+                await streamResumeAgentRun(pendingHumanReview.runId, {
+                    action,
+                    interrupt_id: activeInterrupt.interrupt_id,
+                    resume_token: activeInterrupt.resume_token || undefined,
+                    resume_version: activeInterrupt.resume_version || undefined,
+                    selected_option_ids: selectedOptionIds,
+                    thread_id: activeThread.id,
+                    edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
+                    client_metadata: { source: 'chat_pending_review_panel' },
+                }, (event) => {
+                    if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
+                    if (
+                        humanReviewSubmissionKeyRef.current !== submissionKey
+                        && /^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)
+                    ) {
+                        setHumanReviewCapabilityRevision((revision) => revision + 1);
+                        void refreshHumanReviewCapabilities();
                     }
-                    const rawError = event.data?.error;
-                    terminalError = ['run.failed', 'stream.error'].includes(event.event) && !response
-                        ? String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.')
-                        : undefined;
+                    if (!isAgentRunResumeProductTerminal(event.event, event.data as Record<string, unknown> | undefined)) return;
+                    const parsed = parseAgentRunResumeStreamEvent(event.event, event.data as Record<string, unknown> | undefined);
+                    if (!parsed) return;
+                    if (parsed.errorMessage) {
+                        terminalError = parsed.errorMessage;
+                    } else if (Object.keys(parsed.response).length > 0) {
+                        response = parsed.response;
+                    }
+                    const isFailure = ['__error__', 'run.failed', 'stream.error'].includes(event.event) && !response;
+                    if (isFailure && !terminalError) {
+                        terminalError = 'Unable to resume the agent run.';
+                    }
                     setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: terminalError }
+                        ? { ...current, running: false, error: isFailure ? terminalError : undefined }
                         : current);
+                    if (response || terminalError) {
+                        resumeTerminalReceived = true;
+                        resumeAbort.abort();
+                    }
+                }, resumeAbort.signal);
+            } catch (err: any) {
+                if (!resumeTerminalReceived && err?.name !== 'AbortError') {
+                    throw err;
                 }
-            });
+            }
+            if (!response && terminalError) {
+                throw new Error(terminalError);
+            }
             if (!response) throw new Error(terminalError || 'The resume stream ended before returning a result.');
 
             const resumedRun = response?.agent_run;
@@ -2928,6 +2918,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         : chatHumanReviewOpen && stackedWorkbench
             ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
             : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
+    const reviewControlsLocked = Boolean(humanReviewSubmitting);
 
     return (
         <ConversationPanelTemplate
@@ -2938,7 +2929,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 cursor: 'default',
                 ...(chatHumanReviewOpen ? { overflow: 'hidden', overflowX: 'hidden' } : {}),
             }}
-            decisionBeforeTranscript={chatHumanReviewOpen}
+            decisionBeforeTranscript={chatHumanReviewOpen && !isToolApprovalReview}
             transcriptSx={chatHumanReviewOpen ? {
                 flex: '0 0 auto',
                 maxHeight: reviewTranscriptMaxHeight,
@@ -3125,14 +3116,19 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     submitting={humanReviewSubmitting}
                     error={humanReviewError}
                     editText={humanReviewEditText}
-                    disabled={!pendingReviewAvailability.visible || !pendingReviewInputEnabled}
-                    disabledReason={pendingReviewInputEnabled ? undefined : pendingReviewAvailability.disabledReason}
+                    toolCatalog={toolDisplayCatalog}
+                    disabled={!reviewControlsLocked && (
+                        !pendingReviewAvailability.visible || !pendingReviewInputEnabled
+                    )}
+                    disabledReason={reviewControlsLocked ? undefined : (
+                        pendingReviewInputEnabled ? undefined : pendingReviewAvailability.disabledReason
+                    )}
                     rootRef={chatRootRef}
                     onEditTextChange={setHumanReviewEditText}
                     onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
                 />
             ) : undefined}
-            composer={!chatHumanReviewOpen ? (
+            composer={(
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
                 {editingMessageId && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
@@ -3175,7 +3171,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     onOpenMemoryReview={onOpenMemoryReview}
                 />
             </Box>
-            ) : undefined}
+            )}
             footer={(
             <>
             <ChatSettingsDialog
