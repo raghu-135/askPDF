@@ -45,7 +45,10 @@ def load_benchmark_config() -> dict[str, Any]:
     raw = os.getenv("ASKPDF_BENCHMARK_CONTEXT_OVERRIDES_JSON", "").strip()
     if raw:
         data = _deep_merge(data, json.loads(raw))
-    data["_config_path"] = str(path)
+    try:
+        data["_config_path"] = str(path.resolve().relative_to(REPO.resolve()))
+    except ValueError:
+        data["_config_path"] = str(path)
     return data
 
 

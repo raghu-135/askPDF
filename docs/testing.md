@@ -96,18 +96,11 @@ ASKPDF_INCLUDE_HOLDOUT=1 ./scripts/run_rag_benchmark.sh --holdout --judge
 ```
 
 Machine-readable JSON and a short Markdown summary are written under
-`benchmarks/reports/<commit-sha>.{json,md}`. See `benchmarks/rubric.md` and
+`benchmarks/reports/<commit-sha>.{json,md}` (gitignored). The committed
+reference scores are in `benchmarks/baseline.md` (aggregate in
+`benchmarks/baseline.json`); `run_benchmark.py` prints retrieval/answer deltas
+against that file when present. See `benchmarks/rubric.md` and
 `benchmarks/HOLDOUT.md` (DPO holdout — do not tune against).
-
-Overview context gap investigation (retrieval vs final prompt):
-
-```bash
-python3 scripts/investigate_overview_retrieval.py
-# same PDF/question, compare cheap paid vs openrouter/free on identical context
-python3 scripts/compare_overview_models.py
-```
-
-Write-up: `benchmarks/investigation/overview_context_bug.md` (factors **(a)** context vs **(b)** model).
 
 ## Coverage that is still thin
 

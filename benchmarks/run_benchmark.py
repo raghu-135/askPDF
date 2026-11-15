@@ -44,6 +44,7 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures" / "manifest.json"
 QUESTIONS = Path(__file__).resolve().parent / "questions.json"
 HOLDOUT = Path(__file__).resolve().parent / "holdout_questions.json"
 REPORTS = Path(__file__).resolve().parent / "reports"
+BASELINE_JSON = Path(__file__).resolve().parent / "baseline.json"
 
 DEFAULT_API = os.getenv("ASKPDF_BENCHMARK_API", os.getenv("ASKPDF_API_URL", "http://127.0.0.1:8000/api"))
 CHAT_MODEL = os.getenv("ASKPDF_BENCHMARK_MODEL", "openai/gpt-4.1-mini")
@@ -255,6 +256,24 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def print_baseline_deltas(report: dict[str, Any]) -> None:
+    if not BASELINE_JSON.is_file():
+        return
+    baseline = json.loads(BASELINE_JSON.read_text(encoding="utf-8"))
+    ref = baseline.get("workflows") if isinstance(baseline.get("workflows"), dict) else {}
+    ref_sha = str(baseline.get("commit_sha") or "")[:12]
+    for workflow, agg in (report.get("workflows") or {}).items():
+        block = ref.get(workflow)
+        if not isinstance(block, dict):
+            continue
+        dr = float(agg["retrieval_hit_rate"]) - float(block["retrieval_hit_rate"])
+        da = float(agg["answer_pass_rate"]) - float(block["answer_pass_rate"])
+        print(
+            f"vs baseline ({ref_sha}) {workflow}: retrieval {dr:+.0%}, answers {da:+.0%}",
+            flush=True,
+        )
+
+
 def write_report(report: dict[str, Any], sha: str) -> tuple[Path, Path]:
     REPORTS.mkdir(parents=True, exist_ok=True)
     json_path = REPORTS / f"{sha}.json"
@@ -413,6 +432,7 @@ def main() -> int:
     json_path, md_path = write_report(report, sha)
     print(f"wrote {json_path}")
     print(f"wrote {md_path}")
+    print_baseline_deltas(report)
     return 0
 
 
