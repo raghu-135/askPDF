@@ -147,7 +147,7 @@ export function HumanReviewDecisionPanel({
             value={editText}
             disabled={disabled || !actions.has(ResumeAction.Edit) || Boolean(submitting)}
             onChange={(event) => onEditTextChange?.(event.target.value)}
-            sx={{ '& .MuiFilledInput-root': { bgcolor: 'action.hover' } }}
+            sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'action.hover' } }}
           />
         )}
         {!stickyFooterLayout ? (

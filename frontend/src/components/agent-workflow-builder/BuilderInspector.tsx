@@ -32,6 +32,7 @@ import {
   getRouteLabelsForFunction,
 } from '../../lib/agent-workflow-builder';
 import type { BuilderSelection } from './types';
+import { selectFieldVariant } from '../../theme';
 import { JsonPreview } from '../inspector/JsonPreview';
 
 const asArrayValue = (value: unknown): string[] => (
@@ -193,7 +194,7 @@ function NodeInspector({
         ) : null}
         <JsonPreview value={node} maxHeight={220} />
       </Box>
-      <FormControl size="small" disabled={disabled || allowedTools.length === 0}>
+      <FormControl variant={selectFieldVariant} size="small" disabled={disabled || allowedTools.length === 0}>
         <InputLabel id={`node-tools-${node.id}`}>Tool contracts</InputLabel>
         <Select<string[]>
           labelId={`node-tools-${node.id}`}
@@ -235,7 +236,7 @@ function NodeInspector({
             onChange={(event) => onUpdateNode(node.id, { hitl: { ...(node.hitl || {}), prompt: event.target.value, body: event.target.value } })}
           />
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-            <FormControl size="small" disabled={disabled}>
+            <FormControl variant={selectFieldVariant} size="small" disabled={disabled}>
               <InputLabel id={`hitl-mode-${node.id}`}>Mode</InputLabel>
               <Select
                 labelId={`hitl-mode-${node.id}`}
@@ -248,7 +249,7 @@ function NodeInspector({
                 <MenuItem value={HitlMode.Choice}>Choice</MenuItem>
               </Select>
             </FormControl>
-            <FormControl size="small" disabled={disabled}>
+            <FormControl variant={selectFieldVariant} size="small" disabled={disabled}>
               <InputLabel id={`hitl-phase-${node.id}`}>Phase</InputLabel>
               <Select
                 labelId={`hitl-phase-${node.id}`}
@@ -261,7 +262,7 @@ function NodeInspector({
               </Select>
             </FormControl>
           </Box>
-          <FormControl size="small" disabled={disabled || !approvedTarget || bypassTargets.length === 0}>
+          <FormControl variant={selectFieldVariant} size="small" disabled={disabled || !approvedTarget || bypassTargets.length === 0}>
             <InputLabel id={`hitl-bypass-${node.id}`}>Continue without target</InputLabel>
             <Select
               labelId={`hitl-bypass-${node.id}`}
@@ -288,7 +289,7 @@ function NodeInspector({
               Continue without is disabled until a bypass target is selected.
             </Typography>
           ) : null}
-          <FormControl size="small" disabled={disabled}>
+          <FormControl variant={selectFieldVariant} size="small" disabled={disabled}>
             <InputLabel id={`hitl-actions-${node.id}`}>Allowed actions</InputLabel>
             <Select<string[]>
               labelId={`hitl-actions-${node.id}`}
@@ -310,7 +311,7 @@ function NodeInspector({
               ))}
             </Select>
           </FormControl>
-          <FormControl size="small" disabled={disabled}>
+          <FormControl variant={selectFieldVariant} size="small" disabled={disabled}>
             <InputLabel id={`hitl-default-${node.id}`}>Default action</InputLabel>
             <Select
               labelId={`hitl-default-${node.id}`}
@@ -420,7 +421,7 @@ function EdgeInspector({
       {edge.conditional ? (
         <>
           <TextField size="small" label="Source" value={edge.from} slotProps={{ input: { readOnly: true } }} />
-          <FormControl size="small" disabled={disabled || routeFns.length === 0}>
+          <FormControl variant={selectFieldVariant} size="small" disabled={disabled || routeFns.length === 0}>
             <InputLabel id={`edge-route-fn-${edgeIndex}`}>Route function</InputLabel>
             <Select
               labelId={`edge-route-fn-${edgeIndex}`}
@@ -449,7 +450,7 @@ function EdgeInspector({
                 <Typography variant="caption" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {route}
                 </Typography>
-                <FormControl size="small" disabled={disabled}>
+                <FormControl variant={selectFieldVariant} size="small" disabled={disabled}>
                   <InputLabel id={`route-target-${edgeIndex}-${route}`}>Target</InputLabel>
                   <Select
                     labelId={`route-target-${edgeIndex}-${route}`}
@@ -473,7 +474,7 @@ function EdgeInspector({
             ))}
             {missingRouteLabels.length > 0 ? (
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 1, alignItems: 'center' }}>
-                <FormControl size="small" disabled={disabled}>
+                <FormControl variant={selectFieldVariant} size="small" disabled={disabled}>
                   <InputLabel id={`add-route-label-${edgeIndex}`}>Route</InputLabel>
                   <Select
                     labelId={`add-route-label-${edgeIndex}`}
@@ -486,7 +487,7 @@ function EdgeInspector({
                     ))}
                   </Select>
                 </FormControl>
-                <FormControl size="small" disabled={disabled}>
+                <FormControl variant={selectFieldVariant} size="small" disabled={disabled}>
                   <InputLabel id={`add-route-target-${edgeIndex}`}>Target</InputLabel>
                   <Select
                     labelId={`add-route-target-${edgeIndex}`}
@@ -521,7 +522,7 @@ function EdgeInspector({
         </>
       ) : (
         <>
-          <FormControl size="small" disabled={disabled}>
+          <FormControl variant={selectFieldVariant} size="small" disabled={disabled}>
             <InputLabel id={`edge-source-${edgeIndex}`}>Source</InputLabel>
             <Select
               labelId={`edge-source-${edgeIndex}`}
@@ -538,7 +539,7 @@ function EdgeInspector({
               ))}
             </Select>
           </FormControl>
-          <FormControl size="small" disabled={disabled}>
+          <FormControl variant={selectFieldVariant} size="small" disabled={disabled}>
             <InputLabel id={`edge-target-${edgeIndex}`}>Target</InputLabel>
             <Select
               labelId={`edge-target-${edgeIndex}`}

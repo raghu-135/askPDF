@@ -81,6 +81,7 @@ export function ConversationComposer({
       <TextField
         inputRef={inputRef}
         fullWidth
+        variant="outlined"
         multiline
         minRows={minRows}
         maxRows={10}
@@ -98,14 +99,15 @@ export function ConversationComposer({
         }}
         disabled={disabled}
         sx={{
-          '& .MuiFilledInput-root': {
+          '& .MuiOutlinedInput-root': {
             bgcolor: 'background.paper',
             color: 'text.primary',
-            '&:before, &:after': {
-              display: 'none',
+            '& fieldset': {
+              borderColor: 'primary.light',
+              borderWidth: '1px',
             },
-            '&.Mui-focused': {
-              boxShadow: (theme) => `inset 0 0 0 1px ${theme.palette.primary.main}`,
+            '&:hover fieldset': {
+              borderColor: 'primary.main',
             },
           },
         }}

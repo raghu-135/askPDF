@@ -9,6 +9,7 @@ import {
   type SxProps,
   type Theme,
 } from '@mui/material';
+import { selectFieldVariant } from '../../theme';
 
 function sxList(sx?: SxProps<Theme>) {
   return Array.isArray(sx) ? sx : sx ? [sx] : [];
@@ -119,6 +120,7 @@ export function WorkbenchSelect({
   const labelId = inputLabelId || generatedId;
   return (
     <FormControl
+      variant={selectFieldVariant}
       size="small"
       disabled={disabled}
       sx={[{ flex: `0 0 ${minWidth}px`, minWidth }, ...sxList(sx)]}
@@ -188,6 +190,7 @@ export function WorkbenchAutocomplete({
           label={label}
           aria-label={ariaLabel}
           size="small"
+          variant={selectFieldVariant}
           sx={{
             '& .MuiFilledInput-root': workbenchControlSx,
           }}

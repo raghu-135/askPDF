@@ -76,7 +76,7 @@ export function DecisionChoiceList({
                 label={choice.label}
                 value={value}
                 disabled={disabled}
-                sx={{ '& .MuiFilledInput-root': { bgcolor: 'action.hover' } }}
+                sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'action.hover' } }}
                 onChange={(event) => onChoiceTextChange?.(choice, event.target.value)}
               />
               <Tooltip title="Send this response">

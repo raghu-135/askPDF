@@ -14,6 +14,7 @@ import {
   Typography,
 } from '@mui/material';
 import type { Project, Thread } from '../lib/api';
+import { selectFieldVariant } from '../theme';
 
 export type MemoryCopyMode = 'thread_snapshot' | 'project_snapshot' | 'all';
 
@@ -87,7 +88,7 @@ const ThreadForkDialog: React.FC<ThreadForkDialogProps> = ({
             fullWidth
             autoFocus
           />
-          <FormControl fullWidth>
+          <FormControl variant={selectFieldVariant} fullWidth>
             <InputLabel>Project</InputLabel>
             <Select
               value={targetProjectId}
@@ -106,7 +107,7 @@ const ThreadForkDialog: React.FC<ThreadForkDialogProps> = ({
               )}
             </Select>
           </FormControl>
-          <FormControl fullWidth>
+          <FormControl variant={selectFieldVariant} fullWidth>
             <InputLabel>Memory copy</InputLabel>
             <Select
               value={memoryCopyMode}

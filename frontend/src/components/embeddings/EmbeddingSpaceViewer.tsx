@@ -18,6 +18,7 @@ import {
   Typography,
   useTheme,
 } from '@mui/material';
+import { selectFieldVariant } from '../../theme';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import CloseIcon from '@mui/icons-material/Close';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
@@ -524,7 +525,7 @@ export default function EmbeddingSpaceViewer({
         sx={{ minWidth: 150 }}
       />,
       WORKSPACE_CHROME_SEPARATOR,
-      <FormControl key="source-family" size="small" sx={{ minWidth: 150 }}>
+      <FormControl key="source-family" variant={selectFieldVariant} size="small" sx={{ minWidth: 150 }}>
         <InputLabel id="embedding-source-family-label">Source</InputLabel>
         <Select
           labelId="embedding-source-family-label"
@@ -548,7 +549,7 @@ export default function EmbeddingSpaceViewer({
 
     if (sourceFamily === 'all' || sourceFamily === 'documents') {
       items.push(
-        <FormControl key="document-filter" size="small" sx={{ minWidth: 160 }}>
+        <FormControl key="document-filter" variant={selectFieldVariant} size="small" sx={{ minWidth: 160 }}>
           <InputLabel id="embedding-file-filter-label">Document</InputLabel>
           <Select
             labelId="embedding-file-filter-label"
@@ -572,7 +573,7 @@ export default function EmbeddingSpaceViewer({
     }
 
     items.push(
-      <FormControl key="color-mode" size="small" sx={{ minWidth: 130 }}>
+      <FormControl key="color-mode" variant={selectFieldVariant} size="small" sx={{ minWidth: 130 }}>
         <InputLabel id="embedding-color-mode-label">Color by</InputLabel>
         <Select
           labelId="embedding-color-mode-label"

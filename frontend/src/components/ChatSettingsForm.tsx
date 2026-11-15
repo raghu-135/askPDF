@@ -14,6 +14,7 @@ import {
 import ReplayIcon from '@mui/icons-material/Replay';
 import { AgentWorkflow, PromptToolDefinition } from '../lib/api';
 import { ConversationMarkdown } from './conversation/ConversationMarkdown';
+import { selectFieldVariant } from '../theme';
 
 export interface ChatSettingsFormProps {
   description?: string;
@@ -115,6 +116,7 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
       </Box>
       <TextField
         select
+        variant={selectFieldVariant}
         label="Agent workflow"
         value={agentWorkflowId}
         onChange={(e) => onAgentWorkflowChange(e.target.value)}
