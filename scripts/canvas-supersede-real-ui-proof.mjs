@@ -254,7 +254,22 @@ async function main() {
     }
     await guard.capture(page, shots.assistant, { requireChatWorkspace: true });
 
-    let afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
+    let afterRecord = beforeRecord;
+    try {
+      afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
+    } catch (err) {
+      await focusChatComposer(page);
+      await typeAndSendChat(
+        page,
+        `Please update and republish that canvas with a short summary at the top, keeping all existing claims.\n\n${deepLink}`,
+      );
+      await chatRateLimitPause();
+      await waitForAssistantAnswer(page);
+      afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
+      if (afterRecord.id === beforeRecord.id) {
+        throw err;
+      }
+    }
 
     await openCanvasInWorkspace(page, admin, threadId);
     await page.getByRole('heading', { name: afterRecord.title }).first().waitFor({ timeout: 120_000 });
