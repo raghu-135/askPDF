@@ -283,9 +283,10 @@ def format_quoted_canvas_revisions_for_prompt(revisions: list[Mapping[str, Any]]
         "## Quoted canvas revision baseline",
         "",
         "The user quoted a canvas to revise. Start from the `publish_canvas_draft` below.",
-        "When you call `publish_canvas` with `supersedes_id` for that canvas, keep every existing claim "
-        "and `source_id` unless the user explicitly asks to remove one. Apply only the requested edit "
-        "(for example add a Summary section via `summary` or an extra overview markdown). "
+        "When the user asks to change this canvas (summary, wording, sections, etc.), you **must** call "
+        "`publish_canvas` with `supersedes_id` set to the quoted canvas id. Start from the draft below, "
+        "keep every existing claim and `source_id` unless the user explicitly asks to remove one, and apply "
+        "only the requested edit (for example set `summary` or extend the overview). "
         "Do not shrink the claim or source lists.",
         "",
     ]
