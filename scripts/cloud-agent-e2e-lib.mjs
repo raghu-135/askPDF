@@ -384,3 +384,29 @@ export async function sleep(ms) {
 export async function chatRateLimitPause() {
   await sleep(MIN_CHAT_BACKOFF_MS);
 }
+
+/** Cycle the chat-header browser workbench control until Ask mode is active. */
+export async function setBrowserAskMode(page) {
+  await page.evaluate(() => {
+    localStorage.setItem('last_browser_access_mode', 'ask');
+    window.dispatchEvent(new CustomEvent('askpdf:browser-access-mode', { detail: 'ask' }));
+  });
+  const askBtn = page.getByRole('button', { name: /^Ask before the agent uses the workbench browser$/i });
+  if (await askBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    return;
+  }
+  const browserToggle = page
+    .getByRole('button', {
+      name: /Browser agent off|Browser agent on|Ask before the agent uses the workbench browser/i,
+    })
+    .first();
+  await browserToggle.waitFor({ state: 'visible', timeout: 60_000 });
+  for (let i = 0; i < 6; i += 1) {
+    await browserToggle.click();
+    await page.waitForTimeout(350);
+    if (await askBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      return;
+    }
+  }
+  throw new Error('Could not set browser access mode to Ask');
+}

@@ -942,19 +942,45 @@ class AgentRunService:
         status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
         answer = str(result.get("answer") or result.get("final_answer") or "").strip()
         metrics = build_run_metrics(result, duration_ms=0)
-        await self.repository.complete_run(
-            run.id,
-            status=status if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value, AgentRunStatus.AWAITING_HUMAN.value} else AgentRunStatus.COMPLETED.value,
-            metrics_json=metrics,
-            error_json=result.get("agent_error"),
-        )
-        debug_payload = trace_recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, result=result)
-        await self.repository.set_run_debug_trace(run.id, debug_payload)
+        error_json = result.get("agent_error") if isinstance(result, dict) else None
+        if status == AgentRunStatus.AWAITING_HUMAN.value:
+            if hasattr(trace_recorder, "record_interrupted_snapshot"):
+                trace_recorder.record_interrupted_snapshot(
+                    interrupt=result.get("pending_interrupt") or {},
+                    state=result,
+                )
+            debug_payload = trace_recorder.finalize(
+                run=run,
+                chat_turn_id=None,
+                metrics=metrics,
+                route=result.get("route"),
+                route_reason=result.get("route_reason"),
+                error=error_json,
+                result=result,
+            )
+            paused_run = await self.repository.mark_run_awaiting_human(
+                run.id,
+                result.get("pending_interrupt") or {},
+                metrics_json=metrics,
+                debug_trace_json=debug_payload,
+            )
+            if paused_run is not None:
+                result["pending_interrupt"] = paused_run.pending_interrupt_json
+        else:
+            await self.repository.complete_run(
+                run.id,
+                status=status if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value} else AgentRunStatus.COMPLETED.value,
+                metrics_json=metrics,
+                error_json=error_json,
+            )
+            debug_payload = trace_recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, result=result)
+            await self.repository.set_run_debug_trace(run.id, debug_payload)
         return {
             "child_workflow_id": child_workflow_id,
             "child_run_id": run.id,
             "final_answer": answer,
             "status": status,
+            "pending_interrupt": result.get("pending_interrupt"),
             "result": result,
         }
 

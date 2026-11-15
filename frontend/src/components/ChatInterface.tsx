@@ -2521,6 +2521,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         } finally {
             setLiveExecution((current) => current?.messageId === tempAssistantMsg.id ? null : current);
             setLoading(false);
+            if (activeThread?.id && !testRuntime) {
+                void recoverPendingHumanReview(activeThread.id);
+            }
         }
     };
 

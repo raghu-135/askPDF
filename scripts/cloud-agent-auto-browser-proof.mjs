@@ -19,6 +19,7 @@ import {
   uploadPdfThroughUi,
   waitForAssistantAnswer,
   waitForComposerReady,
+  setBrowserAskMode,
 } from './cloud-agent-e2e-lib.mjs';
 
 const requireFromFrontend = createRequire(path.join(REPO_ROOT, 'frontend/package.json'));
@@ -34,42 +35,42 @@ function gitSha() {
   return r.status === 0 ? r.stdout.trim() : 'unknown';
 }
 
-async function setBrowserAskMode(page) {
-  await page.evaluate(() => {
-    localStorage.setItem('last_browser_access_mode', 'ask');
-    window.dispatchEvent(new CustomEvent('askpdf:browser-access-mode', { detail: 'ask' }));
-  });
-  const askBtn = page.getByRole('button', { name: /^Ask before the agent uses the workbench browser$/i });
-  for (let i = 0; i < 6; i += 1) {
-    if (await askBtn.isVisible({ timeout: 1500 }).catch(() => false)) {
-      return;
+async function ensureAutoWorkflow(page) {
+  const workflow = page.getByRole('combobox', { name: /^Agent workflow/i }).first();
+  if (!(await workflow.isVisible({ timeout: 8000 }).catch(() => false))) {
+    const threadTab = page.getByRole('tab', { name: /^Thread$/i }).first();
+    if (await threadTab.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await threadTab.click();
     }
-    const toggle = page
-      .getByRole('button', {
-        name: /Browser agent off|Browser agent on|Ask before the agent uses the workbench browser/i,
-      })
-      .first();
-    await toggle.click();
-    await page.waitForTimeout(300);
+    await workflow.waitFor({ state: 'visible', timeout: 30_000 });
+  }
+  const current = (await workflow.textContent()) || '';
+  if (/\bauto\b/i.test(current)) return;
+  await workflow.click();
+  const auto = page.getByRole('option', { name: /auto_rag_agent|^Auto\b/i }).first();
+  await auto.click({ timeout: 15_000 });
+  const save = page.getByRole('button', { name: /^Save$/i });
+  if (await save.isVisible({ timeout: 2000 }).catch(() => false)) {
+    await save.click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => {});
   }
 }
 
-async function ensureAutoWorkflow(page) {
-  const settings = page.getByRole('button', { name: /AI prompt settings for this thread/i }).first();
-  await settings.click();
-  const dialog = page.getByRole('dialog');
-  await dialog.waitFor({ timeout: 15000 });
-  const workflow = dialog.getByRole('combobox', { name: /^Agent workflow/i });
-  await workflow.click();
-  const auto = page.getByRole('option', { name: /^Auto$/i }).first();
-  await auto.click();
-  await dialog.getByRole('button', { name: /^Save$/i }).click();
-  await dialog.waitFor({ state: 'hidden', timeout: 15000 });
+async function waitForApprovalFooter(page) {
+  const footer = page.getByTestId('review-decision-footer');
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    if (await footer.isVisible({ timeout: 1000 }).catch(() => false)) {
+      return footer;
+    }
+    await page.waitForTimeout(5000);
+  }
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await footer.waitFor({ state: 'visible', timeout: 120_000 });
+  return footer;
 }
 
 async function clickApproveOnce(page) {
-  const footer = page.getByTestId('review-decision-footer');
-  await footer.waitFor({ state: 'visible', timeout: 420_000 });
+  const footer = await waitForApprovalFooter(page);
   const approve = footer.getByRole('button', { name: /^Approve once$/i }).first();
   await approve.evaluate((button) => {
     button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -104,6 +105,8 @@ async function main() {
     const model = await selectModel(page);
     await ensureAutoWorkflow(page);
     await setBrowserAskMode(page);
+    const askControl = page.getByRole('button', { name: /^Ask before the agent uses the workbench browser$/i });
+    await askControl.waitFor({ state: 'visible', timeout: 15_000 });
     await guard.capture(page, 'auto-browser-01-ask-mode-1440x900.png', { requireChatWorkspace: true });
     await uploadPdfThroughUi(page, PDF_PATH);
     await waitForComposerReady(page);
