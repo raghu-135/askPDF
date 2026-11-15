@@ -45,3 +45,31 @@ test('isAgentRunResumeProductTerminal ignores raw runtime run.completed', () => 
     true,
   );
 });
+
+test('isAgentRunResumeProductTerminal ignores human-review boundary without agent_run', () => {
+  assert.equal(
+    isAgentRunResumeProductTerminal('interrupt.requested', {
+      run_id: 'run-1',
+      status: 'awaiting_human',
+      response: { status: 'awaiting_human', pending_interrupt: { interrupt_id: 'i-1' } },
+    }),
+    false,
+  );
+  assert.equal(
+    isAgentRunResumeProductTerminal('interrupt.requested', {
+      agent_run: { status: 'awaiting_human', pending_interrupt: { interrupt_id: 'i-1' } },
+    }),
+    true,
+  );
+});
+
+test('parseAgentRunResumeStreamEvent derives agent_run from pending_interrupt in boundary payload', () => {
+  const parsed = parseAgentRunResumeStreamEvent('interrupt.requested', {
+    response: {
+      status: 'awaiting_human',
+      pending_interrupt: { interrupt_id: 'i-1', type: 'tool_approval' },
+    },
+  });
+  assert.equal(parsed?.response.agent_run?.status, 'awaiting_human');
+  assert.equal(parsed?.response.agent_run?.pending_interrupt?.interrupt_id, 'i-1');
+});

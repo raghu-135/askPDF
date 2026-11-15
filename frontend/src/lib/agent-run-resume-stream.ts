@@ -46,7 +46,14 @@ export function parseAgentRunResumeStreamEvent(
     agentRun = envelope.agent_run as Record<string, unknown> | undefined;
   } else if (data.response) {
     const nested = data.response as Record<string, unknown>;
-    const nestedRun = nested.agent_run as Record<string, unknown> | undefined;
+    const nestedRun = (nested.agent_run as Record<string, unknown> | undefined)
+      ?? (data.agent_run as Record<string, unknown> | undefined)
+      ?? (nested.pending_interrupt
+        ? {
+            status: nested.status ?? data.status ?? 'awaiting_human',
+            pending_interrupt: nested.pending_interrupt,
+          }
+        : undefined);
     const nestedOutcome = nested.outcome as Record<string, unknown> | undefined;
     return {
       response: {
@@ -81,7 +88,13 @@ export function isAgentRunResumeProductTerminal(
   if (eventName === '__result__' || eventName === '__error__') return true;
   if (eventName === 'stream.error' || eventName === 'run.failed' || eventName === 'run.cancelled') return true;
   if (eventName === 'run.completed' || eventName === 'interrupt.requested') {
-    return Boolean(data.response) || Object.prototype.hasOwnProperty.call(data, 'outcome');
+    const agentRun = (data.agent_run ?? (data.response as Record<string, unknown> | undefined)?.agent_run) as
+      | Record<string, unknown>
+      | undefined;
+    if (agentRun && typeof agentRun === 'object') {
+      return true;
+    }
+    return Object.prototype.hasOwnProperty.call(data, 'outcome');
   }
   return false;
 }

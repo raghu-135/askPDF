@@ -196,11 +196,17 @@ async def test_human_review_boundary_emits_chat_response_before_closing_stream()
 
     await _finish_human_review_boundary(sink, run_id="run-1", result=result)
 
+    compact_run = {
+        "id": "run-1",
+        "status": "awaiting_human",
+        "pending_interrupt": {"interrupt_id": "interrupt-1"},
+    }
     assert sink.events == [(
         ("interrupt.requested", {
             "run_id": "run-1",
             "status": "awaiting_human",
-            "response": result,
+            "agent_run": compact_run,
+            "response": {**result, "agent_run": compact_run},
         }),
         {},
     )]
