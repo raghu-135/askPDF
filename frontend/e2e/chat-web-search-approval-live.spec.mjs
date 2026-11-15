@@ -200,10 +200,6 @@ async function runApproveFlow(page, suffix) {
   await assertApprovalCard(page);
   await assertViewportScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-prompt.png`));
   await page.getByRole('button', { name: /Approve once/i }).click({ force: true });
-  const forRun = page.getByRole('button', { name: /Approve for this run/i });
-  if (await forRun.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await forRun.click({ force: true });
-  }
   await waitForAnswer(page, /EUR|USD|exchange|dollar|euro|Research canvas|Web sources|0\.\d/i);
   await assertViewportScreenshot(page, path.join(ART, `chat-tool-approval-${suffix}-answer.png`));
 }

@@ -76,7 +76,7 @@ async function waitComposerIdle(page) {
 }
 
 async function pollForAnswer(page, predicate) {
-  for (let i = 0; i < 90; i += 1) {
+  for (let i = 0; i < 120; i += 1) {
     await waitComposerIdle(page);
     const approvalOpen = await page.getByText(/Allow a web search\?/i).isVisible().catch(() => false);
     const messages = await page.locator('li, .MuiListItem-root').allInnerTexts();
@@ -116,8 +116,6 @@ async function captureViewport(vp) {
     await page.screenshot({ path: promptPath, fullPage: false });
     assertPngWidth(promptPath, vp.width);
     await approve.click({ force: true });
-    const forRun = page.getByRole('button', { name: /Approve for this run/i });
-    if (await forRun.isVisible({ timeout: 8000 }).catch(() => false)) await forRun.click({ force: true });
     await pollForAnswer(
       page,
       (t) => (
@@ -154,6 +152,12 @@ async function captureViewport(vp) {
 }
 
 fs.mkdirSync(ART, { recursive: true });
-for (const vp of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) {
+const viewports = process.env.ASKPDF_E2E_VIEWPORTS
+  ? process.env.ASKPDF_E2E_VIEWPORTS.split(',').map((pair) => {
+    const [width, height] = pair.split('x').map(Number);
+    return { width, height };
+  })
+  : [{ width: 1440, height: 900 }, { width: 1024, height: 768 }];
+for (const vp of viewports) {
   await captureViewport(vp);
 }
