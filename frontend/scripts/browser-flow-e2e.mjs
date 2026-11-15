@@ -208,12 +208,25 @@ try {
 }
 await shot(page, 'e2e-03-tool-approval-card-1440x900.png');
 await approve.click();
-const answer = page
-  .locator('div.MuiPaper-root')
-  .filter({ hasText: /illustrative examples|IANA-managed|reserved for use in documentation/i })
-  .last();
-await answer.waitFor({ state: 'visible', timeout: 300000 });
-await page.waitForTimeout(2000);
+const bodyQuote = /documentation examples|without needing permission|illustrative examples/i;
+const answerDeadline = Date.now() + 600000;
+let answerVisible = false;
+while (Date.now() < answerDeadline) {
+  const candidates = page.locator('div.MuiPaper-root').filter({ hasText: bodyQuote });
+  if ((await candidates.count()) > 0) {
+    const last = candidates.last();
+    if (await last.isVisible().catch(() => false)) {
+      answerVisible = true;
+      break;
+    }
+  }
+  await page.waitForTimeout(2500);
+}
+if (!answerVisible) {
+  await shot(page, 'e2e-failure-missing-body-answer-1440x900.png');
+  throw new Error('Timed out waiting for an answer quoting example.com body text.');
+}
+await page.waitForTimeout(1500);
 await shot(page, 'e2e-04-agent-answer-from-page-1440x900.png');
 
 await sendChat(

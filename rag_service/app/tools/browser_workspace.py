@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from starlette.background import BackgroundTasks
 
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
@@ -16,6 +18,7 @@ from app.services.browser_capture_client import (
     pelorus_screenshot,
     pelorus_state,
 )
+from app.services.content_store import get_content_store, pdf_content_key
 from app.services.file_processing_service import queue_file_processing
 from app.tools.contracts import BrowserActRequest, BrowserNavigateRequest, EmptyBrowserRequest
 from app.tools.context import ToolInvocationContext
@@ -156,6 +159,20 @@ async def browser_act(request: BrowserActRequest, context: ToolInvocationContext
         return make_tool_error_result(tool_name=tool_name, error=exc, context=context, started=started)
 
 
+async def _ingest_capture_pdf_to_content_store(capture: dict) -> None:
+    """Mirror thread file-upload capture ingest so browser saves are indexable."""
+    file_hash = str(capture["file_hash"])
+    capture_path = f"/captures/{file_hash}.pdf"
+    store = get_content_store()
+    key = pdf_content_key(file_hash)
+    if await store.exists(key):
+        return
+    if not os.path.exists(capture_path):
+        raise FileNotFoundError(f"Captured PDF not found at {capture_path}")
+    with open(capture_path, "rb") as captured:
+        await store.put(key, captured.read())
+
+
 async def browser_read(_request: EmptyBrowserRequest, context: ToolInvocationContext):
     started = tool_started()
     tool_name = "browser_read"
@@ -207,13 +224,14 @@ async def browser_save_to_thread(_request: EmptyBrowserRequest, context: ToolInv
                 context=context,
                 started=started,
             )
+        await _ingest_capture_pdf_to_content_store(capture)
         background = BackgroundTasks()
         await queue_file_processing(
             background_tasks=background,
             thread=thread,
             file_hash=capture["file_hash"],
             file_name=f"{capture.get('title')} - {url}",
-            file_path=url,
+            file_path=f"/captures/{capture['file_hash']}.pdf",
             source_type=FileSourceType.BROWSER.value,
             indexing_metadata={
                 "source_kind": "browser_capture",
