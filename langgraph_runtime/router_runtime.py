@@ -270,16 +270,26 @@ def _pending_interrupt_from_result(
 
 def _resume_command(interrupt: Dict[str, Any], state: Dict[str, Any], config: Dict[str, Any]) -> Command:
     """Exclude the durable human pause from an active dispatch deadline."""
-    update = {}
-    requested_at = parse_datetime_utc(interrupt.get("requested_at"))
+    update: Dict[str, Any] = {}
+    decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
+    pause_anchor = parse_datetime_utc(interrupt.get("requested_at")) or parse_datetime_utc(decision.get("decided_at"))
     deadline = int(state.get("dispatch_deadline_epoch_ms") or 0)
-    if requested_at is not None and deadline:
-        paused_ms = max(0, int((utc_now() - requested_at).total_seconds() * 1000))
-        update["dispatch_deadline_epoch_ms"] = deadline + paused_ms
+    dispatch_id = state.get("dispatch_id")
+    work_items = [item for item in state.get("work_items") or [] if isinstance(item, dict)]
+    now_ms = int(time.time() * 1000)
+    if pause_anchor is not None and (deadline or work_items):
+        paused_ms = max(0, int((utc_now() - pause_anchor).total_seconds() * 1000))
+        policy = normalized_parallel_policy(state.get("parallel_policy"))
+        if deadline:
+            new_deadline = max(now_ms + 5_000, deadline + paused_ms)
+        else:
+            new_deadline = now_ms + int(policy["dispatch_timeout_ms"])
+        update["dispatch_deadline_epoch_ms"] = new_deadline
         # Send branches retain their original input. Pass the same adjusted
         # deadline to those branches while updating the parent checkpoint.
         config.setdefault("configurable", {})["resumed_dispatch_deadline"] = {
-            "dispatch_id": state.get("dispatch_id"), "deadline_epoch_ms": deadline + paused_ms,
+            "dispatch_id": dispatch_id,
+            "deadline_epoch_ms": new_deadline,
         }
     return Command(resume={str(interrupt["interrupt_id"]): interrupt.get("decision") or {}}, update=update or None)
 
