@@ -107,7 +107,11 @@ export function ResizableDecisionPanel({
       pb: fillColumn && footer ? 0 : (footer ? 0 : 1),
       overflowX: 'hidden',
       minHeight: 0,
-      ...(fillColumn ? { flexShrink: 0, overflowY: 'visible' } : { flex: '1 1 0', overflowY: 'auto' }),
+      ...(fillColumn
+        ? { flexShrink: 0, overflowY: 'visible' }
+        : compact
+          ? { flex: '0 0 auto', overflowY: 'visible' }
+          : { flex: '1 1 0', overflowY: 'auto' }),
     }}>
       {children}
     </Box>

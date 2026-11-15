@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
@@ -13,6 +14,28 @@ const VP = { width: 1440, height: 900, name: '1440x900' };
 fs.mkdirSync(ART, { recursive: true });
 
 const shotMd5s = new Map();
+
+async function waitForCapturePage(fragment, timeoutMs = 240000) {
+  const deadline = Date.now() + timeoutMs;
+  const pattern = new RegExp(fragment, 'i');
+  while (Date.now() < deadline) {
+    try {
+      const raw = execSync(
+        'docker exec askpdf-browser-capture-1 curl -sf http://127.0.0.1:8080/read',
+        { encoding: 'utf8', timeout: 20000 },
+      );
+      const data = JSON.parse(raw);
+      const hay = `${data.title || ''}\n${data.url || ''}\n${data.text || ''}`;
+      if (pattern.test(hay)) {
+        return data;
+      }
+    } catch {
+      /* capture API may be busy until navigation completes */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error(`Timed out waiting for capture page matching /${fragment}/i`);
+}
 
 async function verifyShot(filePath) {
   const meta = await sharp(filePath).metadata();
@@ -210,14 +233,55 @@ try {
   await shot(page, 'e2e-failure-before-approval-1440x900.png');
   throw error;
 }
-await page.getByTestId('tool-approval-argument-preview').filter({ hasText: /https:\/\/example\.com/i }).waitFor({
-  state: 'visible',
-  timeout: 30000,
-});
+const urlPreview = page.getByTestId('tool-approval-argument-preview').filter({ hasText: /https:\/\/example\.com/i });
+await urlPreview.waitFor({ state: 'visible', timeout: 30000 });
+await page.getByTestId('review-decision-footer').waitFor({ state: 'visible', timeout: 30000 });
+await page.getByText(/Approve browser_navigate/i).scrollIntoViewIfNeeded();
+await urlPreview.scrollIntoViewIfNeeded();
+await page.waitForTimeout(400);
 await shot(page, 'e2e-03-tool-approval-card-1440x900.png');
-await approve.click();
+await page.mouse.move(40, 120);
+await page.keyboard.press('Escape');
+const approveInFooter = page
+  .getByTestId('review-decision-footer')
+  .getByRole('button', { name: /^Approve once$/i })
+  .first();
+await page.evaluate(() => {
+  document.querySelectorAll('[role="tooltip"]').forEach((node) => node.remove());
+});
+const [resumeResponse] = await Promise.all([
+  page.waitForResponse(
+    (response) => response.url().includes('/api/agent-runs/') && response.url().includes('/resume'),
+    { timeout: 120000 },
+  ),
+  approveInFooter.evaluate((button) => {
+    (button).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  }),
+]);
+if (!resumeResponse.ok()) {
+  throw new Error(`Agent resume failed: HTTP ${resumeResponse.status()}`);
+}
+await page.waitForTimeout(500);
+await page.getByTestId('review-decision-footer').waitFor({ state: 'hidden', timeout: 240000 }).catch(() => {});
+await page.getByRole('button', { name: /^Approve once$/i }).first().waitFor({ state: 'hidden', timeout: 240000 }).catch(() => {});
+await waitForCapturePage('example\\.com');
 await openBrowserTab(page);
-await page.waitForTimeout(8000);
+const streamFrame = page.locator('iframe[title="Browser"]');
+await streamFrame.waitFor({ state: 'visible', timeout: 60000 });
+await streamFrame.click({ position: { x: 520, y: 360 }, force: true });
+await page.waitForTimeout(45000);
+const waitingStream = await page.getByText(/Waiting for stream/i).isVisible().catch(() => false);
+if (waitingStream) {
+  await page.evaluate(() => {
+    const frame = document.querySelector('iframe[title="Browser"]');
+    if (frame instanceof HTMLIFrameElement) {
+      const src = frame.src;
+      frame.src = '';
+      frame.src = src;
+    }
+  });
+  await page.waitForTimeout(60000);
+}
 await shot(page, 'e2e-06-single-agent-browser-tab-1440x900.png');
 await openConversation(page);
 
@@ -246,12 +310,26 @@ await sendChat(
   page,
   'Save the current workbench browser page to this thread as a document, then confirm the file name.',
 );
-const savePanel = page.getByTestId('chat-human-review-panel').filter({ hasText: /browser_save_to_thread|Save current browser page/i });
-await savePanel.waitFor({ state: 'visible', timeout: 240000 });
-const saveApprove = savePanel.getByRole('button', { name: /^Approve once$/i });
-await saveApprove.waitFor({ state: 'visible', timeout: 10000 });
+await waitForApproval(page, 420000);
+const saveUrlPreview = page
+  .getByTestId('tool-approval-argument-preview')
+  .filter({ hasText: /Save current browser page/i });
+await saveUrlPreview.waitFor({ state: 'visible', timeout: 120000 });
+await saveUrlPreview.scrollIntoViewIfNeeded();
 await shot(page, 'e2e-03b-save-tool-approval-card-1440x900.png');
-await saveApprove.click();
+const saveApprove = page.getByTestId('review-decision-footer').getByRole('button', { name: /^Approve once$/i }).first();
+const [saveResumeResponse] = await Promise.all([
+  page.waitForResponse(
+    (response) => response.url().includes('/api/agent-runs/') && response.url().includes('/resume'),
+    { timeout: 240000 },
+  ),
+  saveApprove.evaluate((button) => {
+    (button).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  }),
+]);
+if (!saveResumeResponse.ok()) {
+  throw new Error(`Save resume failed: HTTP ${saveResumeResponse.status()}`);
+}
 await page
   .locator('div.MuiPaper-root')
   .filter({ hasText: /Saved browser page to thread/i })

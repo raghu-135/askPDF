@@ -195,12 +195,20 @@ async def _dismiss_brave_content_promos(websocket) -> None:
                 "Runtime.evaluate",
                 {
                     "expression": """(() => {
-                      const labels = ['Disable', 'Got it', 'No thanks', 'Block', 'Not now'];
+                      const labels = ['Disable', 'Got it', 'No thanks', 'Block', 'Not now', 'Close'];
                       for (const node of document.querySelectorAll('button, [role=button], a')) {
                         const text = (node.textContent || '').trim();
                         if (labels.some((label) => text === label || text.startsWith(label))) {
                           node.click();
                           return text;
+                        }
+                      }
+                      const infobar = document.querySelector('[class*="infobar"], [class*="InfoBar"]');
+                      if (infobar) {
+                        const close = infobar.querySelector('button[aria-label*="Close"], button[aria-label*="close"]');
+                        if (close) {
+                          close.click();
+                          return 'infobar-close';
                         }
                       }
                       return '';

@@ -888,6 +888,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         `${pendingHumanReview?.interrupt.interrupt_id}:${pendingHumanReview?.interrupt.status}:${pendingHumanReview?.interrupt.resume_version}:${pendingHumanReview?.interrupt.response_operation}:${humanReviewCapabilityRevision}`,
     );
 
+    useEffect(() => {
+        if (!pendingHumanReview?.runId || !activeThread?.id) return;
+        void refreshHumanReviewCapabilities();
+    }, [
+        pendingHumanReview?.runId,
+        pendingHumanReview?.interrupt.interrupt_id,
+        pendingHumanReview?.interrupt.resume_version,
+        activeThread?.id,
+        refreshHumanReviewCapabilities,
+    ]);
+
     const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
     const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
@@ -1747,7 +1758,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setHumanReviewError('This human-input request has an invalid runtime response contract.');
             return false;
         }
-        if (!isRuntimeOperationEnabled(humanReviewCapabilities, responseOperation)) return false;
+        const reviewAvailability = runtimeOperationAvailability(humanReviewCapabilities, responseOperation);
+        const reviewCapabilityStale = !reviewAvailability.enabled
+            && reviewAvailability.disabledReason === 'no_pending_interrupt'
+            && (!interrupt.status || interrupt.status === InterruptStatus.Pending);
+        if (!reviewAvailability.enabled && !reviewCapabilityStale) return false;
         if (testRuntime && builderRuntime) {
             setHumanReviewSubmitting(action);
             setHumanReviewError(null);
@@ -2896,6 +2911,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const pendingReviewAvailability = pendingReviewOperation
         ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
         : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
+    const pendingReviewInputEnabled = pendingReviewOperation && pendingReviewInterrupt && (
+        pendingReviewAvailability.enabled
+        || (
+            pendingReviewAvailability.disabledReason === 'no_pending_interrupt'
+            && (!pendingReviewInterrupt.status || pendingReviewInterrupt.status === InterruptStatus.Pending)
+        )
+    );
     const chatHumanReviewOpen = Boolean(pendingReviewInterrupt);
     const isToolApprovalReview = pendingReviewInterrupt?.type === 'tool_approval';
     const reviewTranscriptMaxHeight = chatHumanReviewOpen && stackedWorkbench
@@ -2925,9 +2947,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 minHeight: 'min(44vh, 320px)',
             } : undefined}
             decisionSx={chatHumanReviewOpen ? {
-                flex: isToolApprovalReview ? '0 0 auto' : '1 1 0',
+                ...(isToolApprovalReview
+                    ? { flex: '0 0 auto', flexGrow: 0, flexShrink: 0, flexBasis: 'auto' }
+                    : { flex: '1 1 0' }),
                 minHeight: reviewDecisionMinHeight,
-                overflow: 'hidden',
+                overflow: isToolApprovalReview ? 'visible' : 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
             } : undefined}
@@ -3100,8 +3124,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     submitting={humanReviewSubmitting}
                     error={humanReviewError}
                     editText={humanReviewEditText}
-                    disabled={!pendingReviewAvailability.visible || !pendingReviewAvailability.enabled}
-                    disabledReason={pendingReviewAvailability.disabledReason}
+                    disabled={!pendingReviewAvailability.visible || !pendingReviewInputEnabled}
+                    disabledReason={pendingReviewInputEnabled ? undefined : pendingReviewAvailability.disabledReason}
                     rootRef={chatRootRef}
                     onEditTextChange={setHumanReviewEditText}
                     onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
