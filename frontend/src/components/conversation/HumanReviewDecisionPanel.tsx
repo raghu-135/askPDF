@@ -10,16 +10,18 @@ import { ResizableDecisionPanel } from './ResizableDecisionPanel';
 function proposedToolArgumentPreview(
   proposedTool: Record<string, unknown> | null,
 ): string | null {
-  if (!proposedTool?.arguments || typeof proposedTool.arguments !== 'object') {
-    return null;
-  }
-  const args = proposedTool.arguments as Record<string, unknown>;
   const toolName = String(proposedTool.name || '').trim();
+  const args = proposedTool.arguments && typeof proposedTool.arguments === 'object'
+    ? proposedTool.arguments as Record<string, unknown>
+    : {};
+  if (toolName === 'browser_save_to_thread') {
+    return 'Save current browser page to this thread';
+  }
   if (toolName === 'browser_navigate' && typeof args.url === 'string' && args.url.trim()) {
     return args.url.trim();
   }
-  if (toolName === 'browser_save_to_thread' && Object.keys(args).length === 0) {
-    return 'Save current browser page to this thread';
+  if (!Object.keys(args).length) {
+    return null;
   }
   const keys = Object.keys(args);
   if (keys.length === 1) {
