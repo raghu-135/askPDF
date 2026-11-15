@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, IconButton, Typography, useMediaQuery, useTheme } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
+import { useRootPanelHeight } from '../../hooks/useRootPanelHeight';
 import { useResizablePanelRatio } from '../../hooks/useResizablePanelRatio';
 import { ResizablePanelHandle } from './ResizablePanelHandle';
 import {
@@ -29,6 +30,8 @@ export function ResizableDecisionPanel({
   showResizeHandle = true,
   betweenScrollAndFooter,
   compact = false,
+  bottomSheet = false,
+  sheetRatioBounds,
 }: {
   title: React.ReactNode;
   children?: React.ReactNode;
@@ -48,14 +51,27 @@ export function ResizableDecisionPanel({
   resizing?: boolean;
   showResizeHandle?: boolean;
   compact?: boolean;
+  bottomSheet?: boolean;
+  sheetRatioBounds?: { min?: number; max?: number };
 }) {
   const theme = useTheme();
   const narrow = useMediaQuery(theme.breakpoints.down('sm'));
   const initialRatio = narrow ? narrowDefaultRatio : defaultRatio;
-  const internal = useResizablePanelRatio(rootRef || { current: null }, initialRatio);
+  const ratioBounds = sheetRatioBounds ?? {};
+  const internal = useResizablePanelRatio(
+    rootRef || { current: null },
+    initialRatio,
+    bottomSheet ? ratioBounds : {},
+  );
   const ratio = panelRatio ?? internal.ratio;
   const resizing = externalResizing ?? internal.resizing;
   const onResizeStart = externalOnResizeStart ?? internal.onResizeStart;
+  const nudgeRatio = internal.nudgeRatio;
+  const { panelHeight } = useRootPanelHeight(
+    rootRef || { current: null },
+    ratio,
+    bottomSheet ? ratioBounds : {},
+  );
 
   const shellBorderSx = {
     borderTop: '1px solid',
@@ -139,6 +155,61 @@ export function ResizableDecisionPanel({
       {footer}
     </Box>
   ) : null;
+
+  const bottomSheetShellSx = bottomSheet ? {
+    flexShrink: 0,
+    height: panelHeight,
+    minHeight: panelHeight,
+    maxHeight: panelHeight,
+    borderRadius: '16px 16px 0 0',
+    borderTop: '1px solid',
+    borderLeft: '1px solid',
+    borderRight: '1px solid',
+    borderBottom: 'none',
+    borderColor: variant === 'conflict' ? 'warning.main' : variant === 'approval' ? 'info.main' : 'divider',
+    bgcolor: 'background.paper',
+    boxShadow: (t: typeof theme) => t.shadows[8],
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    mx: horizontalInset,
+    mb: 0,
+  } : {};
+
+  if (bottomSheet) {
+    return (
+      <Box
+        data-testid="tool-approval-bottom-sheet"
+        sx={bottomSheetShellSx}
+      >
+        {showResizeHandle ? (
+          <ResizablePanelHandle
+            resizing={resizing}
+            onResizeStart={onResizeStart}
+            onKeyboardResize={nudgeRatio}
+            label="Resize approval sheet"
+          />
+        ) : null}
+        {titleRow}
+        <Box
+          data-testid="review-decision-scroll"
+          sx={{
+            flex: '1 1 0',
+            minHeight: 0,
+            overflowX: 'hidden',
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 0.5, pb: footer ? 0 : 1, minHeight: 0 }}>
+            {children}
+          </Box>
+        </Box>
+        {footerRow}
+      </Box>
+    );
+  }
 
   if (fillColumn) {
     return (

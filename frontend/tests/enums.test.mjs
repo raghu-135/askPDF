@@ -38,6 +38,7 @@ test('frontend enum constants preserve API wire values', () => {
   assert.equal(HitlSelectionMode.SingleOrMulti, 'single_or_multi');
   assert.equal(ChatComposerIndexingStatus.Checking, 'checking');
   assert.equal(ChatComposerStatus.LlmToolsUnsupported, 'llm_tools_unsupported');
+  assert.equal(ChatComposerStatus.HumanReviewPending, 'human_review_pending');
   assert.equal(AgentGraphNodeStatus.Planned, 'planned');
   assert.equal(RouteFunctionId.HitlGate, 'hitl_gate_route');
   assert.equal(RouteFunctionId.CorrectiveRetrieval, 'corrective_retrieval_route');

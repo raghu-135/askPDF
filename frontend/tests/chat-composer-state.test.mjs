@@ -15,6 +15,7 @@ const readyInput = {
 
 test('chat composer state follows lock precedence', () => {
   const cases = [
+    [{ humanReviewPending: true, loading: true }, 'human_review_pending', true, false],
     [{ loading: true, llmModel: '' }, 'sending', true, true],
     [{ llmModel: '' }, 'no_llm_selected', true, false],
     [{ isLlmModelValid: null, isEmbeddingModelValid: null, indexingStatus: 'checking' }, 'llm_checking', true, true],
@@ -26,6 +27,7 @@ test('chat composer state follows lock precedence', () => {
     [{ indexingStatus: 'error' }, 'index_error', true, false],
     [{ indexingStatus: 'indexing' }, 'indexing', true, true],
     [{ hasInput: true }, 'ready', false, false],
+    [{ humanReviewPending: true }, 'human_review_pending', true, false],
   ];
 
   for (const [overrides, status, disabled, busy] of cases) {
@@ -47,4 +49,9 @@ test('ready placeholder includes submit hint only when the composer has text', (
     getChatComposerState({ ...readyInput, hasInput: true }).placeholder,
     /Shift\+Enter/
   );
+});
+
+test('human review placeholder guides the user to resolve pending approval', () => {
+  const state = getChatComposerState({ ...readyInput, humanReviewPending: true });
+  assert.equal(state.placeholder, 'Approve or skip to continue');
 });

@@ -27,6 +27,7 @@ export function HumanReviewDecisionPanel({
   onAction,
   disabled = false,
   disabledReason,
+  bottomSheet = true,
 }: {
   interrupt: AgentRunPendingInterrupt;
   submitting?: AgentRunResumeAction | null;
@@ -42,6 +43,7 @@ export function HumanReviewDecisionPanel({
   ) => void | Promise<void>;
   disabled?: boolean;
   disabledReason?: string;
+  bottomSheet?: boolean;
 }) {
   const actions = useMemo(
     () => new Set(Array.isArray(interrupt.allowed_actions) ? interrupt.allowed_actions.map(String) : []),
@@ -138,10 +140,12 @@ export function HumanReviewDecisionPanel({
       variant="approval"
       rootRef={rootRef}
       horizontalInset={1}
-      showResizeHandle={!isToolApproval}
-      compact={isToolApproval}
+      showResizeHandle
+      compact={isToolApproval && !bottomSheet}
+      bottomSheet={isToolApproval && bottomSheet}
       defaultRatio={isToolApproval ? 0.22 : 0.3}
       narrowDefaultRatio={isToolApproval ? 0.26 : 0.32}
+      sheetRatioBounds={isToolApproval ? { min: 0.18, max: 0.78 } : undefined}
       footer={stickyFooterLayout ? (
         <>
           {actionButtons}
@@ -160,16 +164,11 @@ export function HumanReviewDecisionPanel({
         )}
         {isToolApproval && toolArgumentPreview && (
           <Box
-            data-testid="tool-approval-content-scroll"
-            sx={{ minHeight: 0, maxHeight: 168, overflowY: 'auto', overflowX: 'hidden' }}
+            data-testid="tool-approval-argument-preview"
+            component="pre"
+            sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem' }}
           >
-            <Box
-              data-testid="tool-approval-argument-preview"
-              component="pre"
-              sx={{ m: 0, p: 1, bgcolor: 'action.hover', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.75rem' }}
-            >
-              {toolArgumentPreview}
-            </Box>
+            {toolArgumentPreview}
           </Box>
         )}
         {selectableOptions.length > 0 && (actions.has(ResumeAction.ApproveSelected) || editingScope) && (

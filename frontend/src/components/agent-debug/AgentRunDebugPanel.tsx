@@ -1,13 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import CheckIcon from '@mui/icons-material/Check';
-import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import { Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
+import { Box, Chip, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
+import { HumanReviewDecisionPanel } from '../conversation/HumanReviewDecisionPanel';
 import { getAgentRun, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../../lib/runtime-capabilities';
-import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
+import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, InterruptStatus } from '../../lib/enums';
 import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, mergeLiveAndRetainedTraceViews, parseRunDebug, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
@@ -47,7 +45,6 @@ function AgentRunDebugPanel({
   const [resumeSubmitting, setResumeSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeMessage, setResumeMessage] = useState<string | null>(null);
-  const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const resumeSubmissionKeyRef = useRef<string | null>(null);
   const traceRefreshAttemptedRef = useRef(new Map<string, number>());
   const [traceRefreshExhausted, setTraceRefreshExhausted] = useState(false);
@@ -70,9 +67,6 @@ function AgentRunDebugPanel({
     && !pendingInterrupt?.decision
     && !runTerminal;
   const showPendingInterruptBanner = Boolean(pendingInterrupt && interruptAwaitingResponse);
-  const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
-    ? pendingInterrupt.allowed_actions.map(String)
-    : [];
   const responseOperation = runtimeInterruptResponseOperation(pendingInterrupt);
   const responseAvailability = responseOperation
     ? runtimeOperationAvailability(runCapabilities, responseOperation)
@@ -87,11 +81,6 @@ function AgentRunDebugPanel({
     [liveTraceView, traceView],
   );
   const traceJson = useMemo(() => buildTraceExportJson(executionTraceView), [executionTraceView]);
-  const interruptOptions = Array.isArray(pendingInterrupt?.options)
-    ? pendingInterrupt.options.filter((option) => option && typeof option.id === 'string')
-    : [];
-  const selectionMode = String(pendingInterrupt?.selection_mode || HitlSelectionMode.Single);
-  const isMultiSelect = selectionMode === HitlSelectionMode.Multi || selectionMode === HitlSelectionMode.SingleOrMulti;
   const executionThreadId = runDetails?.thread_id || null;
   const executionWorkflowId = runDetails?.workflow_id;
   const executionFramework = (runDetails as any)?.framework || (runDetails as any)?.runtime_metadata?.framework;
@@ -158,18 +147,6 @@ function AgentRunDebugPanel({
     return () => window.clearTimeout(timer);
   }, [executionThreadId, normalizedRunId, onRunDetailsChange, runDetails]);
 
-  useEffect(() => {
-    if (interruptOptions.length === 0) {
-      setSelectedOptionIds([]);
-      return;
-    }
-    setSelectedOptionIds((current) => {
-      const valid = current.filter((id) => interruptOptions.some((option) => option.id === id));
-      if (valid.length > 0) return isMultiSelect ? valid : valid.slice(0, 1);
-      return [interruptOptions[0].id];
-    });
-  }, [pendingInterrupt?.interrupt_id, isMultiSelect, interruptOptions.map((option) => option.id).join('|')]);
-
   const copyTrace = async () => {
     if (!traceJson || typeof navigator === 'undefined' || !navigator.clipboard) return;
     try {
@@ -193,7 +170,7 @@ function AgentRunDebugPanel({
     URL.revokeObjectURL(url);
   };
 
-  const handleResume = async (action: AgentRunResumeAction) => {
+  const handleResume = async (action: AgentRunResumeAction, selectedOptionIds?: string[]) => {
     if (!runDetails || !pendingInterrupt?.interrupt_id) return;
     if (!responseOperation) {
       setResumeError('This human-input request has an invalid runtime response contract.');
@@ -243,39 +220,6 @@ function AgentRunDebugPanel({
       }
       setResumeSubmitting(null);
     }
-  };
-
-  const renderInterruptAction = (
-    action: AgentRunResumeAction,
-    label: string,
-    icon: React.ReactNode,
-    color: 'primary' | 'error' | 'inherit' = 'primary',
-  ) => {
-    if (!allowedActions.includes(action) || !isRuntimeOperationEnabled(runCapabilities, responseOperation)) return null;
-    return (
-      <Button
-        key={action}
-        size="small"
-        variant={action === AgentRunResumeActionValue.Reject ? 'outlined' : 'contained'}
-        color={color === 'inherit' ? undefined : color}
-        startIcon={icon}
-        disabled={Boolean(resumeSubmitting)}
-        onClick={() => handleResume(action)}
-      >
-        {resumeSubmitting === action ? 'Submitting...' : label}
-      </Button>
-    );
-  };
-
-  const toggleOption = (optionId: string) => {
-    setSelectedOptionIds((current) => {
-      if (!isMultiSelect) return [optionId];
-      if (current.includes(optionId)) {
-        const next = current.filter((id) => id !== optionId);
-        return next.length > 0 ? next : current;
-      }
-      return [...current, optionId];
-    });
   };
 
   return (
@@ -410,83 +354,48 @@ function AgentRunDebugPanel({
           )}
         </Box>
       )}
-      {showPendingInterruptBanner && (
+      {showPendingInterruptBanner && pendingInterrupt && (
         <Box
+          data-testid="debug-human-review-banner"
           sx={{
             mx: 1,
             my: 0.75,
-            p: 1,
-            borderRadius: 1,
-            bgcolor: 'rgba(25, 118, 210, 0.08)',
             display: 'flex',
             flexDirection: 'column',
             gap: 0.75,
           }}
         >
-          <Typography variant="caption" sx={{ fontWeight: 600 }}>
+          <Typography variant="caption" sx={{ fontWeight: 600, px: 0.5 }}>
             Human review: {interruptStatus}
           </Typography>
-          {(pendingInterrupt.title || pendingInterrupt.prompt || pendingInterrupt.body) && (
-            <Typography variant="caption" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {pendingInterrupt.title || pendingInterrupt.prompt || pendingInterrupt.body}
+          {interruptStatus === InterruptStatus.Pending && isTaskOwnedRun ? (
+            <Typography variant="caption" color="text.secondary" sx={{ px: 0.5 }}>
+              Respond to this request in the Deep Research panel. Debug Trace is inspection-only for task runs.
             </Typography>
-          )}
-          {interruptStatus === InterruptStatus.Pending && (
-            <>
-              {!responseOperation && (
-                <Typography variant="caption" color="error">
-                  This human-input request has an invalid runtime response contract.
-                </Typography>
-              )}
-              {responseAvailability.visible && !responseAvailability.enabled && (
-                <Typography variant="caption" color="text.secondary">
-                  Human input is currently unavailable: {responseAvailability.disabledReason}
-                </Typography>
-              )}
-              {isTaskOwnedRun ? (
-                <Typography variant="caption" color="text.secondary">
-                  Respond to this request in the Deep Research panel. Debug Trace is inspection-only for task runs.
-                </Typography>
-              ) : interruptOptions.length > 0 && (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-                  {interruptOptions.map((option) => (
-                    <FormControlLabel
-                      key={option.id}
-                      sx={{ m: 0 }}
-                      control={
-                        <Checkbox
-                          size="small"
-                          checked={selectedOptionIds.includes(option.id)}
-                          onChange={() => toggleOption(option.id)}
-                          disabled={Boolean(resumeSubmitting)}
-                        />
-                      }
-                      label={
-                        <Typography variant="caption">
-                          {option.label || option.id}
-                        </Typography>
-                      }
-                    />
-                  ))}
-                </Box>
-              )}
-              {!isTaskOwnedRun && responseOperation && <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-                {renderInterruptAction(AgentRunResumeActionValue.Approve, 'Approve', <CheckIcon fontSize="inherit" />)}
-                {renderInterruptAction(AgentRunResumeActionValue.ApproveForScope, 'Approve for this run', <CheckIcon fontSize="inherit" />)}
-                {renderInterruptAction(AgentRunResumeActionValue.ApproveSelected, 'Approve selected', <CheckIcon fontSize="inherit" />)}
-                {renderInterruptAction(AgentRunResumeActionValue.ContinueWithout, 'Continue', <PlayArrowIcon fontSize="inherit" />)}
-                {renderInterruptAction(AgentRunResumeActionValue.Reject, 'Reject', <CloseIcon fontSize="inherit" />, 'error')}
-              </Box>}
-            </>
-          )}
+          ) : interruptStatus === InterruptStatus.Pending && !responseOperation ? (
+            <Typography variant="caption" color="error" sx={{ px: 0.5 }}>
+              This human-input request has an invalid runtime response contract.
+            </Typography>
+          ) : interruptStatus === InterruptStatus.Pending && responseOperation ? (
+            <HumanReviewDecisionPanel
+              interrupt={pendingInterrupt}
+              submitting={resumeSubmitting}
+              error={resumeError}
+              bottomSheet={false}
+              disabled={
+                isTaskOwnedRun
+                || !responseAvailability.visible
+                || !isRuntimeOperationEnabled(runCapabilities, responseOperation)
+              }
+              disabledReason={isTaskOwnedRun
+                ? 'Respond in the Deep Research panel.'
+                : responseAvailability.disabledReason}
+              onAction={(action, options) => void handleResume(action, options?.selectedOptionIds)}
+            />
+          ) : null}
           {resumeMessage && (
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" color="text.secondary" sx={{ px: 0.5 }}>
               {resumeMessage}
-            </Typography>
-          )}
-          {resumeError && (
-            <Typography variant="caption" color="error">
-              {resumeError}
             </Typography>
           )}
         </Box>
