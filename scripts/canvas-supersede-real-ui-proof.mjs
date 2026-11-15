@@ -247,21 +247,46 @@ async function main() {
 
     await chatRateLimitPause();
     await page.keyboard.press('Enter');
-    let assistantPreview = await waitForAssistantAnswer(page);
-    await guard.capture(page, shots.assistant, { requireChatWorkspace: true });
 
-    let afterRecord = beforeRecord;
-    try {
-      afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
-    } catch (firstErr) {
-      await focusChatComposer(page);
-      const retryPrompt = `That canvas link still shows the old version. Please update and republish it with a short Summary section at the top.\n\n${deepLink}`;
-      await chatRateLimitPause();
-      await typeAndSendChat(page, retryPrompt);
-      assistantPreview = await waitForAssistantAnswer(page);
-      afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
-      if (String(assistantPreview).length < 20) {
-        throw firstErr;
+    async function waitForUpdateOutcome() {
+      return Promise.race([
+        waitForAssistantAnswer(page).then((text) => ({ kind: 'assistant', text })),
+        waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord).then((record) => ({
+          kind: 'superseded',
+          record,
+        })),
+      ]);
+    }
+
+    let outcome = await waitForUpdateOutcome();
+  let assistantPreview = outcome.kind === 'assistant' ? outcome.text : 'Canvas updated.';
+    if (outcome.kind === 'assistant') {
+      await guard.capture(page, shots.assistant, { requireChatWorkspace: true });
+    } else {
+      await page.waitForTimeout(1500);
+      await guard.capture(page, shots.assistant, { requireChatWorkspace: true });
+    }
+
+    let afterRecord = outcome.kind === 'superseded' ? outcome.record : beforeRecord;
+    if (afterRecord.id === beforeRecord.id) {
+      try {
+        afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
+      } catch (firstErr) {
+        await focusChatComposer(page);
+        const retryPrompt =
+          'Please update and republish that canvas with a short summary at the top, keeping all existing claims.\n\n'
+          + deepLink;
+        await chatRateLimitPause();
+        await typeAndSendChat(page, retryPrompt);
+        outcome = await waitForUpdateOutcome();
+        assistantPreview = outcome.kind === 'assistant' ? outcome.text : assistantPreview;
+        afterRecord =
+          outcome.kind === 'superseded'
+            ? outcome.record
+            : await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
+        if (afterRecord.id === beforeRecord.id) {
+          throw firstErr;
+        }
       }
     }
 
