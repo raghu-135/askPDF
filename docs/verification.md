@@ -35,7 +35,7 @@ agent secrets, never committed or logged).
 Each flow must be driven through the **visible UI** (clicks, keyboard, file picker),
 not substituted with API-only setup presented as “UI proof”.
 
-1. **Project & thread** — Create a project and thread (or open existing ones) until the chat header shows **Select LLM** and the composer is reachable.
+1. **Project & thread** — Create a project and thread (or open existing ones) until **Loading thread…** / **Loading project details…** are gone, the chat header shows **Select LLM**, and `chat-composer-input` plus `chat-message-list` are visible. Never screenshot while a loading shell is still on screen.
 2. **Upload & index** — Upload a PDF via **Upload PDF** / the file input; wait until the composer leaves “Indexing…” and accepts input.
 3. **Chat** — Select the pinned proof model, type in the **real** multiline composer, send (Enter), wait until the assistant message with **Open trace** appears and the composer is enabled again.
 4. **Workspace navigation** — After upload, open the **document** workspace tab (PDF viewer) or follow a deep link you changed; screenshot that surface, not the home/onboarding page alone.
@@ -46,6 +46,7 @@ not substituted with API-only setup presented as “UI proof”.
 - API-only setup (create project/thread/upload/chat) with a screenshot of `/` or an unrelated page.
 - Injected DOM overlays, fake “composer” text drawn on a screenshot, or staging mock HTML unless the task is explicitly fixture-only.
 - Reused or **byte-identical** screenshots across steps (before/after must differ).
+- Screenshots captured while **Loading thread…** (or similar loading chrome) is still visible.
 - Home / empty-state screenshots when the task concerns a thread, canvas, document tab, or HITL panel.
 - Terminal `curl` output, JSON responses, or log lines **instead of** screenshots of the UI under test.
 
@@ -66,6 +67,7 @@ The helper **throws** if:
 - Any two screenshots in the run share an MD5 hash.
 - `chat-composer-input`, `chat-message-list`, or the active thread workspace is missing when expected.
 - The composer cannot be found or never becomes ready after indexing.
+- A capture is attempted while **Loading thread…** (or **Loading project details…**) is still visible.
 
 Prove the duplicate guard (no stack required):
 
@@ -79,7 +81,7 @@ When claiming UI verification, include:
 
 | Field | Content |
 | --- | --- |
-| **Tested SHA** | `git rev-parse HEAD` on the branch you ran. |
+| **Tested SHA** | `git rev-parse HEAD` on the **PR branch tip** you are proving (must match the commit you are submitting for review; not `main` unless that is the PR head). The helper writes `real-ui-verify-metadata.json` with this SHA. |
 | **Tests** | `./run_tests.sh` (or subset) with pass/fail summary. |
 | **CI** | Link or status of the PR checks for that SHA. |
 | **UI steps** | Ordered list of what was actually clicked/typed (project name, thread, PDF path, question text, HITL action if any). |

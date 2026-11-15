@@ -54,6 +54,11 @@ export const REAL_UI_VIEWPORT = { width: 1440, height: 900 };
 
 const MIN_CHAT_BACKOFF_MS = Number(process.env.ASKPDF_E2E_CHAT_BACKOFF_MS || 4000);
 
+const LOADING_SCREEN_PATTERNS = [
+  /Loading thread/i,
+  /Loading project details/i,
+];
+
 function md5File(filePath) {
   const data = fs.readFileSync(filePath);
   return crypto.createHash('md5').update(data).digest('hex');
@@ -72,8 +77,13 @@ export class ScreenshotGuard {
   /**
    * @param {import('playwright').Page} page
    * @param {string} filename
+   * @param {{ requireChatWorkspace?: boolean, allowLoadingShell?: boolean }} [options]
    */
-  async capture(page, filename) {
+  async capture(page, filename, options = {}) {
+    const { requireChatWorkspace = false, allowLoadingShell = false } = options;
+    if (!allowLoadingShell) {
+      await assertPageReadyForScreenshot(page, { requireChatWorkspace });
+    }
     const out = path.join(this.artDir, filename);
     await page.screenshot({ path: out, fullPage: false });
     this.register(out);
@@ -131,6 +141,49 @@ function escapeRegExp(value) {
 
 /**
  * @param {import('playwright').Page} page
+ * @param {{ timeout?: number }} [options]
+ */
+export async function waitForNoLoadingShell(page, { timeout = 180_000 } = {}) {
+  for (const pattern of LOADING_SCREEN_PATTERNS) {
+    const label = page.getByText(pattern).first();
+    if (await label.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await label.waitFor({ state: 'hidden', timeout });
+    }
+  }
+  await page.waitForFunction(
+    (patterns) => {
+      const text = document.body?.innerText || '';
+      return !patterns.some((p) => new RegExp(p, 'i').test(text));
+    },
+    LOADING_SCREEN_PATTERNS.map((p) => p.source),
+    { timeout },
+  );
+}
+
+/**
+ * @param {import('playwright').Page} page
+ * @param {{ requireChatWorkspace?: boolean, timeout?: number }} [options]
+ */
+export async function assertPageReadyForScreenshot(page, { requireChatWorkspace = false, timeout = 180_000 } = {}) {
+  await waitForNoLoadingShell(page, { timeout });
+  if (requireChatWorkspace) {
+    await assertChatWorkspaceVisible(page);
+  }
+  for (const pattern of LOADING_SCREEN_PATTERNS) {
+    if (await page.getByText(pattern).first().isVisible().catch(() => false)) {
+      throw new Error(`Screenshot blocked: visible loading state matching ${pattern}`);
+    }
+  }
+}
+
+/** Thread shell + chat composer/message list ready (post thread create or navigation). */
+export async function waitForThreadWorkspaceReady(page) {
+  await waitForNoLoadingShell(page);
+  await assertChatWorkspaceVisible(page);
+}
+
+/**
+ * @param {import('playwright').Page} page
  */
 export async function assertChatWorkspaceVisible(page) {
   const llm = page.getByRole('combobox', { name: /Select LLM/i }).first();
@@ -151,6 +204,7 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
 
   const llmCombo = page.getByRole('combobox', { name: /Select LLM/i }).first();
   if (await llmCombo.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await waitForThreadWorkspaceReady(page);
     return { projectLabel, reused: true };
   }
 
@@ -178,7 +232,7 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
   await page.getByRole('textbox').first().fill(threadName);
   await page.getByRole('button', { name: /^Create$/i }).click();
   await llmCombo.waitFor({ timeout: 60_000 });
-  await assertChatWorkspaceVisible(page);
+  await waitForThreadWorkspaceReady(page);
   return { projectLabel, threadName, reused: false };
 }
 
