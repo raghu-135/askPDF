@@ -25,6 +25,8 @@ class DelegateSyncRequest(BaseModel):
     pre_fetch_bundle: Dict[str, Any] = Field(default_factory=dict)
     llm_model: Optional[str] = None
     use_web_search: Optional[bool] = None
+    use_browser_access: Optional[bool] = None
+    browser_access_mode: Optional[str] = None
     use_reranker: Optional[bool] = None
     system_role: str = ""
     custom_instructions: str = ""
@@ -50,6 +52,7 @@ def _validate_execution_context(
         "embedding_model": context.embedding_model,
         "context_window": context.context_window,
         "use_web_search": context.use_web_search,
+        "use_browser_access": context.use_browser_access,
         "use_reranker": context.use_reranker,
         "llm_model": (context.extensions or {}).get("llm_model"),
     }
@@ -76,6 +79,12 @@ async def delegate_sync(
             llm_model=body.llm_model or context_fields.get("llm_model"),
             embedding_model=str(context_fields.get("embedding_model") or ""),
             use_web_search=body.use_web_search if body.use_web_search is not None else bool(context_fields.get("use_web_search")),
+            use_browser_access=(
+                body.use_browser_access
+                if body.use_browser_access is not None
+                else bool(context_fields.get("use_browser_access"))
+            ),
+            browser_access_mode=body.browser_access_mode,
             use_reranker=body.use_reranker if body.use_reranker is not None else context_fields.get("use_reranker"),
             system_role=body.system_role,
             custom_instructions=body.custom_instructions,

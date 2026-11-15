@@ -761,6 +761,8 @@ class AgentRunService:
         embedding_model: str,
         llm_model: Optional[str] = None,
         use_web_search: bool = False,
+        use_browser_access: Optional[bool] = None,
+        browser_access_mode: Optional[str] = None,
         use_reranker: Optional[bool] = True,
         system_role: str = "",
         custom_instructions: str = "",
@@ -817,11 +819,31 @@ class AgentRunService:
             raise RuntimeError(f"Child workflow is not chat eligible: {child_workflow_id}")
 
         thread_settings = await get_thread_settings(thread_id)
+        thread_settings = thread_settings if isinstance(thread_settings, dict) else {}
+        resolved_browser_mode = (
+            browser_access_mode
+            if browser_access_mode in {"off", "ask", "on"}
+            else str(thread_settings.get("browser_access_mode") or "off")
+        )
+        resolved_use_browser = (
+            use_browser_access
+            if use_browser_access is not None
+            else resolved_browser_mode != "off"
+        )
+        if resolved_browser_mode in {"off", "ask", "on"}:
+            thread_settings = {
+                **thread_settings,
+                "browser_access_mode": resolved_browser_mode,
+                "use_browser_access": resolved_use_browser,
+                "hitl_browser_approval": resolved_browser_mode == "ask",
+            }
         definition = definition_from_workflow(workflow)
         provider = builder_for_definition(definition)
         request_overrides = {
             "llm_model": llm_model,
             "use_web_search": use_web_search,
+            "browser_access_mode": resolved_browser_mode,
+            "use_browser_access": resolved_use_browser,
             "use_reranker": use_reranker,
             "system_role": system_role or None,
             "tool_instructions": tool_instructions,
@@ -872,6 +894,7 @@ class AgentRunService:
             question=question,
             llm_model=llm_model,
             use_web_search=use_web_search,
+            browser_access_mode=resolved_browser_mode,
             use_reranker=use_reranker,
             system_role_override=system_role,
             custom_instructions_override=custom_instructions,
@@ -891,6 +914,8 @@ class AgentRunService:
                 "embedding_model": embedding_model,
                 "llm_model": llm_model,
                 "use_web_search": use_web_search,
+                "browser_access_mode": resolved_browser_mode,
+                "use_browser_access": resolved_use_browser,
                 "use_reranker": use_reranker,
                 "system_role_override": system_role,
                 "custom_instructions_override": custom_instructions,
@@ -903,6 +928,8 @@ class AgentRunService:
                 "pre_fetch_bundle": pre_fetch_bundle,
                 "llm_model": llm_model,
                 "use_web_search": use_web_search,
+                "browser_access_mode": resolved_browser_mode,
+                "use_browser_access": resolved_use_browser,
                 "use_reranker": use_reranker,
             },
             embedding_model=embedding_model,

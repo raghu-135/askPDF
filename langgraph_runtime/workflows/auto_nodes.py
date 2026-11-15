@@ -16,6 +16,10 @@ from langgraph_runtime.workflows.document_scope import (
     prefetch_document_retrieval_scores,
     thread_has_attached_documents,
 )
+from langgraph_runtime.workflows.external_research import (
+    attachment_document_scope_bypass,
+    question_requests_external_research,
+)
 from langgraph_runtime.workflows.enums import AutoOrchestratorRoute, NodeEventStatus
 from langgraph_runtime.workflows.runtime_invocation import append_event, log_node_end
 from langgraph_runtime.workflows.state import RouterRagState
@@ -65,6 +69,8 @@ def auto_scope_decline(state: Mapping[str, Any], *, workflow_id: str = "") -> st
     are never pre-empted here.
     """
 
+    if attachment_document_scope_bypass(state):
+        return None
     if workflow_id in _DELEGATE_SKIP_SCOPE_DECLINE:
         return None
     if not workflow_id:
@@ -115,6 +121,8 @@ def _choose_delegate_workflow(state: Mapping[str, Any], *, catalog_ids: set[str]
         if PLAN_EXECUTE_WORKFLOW_ID in catalog_ids:
             return PLAN_EXECUTE_WORKFLOW_ID, "Run the planner workflow for a multi-step document answer."
     if ROUTER_WORKFLOW_ID in catalog_ids:
+        if question_requests_external_research(question):
+            return ROUTER_WORKFLOW_ID, "Run the router workflow for live web or browser research."
         return ROUTER_WORKFLOW_ID, "Run the router workflow for a direct document question."
     for workflow_id in sorted(catalog_ids):
         if workflow_id not in {AUTO_WORKFLOW_ID, DEEP_RESEARCH_WORKFLOW_ID}:
@@ -191,6 +199,8 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         config=config,
         llm_model=state.get("llm_model"),
         use_web_search=bool(state.get("use_web_search")),
+        use_browser_access=bool(state.get("use_browser_access")),
+        browser_access_mode=str(state.get("browser_access_mode") or "off"),
         use_reranker=state.get("use_reranker"),
         system_role=str(state.get("system_role") or ""),
         custom_instructions=str(state.get("custom_instructions") or ""),
