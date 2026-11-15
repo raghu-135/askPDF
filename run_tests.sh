@@ -221,6 +221,7 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
     else
         external_runtime_test -e EXTERNAL_RUNTIME_SMOKE=true -e EXTERNAL_RUNTIME_LLM_MODEL=external_runtime-deterministic test-runner --file test_external_runtime_smoke_pytest.py
     fi
+    external_runtime_test -e RUN_RUNTIME_DB_MIGRATIONS=true -e RUNTIME_TEST_TARGET=/app/langgraph_runtime/tests/test_clarification_terminal_pytest.py runtime-test-runner
     external_runtime_test -e RUN_RUNTIME_DB_MIGRATIONS=true -e RUNTIME_TEST_TARGET=/app/langgraph_runtime/tests/test_runtime_service_execution_pytest.py runtime-test-runner
     external_runtime_test -e RUN_RUNTIME_DB_MIGRATIONS=true -e RUNTIME_TEST_TARGET=/app/langgraph_runtime/tests/test_runtime_service_lifecycle_pytest.py runtime-test-runner
     external_runtime_test -e RUN_RUNTIME_DB_MIGRATIONS=true -e ASKPDF_AGENT_CHECKPOINTER=postgres -e ASKPDF_AGENT_CHECKPOINTER_SETUP=true -e RUNTIME_TEST_TARGET=/app/langgraph_runtime/tests/test_runtime_checkpoint_pytest.py runtime-test-runner

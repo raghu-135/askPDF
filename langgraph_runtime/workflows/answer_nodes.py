@@ -28,6 +28,7 @@ from langgraph_runtime.workflows.corrective_nodes import (
     document_scope_decline,
     synthesized_answer_grounded_in_corrective_evidence,
 )
+from langgraph_runtime.workflows.clarification_terminal import clarification_terminal_state_update
 from langgraph_runtime.workflows.workers import _evidence_packet_scores_for_trace
 from langgraph_runtime.workflows.document_scope import (
     merged_state_document_sources,
@@ -356,23 +357,20 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
                 "reasoning_format": "none",
                 "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
             }
-        answer = "I need a bit more clarification. Did you mean:\n" + "\n".join(
-            f"- {option}" for option in state["clarification_options"]
-        )
+        options = list(state["clarification_options"])
         data = {
             "status": NodeEventStatus.COMPLETED.value,
-            "answer_chars": len(answer),
+            "answer_chars": 0,
             "output_preview": {
-                "answer": compact_preview(answer),
-                "clarification_options": state.get("clarification_options"),
+                "clarification_options": options,
             },
             "llm_result_summary": {
-                "clarification_option_count": len(state.get("clarification_options") or []),
+                "clarification_option_count": len(options),
             },
         }
         log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
         return {
-            "final_answer": answer,
+            **clarification_terminal_state_update(options),
             "reasoning": "",
             "reasoning_available": False,
             "reasoning_format": "none",

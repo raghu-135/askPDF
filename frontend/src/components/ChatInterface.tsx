@@ -172,7 +172,6 @@ type LiveChatExecution = {
 
 type ClarificationChoice = {
     text: string;
-    isOriginal: boolean;
 };
 
 const clarificationChoiceText = (choice: unknown): string => {
@@ -819,6 +818,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [promptPreview, setPromptPreview] = useState('');
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
+    const [clarificationDismissSeed, setClarificationDismissSeed] = useState('');
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
     const [hitlCanvasPublish, setHitlCanvasPublish] = useState(false);
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
@@ -2180,6 +2180,24 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     if (isLiveTraceTerminalEvent(event.event)) {
                         if (event.data?.response) response = event.data.response as ThreadChatResponse;
                         if (
+                            response?.clarification_options?.length
+                            && (
+                                event.event === 'run.clarification'
+                                || response.status === 'clarification_required'
+                                || event.event === 'interrupt.requested'
+                            )
+                        ) {
+                            setClarificationDismissSeed(textToSend);
+                            setClarificationOptions(
+                                response.clarification_options
+                                    .map((choice) => clarificationChoiceText(choice).trim())
+                                    .filter(Boolean)
+                                    .map((text) => ({ text })),
+                            );
+                            setMessages((prev) => prev.filter((message) => message.id !== tempAssistantMsg.id));
+                            setLoading(false);
+                        }
+                        if (
                             event.event === 'interrupt.requested'
                             && response?.status === 'awaiting_human'
                             && response.agent_run_id
@@ -2418,19 +2436,20 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             }
 
             // Handle ambiguous query / clarification options
-            if (response.clarification_options) {
-                setClarificationOptions([
-                    ...response.clarification_options
+            if (response.clarification_options?.length) {
+                setClarificationDismissSeed(textToSend);
+                setClarificationOptions(
+                    response.clarification_options
                         .map((choice) => clarificationChoiceText(choice).trim())
                         .filter(Boolean)
-                        .map((text) => ({ text, isOriginal: false })),
-                    { text: textToSend, isOriginal: true }
-                ]);
-                setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id && m.id !== tempAssistantMsg.id));
+                        .map((text) => ({ text })),
+                );
+                setMessages((prev) => prev.filter((message) => message.id !== tempAssistantMsg.id));
                 if (isEditingQuestion) {
                     setEditingMessageId(null);
                     setEditingOriginalText('');
                 }
+                return;
             } else {
                 // Normal flow: update messages with real IDs and add assistant response
                 setMessages(prev => {
@@ -2452,7 +2471,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         created_at: new Date().toISOString()
                     });
 
-                    if (response.assistant_message_id || response.answer) {
+                    if ((response.assistant_message_id || response.answer) && !response.clarification_options?.length) {
                         finalMessages.push({
                             id: response.assistant_message_id || ('assistant-' + Date.now()),
                             role: MessageRole.Assistant,
@@ -3183,32 +3202,35 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             )}
             decision={clarificationOptions ? (
                     <ResizableDecisionPanel
-                        title="I need a bit more clarification. Did you mean one of these?"
+                        title="I need a bit more clarification. Did you mean:"
                         rootRef={chatRootRef}
-                        onClose={() => setClarificationOptions(null)}
+                        onClose={() => {
+                            setClarificationOptions(null);
+                            if (clarificationDismissSeed.trim()) {
+                                setComposerSeed(clarificationDismissSeed);
+                                setComposerSeedVersion((version) => version + 1);
+                            }
+                            setClarificationDismissSeed('');
+                        }}
                     >
                             <DecisionChoiceList
-                                presentation="editable"
+                                presentation="buttons"
                                 choices={clarificationOptions.map((choice, index) => ({
                                     id: String(index),
-                                    label: choice.isOriginal ? 'Original question' : `Option ${index + 1}`,
-                                    text: clarificationChoiceText(choice.text),
+                                    label: clarificationChoiceText(choice.text),
                                 }))}
                                 disabled={loading}
-                                onChoiceTextChange={(selectedChoice, text) => {
-                                    const selectedIndex = Number(selectedChoice.id);
-                                    setClarificationOptions(prev => prev?.map((item, index) => (
-                                        index === selectedIndex ? { ...item, text } : item
-                                    )) ?? null);
+                                onSelect={(_selectedChoice, text) => {
+                                    setClarificationOptions(null);
+                                    setClarificationDismissSeed('');
+                                    void handleSend(text, { bypassClarification: true });
                                 }}
-                                onSelect={(selectedChoice, text) => {
-                                    const selectedIndex = Number(selectedChoice.id);
-                                    void handleSend(text, {
-                                        bypassClarification: Boolean(clarificationOptions[selectedIndex]?.isOriginal),
-                                    });
+                                onCustomSubmit={(text) => {
+                                    setClarificationOptions(null);
+                                    setClarificationDismissSeed('');
+                                    void handleSend(text, { bypassClarification: true });
                                 }}
-                                onCustomSubmit={(text) => void handleSend(text)}
-                                customPlaceholder="Ask or explain it in your own words"
+                                customPlaceholder="Type your own question"
                             />
                     </ResizableDecisionPanel>
             ) : pendingReviewInterrupt && !pendingReviewOperation ? (
