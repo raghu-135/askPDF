@@ -14,14 +14,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-from live_e2e_lib import wait_langgraph_ready  # noqa: E402
+from live_e2e_lib import http_json as lib_http_json, pace_live_llm_requests, wait_langgraph_ready  # noqa: E402
 ART = Path(os.environ.get("ASKPDF_E2E_ARTIFACTS", "/opt/cursor/artifacts"))
 ART.mkdir(parents=True, exist_ok=True)
 API = os.environ.get("ASKPDF_E2E_API_URL", "http://127.0.0.1:8000")
 DEFAULT_MODEL = os.environ.get("ASKPDF_E2E_LLM_MODEL", "openai/gpt-4.1-mini")
-DEFAULT_MODELS = os.environ.get(
-    "ASKPDF_E2E_LLM_MODELS",
-    "google/gemini-2.5-flash,nvidia/nemotron-3.5-super",
+DEFAULT_MODELS = (
+    "inclusionai/ling-3.2-flash:free,nvidia/nemotron-3.5-lightning:free"
 )
 MODELS = [
     item.strip()
@@ -56,11 +55,7 @@ ADMIN = load_admin()
 
 
 def http_json(method: str, path: str, payload: dict | None = None) -> dict:
-    headers = {"Authorization": f"Bearer {ADMIN}", "Content-Type": "application/json"}
-    data = None if payload is None else json.dumps(payload).encode()
-    req = urllib.request.Request(f"{API}{path}", data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=1800) as resp:
-        return json.loads(resp.read().decode())
+    return lib_http_json(method, API, path, payload, admin_token=ADMIN)
 
 
 def indexing_ready(status_body: dict) -> bool:

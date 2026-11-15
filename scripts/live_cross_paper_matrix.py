@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,7 +13,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 import live_attention_matrix as lam  # noqa: E402
 
-MODEL = "google/gemini-2.5-flash"
+MODEL = (lam.MODELS[0] if lam.MODELS else os.environ.get("ASKPDF_E2E_LLM_MODEL", "inclusionai/ling-3.2-flash:free"))
 PDF = Path("/opt/cursor/artifacts/pdfs/bert.pdf")
 DECLINE = lam.DECLINE
 

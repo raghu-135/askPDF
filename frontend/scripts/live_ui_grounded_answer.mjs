@@ -136,7 +136,7 @@ if (!/\b6\b/.test(answer) || /technical error/i.test(answer)) {
 }
 
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
 try {
   await page.goto(APP, { waitUntil: "networkidle", timeout: 120000 });
