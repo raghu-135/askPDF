@@ -1,11 +1,18 @@
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import type { ChatTraceDescriptor } from '../ChatInterface';
-import { closeTraceTab, canOpenTraceTab, isValidTraceId, pendingTraceTabId, upsertTraceTab } from '../../lib/trace-tabs';
+import { canOpenTraceTab, isValidTraceId, pendingTraceTabId, upsertTraceTab } from '../../lib/trace-tabs';
 import type { TraceRunTab } from './TraceWorkspace';
+import useInstanceTabs from './useInstanceTabs';
 
 export default function useTraceTabs() {
-  const [traceTabs, setTraceTabs] = useState<TraceRunTab[]>([]);
-  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
+  const {
+    tabs: traceTabs,
+    setTabs: setTraceTabs,
+    activeId: activeTraceId,
+    setActiveId: setActiveTraceId,
+    close: closeTrace,
+    clear: clearTraces,
+  } = useInstanceTabs<TraceRunTab>();
 
   const openTrace = useCallback((trace: ChatTraceDescriptor) => {
     if (!canOpenTraceTab(trace?.id)) return;
@@ -16,20 +23,7 @@ export default function useTraceTabs() {
       return upsertTraceTab(withoutPending, trace);
     });
     if (trace.activate !== false) setActiveTraceId(trace.id);
-  }, []);
-
-  const closeTrace = useCallback((runId: string) => {
-    setTraceTabs((current) => {
-      const result = closeTraceTab(current, activeTraceId, runId);
-      setActiveTraceId(result.activeId);
-      return result.tabs;
-    });
-  }, [activeTraceId]);
-
-  const clearTraces = useCallback(() => {
-    setTraceTabs([]);
-    setActiveTraceId(null);
-  }, []);
+  }, [setActiveTraceId, setTraceTabs]);
 
   return {
     traceTabs,
