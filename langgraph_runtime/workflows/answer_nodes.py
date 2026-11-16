@@ -80,7 +80,10 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         PARALLEL_REFERENCE_WORKFLOW_ID,
         CORRECTIVE_WORKFLOW_ID,
     }:
-        decline = state.get("attachment_scope_decline") or router_attachment_scope_decline(
+        stale_router_decline = state.get("attachment_scope_decline")
+        if stale_router_decline and document_scope_decline(state) is None:
+            stale_router_decline = None
+        decline = stale_router_decline or router_attachment_scope_decline(
             state, str(state.get("route") or "")
         )
     if decline:

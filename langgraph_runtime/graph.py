@@ -894,6 +894,9 @@ class NodeRegistry:
         if attachment_scope_decline:
             if route == RouterRoute.CLARIFY.value and len(clarification_options or []) >= 2:
                 attachment_scope_decline = None
+            elif route == RouterRoute.DOCUMENT.value:
+                # Let the document worker retrieve before any attachment scope decline.
+                attachment_scope_decline = None
             else:
                 route = RouterRoute.DIRECT.value
                 clarification_options = None
