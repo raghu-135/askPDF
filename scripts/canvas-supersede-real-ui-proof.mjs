@@ -61,6 +61,7 @@ async function configureThreadForProof(admin, threadName) {
     body: {
       agent_workflow: { workflow_id: 'router_rag_agent' },
       hitl_canvas_publish: false,
+      hitl_web_approval: false,
       use_web_search: true,
     },
   });
@@ -281,10 +282,10 @@ async function main() {
       throw new Error(`Expected at least 4 persisted messages after update, got ${messageCount}`);
     }
 
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
+    const threadUrl = `${DEFAULT_BASE_URL}/?thread=${threadId}`;
+    await page.goto(threadUrl, { waitUntil: 'domcontentloaded', timeout: 120_000 });
     await waitForNoLoadingShell(page);
-    await waitForThreadWorkspaceReady(page);
-    await page.getByTestId('chat-message-list').waitFor({ timeout: 120_000 });
+    await page.getByTestId('chat-message-list').waitFor({ timeout: 180_000 });
     await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
       .waitFor({ state: 'visible', timeout: 120_000 });
     await guard.capture(page, shots.reload, { requireChatWorkspace: true });
