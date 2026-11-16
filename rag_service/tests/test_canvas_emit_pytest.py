@@ -192,7 +192,14 @@ async def test_publish_canvas_supersedes_quoted_canvas_in_user_question(monkeypa
     )
     canvas_id = "41a7cdc2-1234-5678-9abc-def012345678"
     create = AsyncMock(return_value={"id": "canvas-2", "title": "Skills"})
-    monkeypatch.setattr("app.tools.publish_canvas.CanvasService.create", create)
+    service = CanvasService()
+    monkeypatch.setattr(service, "create", create)
+    monkeypatch.setattr(
+        service,
+        "get",
+        AsyncMock(return_value={"id": canvas_id, "title": "Prior", "spec": valid_spec()}),
+    )
+    monkeypatch.setattr("app.tools.publish_canvas.CanvasService", lambda: service)
 
     async def fake_resolve(canvases, thread_id, text):
         assert canvas_id in text
