@@ -282,16 +282,13 @@ async function main() {
       throw new Error(`Expected at least 4 persisted messages after update, got ${messageCount}`);
     }
 
-    const showOverviewChat = async () => {
-      await focusChatComposer(page);
-      await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 120_000 });
-    };
-    await showOverviewChat();
-    const reloadTarget = new URL(deepLink);
-    reloadTarget.searchParams.delete('canvas');
-    await page.goto(reloadTarget.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
     await waitForNoLoadingShell(page);
-    await showOverviewChat();
+    const overviewTab = page.getByRole('tab', { name: /Overview/i }).first();
+    if (await overviewTab.isVisible({ timeout: 30_000 }).catch(() => false)) {
+      await overviewTab.click();
+    }
+    await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 180_000 });
     await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
       .waitFor({ state: 'visible', timeout: 120_000 });
     await guard.capture(page, shots.reload, { requireChatWorkspace: false });
