@@ -136,6 +136,11 @@ async function main() {
 
   await chatRateLimitPause();
   await page.waitForTimeout(4000);
+  const cancelThreadName = `clarify-cancel-${Date.now()}`;
+  await page.getByRole('button', { name: /Create Thread/i }).first().click();
+  await page.getByRole('textbox').first().fill(cancelThreadName);
+  await page.getByRole('button', { name: /^Create$/i }).click();
+  await waitForThreadWorkspaceReady(page);
   await waitForComposerReady(page);
   await typeAndSendChat(page, QUESTION);
   await waitClarificationCard(page);
