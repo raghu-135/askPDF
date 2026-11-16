@@ -445,6 +445,42 @@ class AgentRunService:
             raise RuntimeError(
                 f"Selected agent workflow is incompatible with this service version: {workflow.id}"
             ) from exc
+
+        seed_pre_fetch_bundle: Dict[str, Any] = {}
+        workflow_config = (
+            stored_resolved_spec.get("config") if isinstance(stored_resolved_spec.get("config"), dict) else {}
+        )
+        prefetch_policy = (
+            workflow_config.get("prefetch_policy") if isinstance(workflow_config.get("prefetch_policy"), dict) else {}
+        )
+        if prefetch_policy.get("enabled", True):
+            from app.rag.chat_service import DEFAULT_PREFETCH_MODE, prefetch_context
+
+            try:
+                seed_pre_fetch_bundle = await prefetch_context(
+                    thread_id=thread_id,
+                    raw_question=str(getattr(req, "question", "") or ""),
+                    embedding_model=embedding_model,
+                    context_window=int(
+                        workflow_config.get("context_window")
+                        or getattr(req, "context_window", None)
+                        or 32_768
+                    ),
+                    use_web_search=bool(workflow_config.get("use_web_search")),
+                    use_reranker=bool(workflow_config.get("use_reranker", True)),
+                    prefetch_mode=str(prefetch_policy.get("mode") or DEFAULT_PREFETCH_MODE),
+                    context_budget=getattr(req, "context_budget", None)
+                    if isinstance(getattr(req, "context_budget", None), dict)
+                    else None,
+                )
+            except Exception as exc:
+                logger.warning("Agent run prefetch failed for thread %s: %s", thread_id, exc)
+        if seed_pre_fetch_bundle:
+            stored_resolved_spec = {
+                **stored_resolved_spec,
+                "config": {**workflow_config, "seed_pre_fetch_bundle": seed_pre_fetch_bundle},
+            }
+
         workflow_version = _workflow_version_info(workflow)
 
         try:
@@ -522,13 +558,16 @@ class AgentRunService:
             logger.info("Invoking compiled agent workflow for thread %s | workflow=%s", thread_id, workflow.id)
             definition = definition_from_workflow(workflow)
             adapter = adapter_for_definition(definition)
+            runtime_input: Dict[str, Any] = {"question": getattr(req, "question", "")}
+            if seed_pre_fetch_bundle:
+                runtime_input["pre_fetch_bundle"] = seed_pre_fetch_bundle
             runtime_request = AgentRuntimeRequest(
                 run_id=run.id,
                 thread_id=thread_id,
                 definition_id=definition.definition_id,
                 framework=definition.framework,
                 builder_id=definition.builder_id,
-                input={"question": getattr(req, "question", "")},
+                input=runtime_input,
                 options={
                     "embedding_model": embedding_model,
                     "llm_model": getattr(req, "llm_model", None),
@@ -544,8 +583,11 @@ class AgentRunService:
                     "hitl_web_approval": getattr(req, "hitl_web_approval", None),
                 },
             )
+            request_payload = req.model_dump(mode="json") if hasattr(req, "model_dump") else {}
+            if seed_pre_fetch_bundle:
+                request_payload = {**request_payload, "pre_fetch_bundle": seed_pre_fetch_bundle}
             runtime_context = RuntimeInvocationContext(
-                request_payload=req.model_dump(mode="json") if hasattr(req, "model_dump") else {},
+                request_payload=request_payload,
                 embedding_model=embedding_model,
                 resolved_spec=stored_resolved_spec,
                 agent_run_context=context,

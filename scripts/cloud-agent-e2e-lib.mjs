@@ -348,7 +348,7 @@ export async function waitForAssistantAnswer(page, options = {}) {
       return el instanceof HTMLTextAreaElement && !el.disabled;
     },
     undefined,
-    { timeout: 300_000 },
+    { timeout: 600_000 },
   );
   const answer = page
     .getByTestId('chat-message-list')

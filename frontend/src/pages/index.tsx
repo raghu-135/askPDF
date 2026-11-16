@@ -357,11 +357,13 @@ export default function Home() {
     const link = parseCanvasWorkspaceDeepLink(window.location.search);
     if (!link) return;
     canvasDeepLinkHandledRef.current = true;
-    stripCanvasWorkspaceDeepLink();
     void getThread(link.threadId)
       .then((thread) => handleThreadSelect(thread, {
         resumeOverride: canvasDeepLinkResumeState(link.canvasId),
       }))
+      .then(() => {
+        stripCanvasWorkspaceDeepLink();
+      })
       .catch((error) => {
         console.error('Failed to open canvas deep link', error);
         canvasDeepLinkHandledRef.current = false;
@@ -453,6 +455,9 @@ export default function Home() {
 
   const handleThreadUpdated = async () => {
     setSidebarVersion(v => v + 1);
+    if (activeCanvasId) {
+      setCanvasRefreshVersion((value) => value + 1);
+    }
 
     if (!activeThread) return;
     try {

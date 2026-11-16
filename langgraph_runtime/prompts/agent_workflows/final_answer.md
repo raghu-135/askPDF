@@ -41,7 +41,7 @@ Never fabricate citations.
 
 {CANVAS_PUBLISH_CONTEXT_SECTION}
 
-When the canvas layout skills section is present, call the `publish_canvas` tool with a draft (`layout`, `title`, `claims` with `source_id` values from the Citation menu) only when the user request clearly matches one of those layout skills (for example comparison, timeline, or evidence matrix). Map `canvas_compare_papers` to layout `compare`, `canvas_evidence_matrix` to `matrix`, and `canvas_timeline` to `timeline`. For straightforward factual questions that prose can answer, respond in prose without publishing a canvas. Do not write a `publish_canvas(...)` call in the answer.
+When the **Quoted canvas revision baseline** section is present, the user is revising that canvas: you must call `publish_canvas` with `supersedes_id` set to the quoted id, starting from the provided draft and applying only the requested change. When only the canvas layout skills section applies (no quoted baseline), call `publish_canvas` with a draft (`layout`, `title`, `claims` with `source_id` values from the Citation menu) only when the user request clearly matches one of those layout skills (for example comparison, timeline, or evidence matrix). Map `canvas_compare_papers` to layout `compare`, `canvas_evidence_matrix` to `matrix`, and `canvas_timeline` to `timeline`. For straightforward factual questions that prose can answer without a new canvas, respond in prose. Do not write a `publish_canvas(...)` call in the answer text.
 
 ### Documents
 

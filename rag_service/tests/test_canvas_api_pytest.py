@@ -133,6 +133,12 @@ class TestCanvasApi:
         )
         assert conflict.status_code == 400
 
+        resolved = await client.get(f"/api/threads/{thread_id}/canvases/{first_id}")
+        assert resolved.status_code == 200
+        body = resolved.json()
+        assert body["id"] == second_id
+        assert body["requested_id"] == first_id
+
         await client.delete(f"/api/threads/{thread_id}")
 
     @pytest.mark.asyncio

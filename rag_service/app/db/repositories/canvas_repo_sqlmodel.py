@@ -61,6 +61,51 @@ class CanvasRepository:
                 session.expunge(artifact)
             return artifact
 
+    async def get_successor(self, canvas_id: str) -> Optional[AgentTaskArtifact]:
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(AgentTaskArtifact)
+                .where(
+                    AgentTaskArtifact.supersedes_id == canvas_id,
+                    AgentTaskArtifact.kind == RESEARCH_CANVAS_ARTIFACT_KIND,
+                    AgentTaskArtifact.validity != "deleted",
+                )
+                .order_by(AgentTaskArtifact.created_at.desc(), AgentTaskArtifact.id.desc())
+                .limit(1)
+            )
+            artifact = result.scalar_one_or_none()
+            if artifact is not None:
+                session.expunge(artifact)
+            return artifact
+
+    async def assign_chat_turn_for_agent_run(
+        self,
+        thread_id: str,
+        *,
+        agent_run_id: str,
+        chat_turn_id: str,
+    ) -> int:
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(AgentTaskArtifact).where(
+                    AgentTaskArtifact.thread_id == thread_id,
+                    AgentTaskArtifact.agent_run_id == agent_run_id,
+                    AgentTaskArtifact.kind == RESEARCH_CANVAS_ARTIFACT_KIND,
+                    AgentTaskArtifact.validity != "deleted",
+                    AgentTaskArtifact.chat_turn_id.is_(None),
+                )
+            )
+            rows = list(result.scalars().all())
+            if not rows:
+                return 0
+            for row in rows:
+                row.chat_turn_id = chat_turn_id
+                session.add(row)
+            await session.flush()
+            return len(rows)
+
     async def list_for_thread(self, thread_id: str, *, current_only: bool = True) -> list[AgentTaskArtifact]:
         session = await self._get_session()
         async with session.begin():

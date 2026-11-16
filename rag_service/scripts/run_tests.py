@@ -50,6 +50,7 @@ UNIT_TEST_FILES = [
     "test_canonical_trace_projection_pytest.py",
     "test_canvas_api_pytest.py",
     "test_canvas_emit_pytest.py",
+    "test_canvas_chat_turn_link_pytest.py",
     "test_canvas_compiler_pytest.py",
     "test_canvas_first_readable_sentence_pytest.py",
     "test_canvas_layout_skills_pytest.py",
