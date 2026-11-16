@@ -110,12 +110,23 @@ def test_router_post_retrieval_decline_not_blocked_by_document_route():
                 "raw_retriever_score": 0.21,
             }
         ],
-        "document_sources": [{"file_hash": "a" * 32, "score": 0.21}],
         "question": "What is the population of Tokyo?",
         "workflow_id": "router_rag_agent",
         "route": "document",
     }
     assert workflow_post_retrieval_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def test_attachment_scope_skips_decline_after_worker_document_sources():
+    state = {
+        "pre_fetch_bundle": {"documents": [{"file_hash": "a" * 32}]},
+        "document_sources": [
+            {"file_hash": "a" * 32, "score": 0.19, "snippet": "MORAN uses multi-object rectification."},
+        ],
+        "question": "How does MORAN compare with attention baselines?",
+        "workflow_id": "router_rag_agent",
+    }
+    assert attachment_retrieval_scope_decline(state) is None
 
 
 def test_router_post_retrieval_keeps_in_scope_when_doc_packets_lack_scores():

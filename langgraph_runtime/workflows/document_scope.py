@@ -190,6 +190,9 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
 
     if not thread_has_attached_documents(state):
         return None
+    live_sources = state.get("document_sources")
+    if isinstance(live_sources, list) and live_sources:
+        return None
     doc_packets = document_evidence_packets(state)
     worker_scores = worker_document_retrieval_scores(state)
     if doc_packets:
