@@ -197,14 +197,14 @@ def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["integration-hermes"]["volumes"]
     assert "./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro" in compose["services"]["integration-hermes"]["volumes"]
     assert compose["services"]["integration-hermes"]["environment"]["PYTHONPATH"] == "/opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib"
-    assert compose["services"]["integration-hermes"]["depends_on"]["integration-rag-service"]["condition"] == "service_healthy"
+    assert compose["services"]["integration-hermes"]["depends_on"]["integration-rag-service"]["condition"] == "service_started"
     control_plane = compose["services"]["integration-rag-service"]
     assert control_plane["environment"]["HERMES_RUNTIME_URL"] == "http://hermes-runtime:8200"
     assert control_plane["environment"]["ASKPDF_MCP_REQUIRED"] == "true"
     service = compose["services"]["integration-hermes-runtime"]
     assert service["environment"]["HERMES_API_URL"] == "http://hermes:8642"
     assert service["environment"]["ASKPDF_MCP_REQUIRED"] == "true"
-    assert service["depends_on"]["integration-rag-service"]["condition"] == "service_healthy"
+    assert service["depends_on"]["integration-rag-service"]["condition"] == "service_started"
     assert service["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_RUNTIME_TOKEN" in service["environment"]
     assert "API_SERVER_KEY" not in service["environment"]

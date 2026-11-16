@@ -1,6 +1,3 @@
-include:
-  - path: docker-compose.shared.yml
-
 x-rag-service-build: &rag-service-build
   context: .
   dockerfile: rag_service/Dockerfile
@@ -15,87 +12,6 @@ x-hermes-runtime-build: &hermes-runtime-build
   context: .
   dockerfile: hermes_runtime/Dockerfile
 
-x-postgres-16: &postgres-16
-  image: postgres:16-alpine
-  environment:
-    POSTGRES_DB: askpdf
-    POSTGRES_USER: postgres
-    POSTGRES_PASSWORD: postgres
-
-x-weaviate-image: &weaviate-image cr.weaviate.io/semitechnologies/weaviate:1.36.2
-
-x-weaviate-base-env: &weaviate-base-env
-  QUERY_DEFAULTS_LIMIT: 20
-  AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-  PERSISTENCE_DATA_PATH: /var/lib/weaviate
-  DEFAULT_VECTORIZER_MODULE: none
-  ENABLE_API_BASED_MODULES: 'true'
-  CLUSTER_HOSTNAME: node1
-
-x-healthcheck-postgres-product: &healthcheck-postgres-product
-  test:
-    - CMD-SHELL
-    - pg_isready -U postgres -d askpdf
-  interval: 5s
-  timeout: 5s
-  retries: 5
-  start_period: 10s
-
-x-healthcheck-postgres-integration: &healthcheck-postgres-integration
-  test:
-    - CMD-SHELL
-    - pg_isready -U postgres -d askpdf
-  interval: 5s
-  timeout: 5s
-  retries: 12
-
-x-healthcheck-weaviate-product: &healthcheck-weaviate-product
-  test:
-    - CMD-SHELL
-    - wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1
-  interval: 30s
-  timeout: 10s
-  retries: 5
-
-x-healthcheck-weaviate-integration: &healthcheck-weaviate-integration
-  test:
-    - CMD-SHELL
-    - wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1
-  interval: 10s
-  timeout: 5s
-  retries: 12
-
-x-healthcheck-hermes-gateway: &healthcheck-hermes-gateway
-  test:
-    - CMD
-    - curl
-    - -f
-    - http://localhost:8642/health
-  interval: 10s
-  timeout: 5s
-  retries: 30
-
-x-healthcheck-hermes-runtime: &healthcheck-hermes-runtime
-  test:
-    - CMD
-    - curl
-    - -f
-    - http://localhost:8200/readyz
-  interval: 10s
-  timeout: 5s
-  retries: 12
-
-x-healthcheck-langgraph-startupz: &healthcheck-langgraph-startupz
-  test:
-    - CMD
-    - curl
-    - -f
-    - http://localhost:8100/startupz
-  interval: 10s
-  timeout: 5s
-  retries: 12
-  start_period: 30s
-
 x-healthcheck-rag-integration: &healthcheck-rag-integration
   test:
     - CMD
@@ -109,8 +25,16 @@ x-healthcheck-rag-integration: &healthcheck-rag-integration
 
 services:
   integration-postgresql:
-    <<: *postgres-16
-    healthcheck: *healthcheck-postgres-integration
+    extends:
+      file: docker-compose.yml
+      service: postgresql
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U postgres -d askpdf
+      interval: 5s
+      timeout: 5s
+      retries: 12
     volumes:
     - runtime_integration_postgres_data:/var/lib/postgresql/data
     profiles:
@@ -120,11 +44,18 @@ services:
         aliases:
         - postgresql
   integration-weaviate:
-    image: *weaviate-image
+    extends:
+      file: docker-compose.yml
+      service: weaviate
     environment:
-      <<: *weaviate-base-env
       RAFT_BOOTSTRAP_EXPECT: '1'
-    healthcheck: *healthcheck-weaviate-integration
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 12
     volumes:
     - runtime_integration_weaviate_data:/var/lib/weaviate
     profiles:
@@ -240,44 +171,30 @@ services:
         aliases:
         - rag-service
   integration-db-migrate:
+    extends:
+      file: docker-compose.yml
+      service: db-migrate
     image: askpdf-runtime-control-plane
-    command:
-    - /bin/sh
-    - /opt/askpdf/docker_compose_db_migrate.sh
-    - app.db.migrate
-    volumes:
-    - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
+    build: *rag-service-build
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
       POSTGRES_POOL_SIZE: '5'
       POSTGRES_MAX_OVERFLOW: '5'
-      RUN_DB_MIGRATIONS: 'true'
-      LOCAL_EMBEDDING_MODEL: BAAI/bge-m3
-      LOCAL_RERANKER_MODEL: BAAI/bge-reranker-v2-m3
     depends_on:
       integration-postgresql:
         condition: service_healthy
     profiles:
     - integration
-    build: *rag-service-build
   integration-runtime-db-bootstrap:
+    extends:
+      file: docker-compose.yml
+      service: runtime-db-bootstrap
     image: askpdf-langgraph-runtime
     build: *langgraph-runtime-build
-    command:
-    - /bin/sh
-    - /opt/askpdf/docker_compose_runtime_db_bootstrap.sh
-    volumes:
-    - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
-    - ./scripts/docker_compose_runtime_db_bootstrap.sh:/opt/askpdf/docker_compose_runtime_db_bootstrap.sh:ro
     environment:
-      RUNTIME_BOOTSTRAP_PG_HOST: postgresql
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
-      POSTGRES_POOL_SIZE: '1'
-      POSTGRES_MAX_OVERFLOW: '1'
-      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      RUN_RUNTIME_DB_MIGRATIONS: 'true'
     depends_on:
       integration-postgresql:
         condition: service_healthy
@@ -360,7 +277,16 @@ services:
         condition: service_healthy
       integration-runtime-db-bootstrap:
         condition: service_completed_successfully
-    healthcheck: *healthcheck-langgraph-startupz
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8100/startupz
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     profiles:
     - integration
     networks:
@@ -422,7 +348,7 @@ services:
       fake-llm:
         condition: service_healthy
       integration-rag-service:
-        condition: service_healthy
+        condition: service_started
       integration-hermes-config-init:
         condition: service_completed_successfully
       integration-hermes-upstream:
@@ -438,7 +364,15 @@ services:
       target: /opt/data/profiles/askpdf-deep-offline/.env
     - source: hermes_integration_env
       target: /opt/data/profiles/askpdf-deep-external/.env
-    healthcheck: *healthcheck-hermes-gateway
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8642/health
+      interval: 10s
+      timeout: 5s
+      retries: 30
     networks:
       default:
         aliases:
@@ -509,14 +443,18 @@ services:
     env_file: []
     depends_on:
       integration-rag-service:
-        condition: service_healthy
+        condition: service_started
       integration-hermes:
         condition: service_healthy
     volumes:
     - runtime_integration_hermes_state:/var/lib/hermes
     - runtime_integration_hermes_data:/opt/data
     healthcheck:
-      <<: *healthcheck-hermes-runtime
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8200/readyz
       interval: 5s
       timeout: 3s
       retries: 24

@@ -1,6 +1,3 @@
-include:
-  - path: docker-compose.shared.yml
-
 x-rag-service-build: &rag-service-build
   context: .
   dockerfile: rag_service/Dockerfile
@@ -95,17 +92,6 @@ x-healthcheck-langgraph-startupz: &healthcheck-langgraph-startupz
   timeout: 5s
   retries: 12
   start_period: 30s
-
-x-healthcheck-rag-product: &healthcheck-rag-product
-  test:
-    - CMD
-    - sh
-    - -c
-    - curl -f http://localhost:8000/health && curl -f http://weaviate:8080/v1/.well-known/ready
-  interval: 30s
-  timeout: 10s
-  retries: 5
-  start_period: 60s
 
 x-healthcheck-rag-integration: &healthcheck-rag-integration
   test:
@@ -246,7 +232,16 @@ services:
     - browser_captures:/captures:ro
     extra_hosts:
     - host.docker.internal:host-gateway
-    healthcheck: *healthcheck-rag-product
+    healthcheck:
+      test:
+      - CMD
+      - sh
+      - -c
+      - curl -f http://localhost:8000/ready && curl -f http://weaviate:8080/v1/.well-known/ready
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
   langgraph-runtime:
     image: askpdf-langgraph-runtime
     build: *langgraph-runtime-build
@@ -405,8 +400,10 @@ services:
         condition: service_completed_successfully
       hermes-config-init:
         condition: service_completed_successfully
+      # service_started (not service_healthy): rag /ready includes Hermes readiness, so
+      # waiting for healthy here would deadlock startup before Hermes can start.
       rag-service:
-        condition: service_healthy
+        condition: service_started
     volumes:
     - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
     - env_secrets:/secrets:ro
@@ -489,8 +486,9 @@ services:
         condition: service_completed_successfully
       hermes:
         condition: service_healthy
+      # See hermes.depends_on.rag-service — same Hermes /ready cycle.
       rag-service:
-        condition: service_healthy
+        condition: service_started
     healthcheck: *healthcheck-hermes-runtime
     volumes:
     - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro

@@ -231,7 +231,7 @@ services:
       - CMD
       - sh
       - -c
-      - curl -f http://localhost:8000/health && curl -f http://host.docker.internal:8080/v1/.well-known/ready
+      - curl -f http://localhost:8000/ready && curl -f http://host.docker.internal:8080/v1/.well-known/ready
   db-migrate:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/askpdf
