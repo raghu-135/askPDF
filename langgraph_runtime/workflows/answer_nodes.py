@@ -86,6 +86,11 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         decline = stale_router_decline or router_attachment_scope_decline(
             state, str(state.get("route") or "")
         )
+    if (
+        decline == DOCUMENT_SCOPE_DECLINE_ANSWER
+        and merged_state_document_sources(state)
+    ):
+        decline = None
     if decline:
         data = {
             "status": NodeEventStatus.COMPLETED.value,
