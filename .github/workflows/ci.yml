@@ -19,7 +19,7 @@ permissions:
   packages: write
 
 env:
-  COMPOSE_FILE: docker-compose.yml:docker-compose.override.yml
+  COMPOSE_FILE: docker-compose.yml:docker-compose.override.yml:docker-compose.integration.yml
   ASKPDF_CI_MAIN_PROFILES: ""
   ASKPDF_CI_TEST_PROFILES: test
   ASKPDF_CI_RUNTIME_PROFILES: integration

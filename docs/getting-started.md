@@ -88,15 +88,9 @@ For frontend hot reload, use `docker-compose.override.yml` (dev bind mounts and
 
     docker compose -f docker-compose.yml -f docker-compose.override.yml up --build
 
-### Parallel preview (`preview` profile)
-
-Run a second worktree stack beside the default ports with
-`COMPOSE_PROFILES=preview` (same two compose files). Intended host ports
-are literals in Compose: frontend `3100`, rag-service `18000`, Weaviate
-`18080`, PostgreSQL `15432`, browser-capture `18090` (see profile `preview` in
-`docker-compose.yml` / override). Preview offsets are not yet merged into the
-override merge path for the frontend service; use distinct project names
-(`-p askpdf-canvas`) when experimenting.
+A second parallel product stack on alternate host ports is not implemented in
+Compose today; use a distinct Compose project name (`-p …`) only for
+experimenting with the default service set.
 
 ## Operational checks
 

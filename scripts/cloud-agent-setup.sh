@@ -20,7 +20,7 @@ SAMPLE_PDF="${REPO_ROOT}/rag_service/tests/01030000000000.pdf"
 mkdir -p "$LOG_DIR"
 PROXY_PID_FILE="${LOG_DIR}/openrouter-proxy.pid"
 DOCKERD_PID_FILE="${LOG_DIR}/dockerd.pid"
-COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.override.yml)
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.integration.yml)
 STACK_COMPOSE_PROFILES="${ASKPDF_STACK_COMPOSE_PROFILES:-hermes}"
 
 export DEBIAN_FRONTEND=noninteractive
