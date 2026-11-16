@@ -117,23 +117,25 @@ runtime_compose askpdf-ci-prefetch build \
   rag-service langgraph-runtime db-migrate runtime-db-migrate \
   fake-llm hermes-upstream hermes hermes-runtime test-runner runtime-test-runner
 
-tag_from_runtime() {
+ensure_local_image_tag() {
   local service="$1"
   local tag="$2"
+  if docker image inspect "$tag" >/dev/null 2>&1; then
+    return 0
+  fi
   local id
   id="$(runtime_image_id_for_service askpdf-ci-prefetch "$service")"
   docker tag "$id" "$tag"
 }
 
-tag_from_runtime rag-service askpdf-runtime-control-plane
-tag_from_runtime langgraph-runtime askpdf-langgraph-runtime
-tag_from_runtime fake-llm askpdf-fake-llm:ci
-tag_from_runtime hermes askpdf-hermes-gateway:ci
-tag_from_runtime hermes-runtime askpdf-hermes-runtime:ci
-tag_from_runtime hermes-upstream "$HERMES_UPSTREAM_IMAGE"
-
-runtime_test_id="$(runtime_image_id_for_service askpdf-ci-prefetch runtime-test-runner)"
-docker tag "$runtime_test_id" askpdf-langgraph-runtime-tests
+# runtime-integration.ci.yml pins image names; compose build usually tags in place.
+ensure_local_image_tag rag-service askpdf-runtime-control-plane
+ensure_local_image_tag langgraph-runtime askpdf-langgraph-runtime
+ensure_local_image_tag fake-llm askpdf-fake-llm:ci
+ensure_local_image_tag hermes askpdf-hermes-gateway:ci
+ensure_local_image_tag hermes-runtime askpdf-hermes-runtime:ci
+ensure_local_image_tag hermes-upstream "$HERMES_UPSTREAM_IMAGE"
+ensure_local_image_tag runtime-test-runner askpdf-langgraph-runtime-tests
 
 echo "CI image build complete"
 for tag in "${ASKPDF_CI_IMAGE_TAGS[@]}"; do
