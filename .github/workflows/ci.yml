@@ -37,6 +37,7 @@ env:
   DOCKER_BUILDKIT: "1"
   COMPOSE_DOCKER_CLI_BUILD: "1"
   ASKPDF_BUILDX_CACHE_DIR: /tmp/.buildx-cache
+  ASKPDF_BUILDKIT_CACHE_BRANCH: main
   ASKPDF_CI_IMAGE_TAG: ${{ github.sha }}
   ASKPDF_CI_IMAGE_MANIFEST: /tmp/askpdf-ci-images.txt
 
@@ -80,7 +81,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          # Keep images in the local daemon so compose tag/publish steps can see them.
+          # docker driver loads images into the daemon for compose publish while supporting registry cache export.
           driver: docker
 
       - name: Log in to GHCR
@@ -90,16 +91,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Restore BuildKit cache
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: askpdf-buildx-${{ hashFiles('rag_service/Dockerfile', 'rag_service/Dockerfile.test', 'rag_service/requirements.txt', 'rag_service/requirements-dev.txt', 'langgraph_runtime/Dockerfile', 'langgraph_runtime/Dockerfile.test', 'hermes_runtime/Dockerfile', 'hermes_runtime/Dockerfile.gateway', 'frontend/Dockerfile', 'browser_capture/Dockerfile', 'docker-compose.yml', 'docker-compose.ci.yml', 'docker-compose.test.yml', 'docker-compose.test.ci.yml', 'docker-compose.runtime-integration.yml', 'docker-compose.runtime-integration.ci.yml', 'scripts/ci_docker_build.sh') }}
-          restore-keys: |
-            askpdf-buildx-
-
       - name: Build Docker images
-        run: bash scripts/ci_docker_build.sh
+        run: |
+          bash -c 'source scripts/ci_buildkit_cache.sh && ci_log_buildkit_cache_status'
+          bash scripts/ci_docker_build.sh
 
       - name: Verify framework image boundaries
         run: bash scripts/ci_verify_image_boundaries.sh
@@ -116,13 +111,6 @@ jobs:
 
       - name: Check diff hygiene
         run: git diff --check
-
-      - name: Save BuildKit cache
-        uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: /tmp/.buildx-cache
-          key: askpdf-buildx-${{ hashFiles('rag_service/Dockerfile', 'rag_service/Dockerfile.test', 'rag_service/requirements.txt', 'rag_service/requirements-dev.txt', 'langgraph_runtime/Dockerfile', 'langgraph_runtime/Dockerfile.test', 'hermes_runtime/Dockerfile', 'hermes_runtime/Dockerfile.gateway', 'frontend/Dockerfile', 'browser_capture/Dockerfile', 'docker-compose.yml', 'docker-compose.ci.yml', 'docker-compose.test.yml', 'docker-compose.test.ci.yml', 'docker-compose.runtime-integration.yml', 'docker-compose.runtime-integration.ci.yml', 'scripts/ci_docker_build.sh') }}
 
   tests:
     name: Test suite

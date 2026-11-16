@@ -24,20 +24,22 @@ ASKPDF_CI_IMAGE_TAGS=(
   "$HERMES_UPSTREAM_IMAGE"
 )
 
+COMPOSE_BUILDKIT_REGISTRY_CACHE=(-f docker-compose.buildkit-registry-cache.ci.yml)
+
 compose_env() {
   docker compose --env-file .env.ci "$@"
 }
 
 main_compose() {
-  compose_env -f docker-compose.yml -f docker-compose.ci.yml "$@"
+  compose_env -f docker-compose.yml -f docker-compose.ci.yml "${COMPOSE_BUILDKIT_REGISTRY_CACHE[@]}" "$@"
 }
 
 test_compose() {
-  compose_env -p askpdf-test -f docker-compose.test.yml -f docker-compose.test.ci.yml "$@"
+  compose_env -p askpdf-test -f docker-compose.test.yml -f docker-compose.test.ci.yml "${COMPOSE_BUILDKIT_REGISTRY_CACHE[@]}" "$@"
 }
 
 runtime_compose() {
   local project="${1:-askpdf-ci-prefetch}"
   shift
-  compose_env -p "$project" -f docker-compose.runtime-integration.yml -f docker-compose.runtime-integration.ci.yml "$@"
+  compose_env -p "$project" -f docker-compose.runtime-integration.yml -f docker-compose.runtime-integration.ci.yml "${COMPOSE_BUILDKIT_REGISTRY_CACHE[@]}" "$@"
 }
