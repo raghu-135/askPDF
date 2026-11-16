@@ -147,7 +147,7 @@ async function main() {
   await guard.capture(page, 'clarification-10-card-before-cancel.png', { requireChatWorkspace: true });
   const closeBtn = cancelPanel.getByRole('button', { name: /Close decision panel/i });
   await closeBtn.scrollIntoViewIfNeeded();
-  await closeBtn.click();
+  await closeBtn.evaluate((node) => node.click());
   await waitForComposerReady(page);
   const reseed = await composer.inputValue();
   if (!reseed.includes(QUESTION)) {
