@@ -57,7 +57,7 @@ os.environ.setdefault("POSTGRES_MAX_OVERFLOW", "10")
 os.environ.setdefault("LLM_API_URL", "http://127.0.0.1:1234/v1")
 # Control-plane pytest invokes first-party tools in-process. CI copies
 # `.env.ci` into the test runner, and that file uses loopback HTTP against
-# `rag-service`, which is not part of docker-compose.test.yml.
+# `rag-service`, which is not part of the `test` Compose profile.
 os.environ["MCP_TRANSPORT"] = "in_process"
 os.environ.setdefault("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
 for _budget_name, _budget_value in {

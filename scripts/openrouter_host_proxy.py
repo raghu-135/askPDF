@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Minimal OpenAI-compatible reverse proxy on the VM host for Compose containers.
 
-Containers reach this via docker-compose.vm-hostgateway.override.yml at
+Containers reach this via docker-compose.override.yml (host-gateway patches) at
 http://host.docker.internal:12345/v1 . The proxy forwards to OpenRouter (or any
 OpenAI-compatible upstream) using credentials from the host environment only.
 """
