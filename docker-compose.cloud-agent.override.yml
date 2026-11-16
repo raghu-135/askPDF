@@ -5,6 +5,7 @@
 services:
   langgraph-runtime:
     environment:
+      RUNTIME_BOOTSTRAP_PG_HOST: host.docker.internal
       ASKPDF_AGENT_CHECKPOINTER: postgres
       ASKPDF_AGENT_CHECKPOINTER_SETUP: ${ASKPDF_AGENT_CHECKPOINTER_SETUP:?ASKPDF_AGENT_CHECKPOINTER_SETUP must be set in .env}
       AGENT_CHECKPOINT_DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:5432/runtime_checkpoints
@@ -232,11 +233,6 @@ services:
       - sh
       - -c
       - curl -f http://localhost:8000/ready && curl -f http://host.docker.internal:8080/v1/.well-known/ready
-  langgraph-runtime:
-    environment:
-      RUNTIME_BOOTSTRAP_PG_HOST: host.docker.internal
-    extra_hosts:
-    - host.docker.internal:host-gateway
   test-postgresql:
     ports:
     - 5432:5432
