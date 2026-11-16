@@ -11,7 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY rag_service/requirements.txt requirements.txt
 COPY rag_service/requirements-dev.txt requirements-dev.txt
 RUN pip install -r requirements-dev.txt
-RUN python -m spacy download en_core_web_sm
 RUN mkdir -p /models/hf
 ARG DOWNLOAD_LOCAL_MODELS=true
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
