@@ -282,18 +282,17 @@ async function main() {
       throw new Error(`Expected at least 4 persisted messages after update, got ${messageCount}`);
     }
 
+    const showOverviewChat = async () => {
+      const overview = page.getByRole('tab', { name: /Overview/i }).first();
+      if (await overview.isVisible({ timeout: 15_000 }).catch(() => false)) {
+        await overview.click();
+      }
+      await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 120_000 });
+    };
+    await showOverviewChat();
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
     await waitForNoLoadingShell(page);
-    const overview = page.getByRole('tab', { name: /Overview/i }).first();
-    if (await overview.isVisible({ timeout: 15_000 }).catch(() => false)) {
-      await overview.click();
-    }
-    const messageList = page.getByTestId('chat-message-list');
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      if (await messageList.isVisible().catch(() => false)) break;
-      await page.waitForTimeout(3000);
-    }
-    await messageList.waitFor({ state: 'visible', timeout: 60_000 });
+    await showOverviewChat();
     await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
       .waitFor({ state: 'visible', timeout: 120_000 });
     await guard.capture(page, shots.reload, { requireChatWorkspace: false });
