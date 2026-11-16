@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, Optional
 from app.product_orchestration.chat_cancellation import chat_run_cancel_requested
 from app.product_orchestration.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.product_orchestration.enums import AgentRunResumeAction, InterruptStatus
-from app.product_orchestration.execution_stream import AgentExecutionEventSink
+from app.product_orchestration.execution_stream import AgentExecutionEventSink, close_agent_execution_sink
 from app.product_orchestration.metrics import build_run_metrics
 from app.product_orchestration.parallel_observability import project_parallel_events
 from app.product_orchestration.repository import AgentWorkflowRepository, InterruptResolutionResult
@@ -946,64 +946,79 @@ class AgentRunService:
             resolved_spec=stored_resolved_spec,
             agent_run_context=context,
         )
-        runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
-        runtime_result = await adapter.start(
-            runtime_request,
-            context=runtime_context,
-            event_sink=execution_event_sink,
-        )
-        await execution_event_sink.flush()
-        if runtime_result.continuation is not None:
-            await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
-        if runtime_result.checkpoint_boundary_available is not None:
-            await self.repository.update_run_metadata_fields(run.id, {
-                "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
-            })
-        result = result_to_product_payload(runtime_result)
-        status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
-        answer = str(result.get("answer") or result.get("final_answer") or "").strip()
-        metrics = build_run_metrics(result, duration_ms=0)
-        error_json = result.get("agent_error") if isinstance(result, dict) else None
-        if status == AgentRunStatus.AWAITING_HUMAN.value:
-            if hasattr(trace_recorder, "record_interrupted_snapshot"):
-                trace_recorder.record_interrupted_snapshot(
-                    interrupt=result.get("pending_interrupt") or {},
-                    state=result,
+        status = AgentRunStatus.COMPLETED.value
+        try:
+            runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
+            runtime_result = await adapter.start(
+                runtime_request,
+                context=runtime_context,
+                event_sink=execution_event_sink,
+            )
+            await execution_event_sink.flush()
+            if runtime_result.continuation is not None:
+                await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
+            if runtime_result.checkpoint_boundary_available is not None:
+                await self.repository.update_run_metadata_fields(run.id, {
+                    "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
+                })
+            result = result_to_product_payload(runtime_result)
+            status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
+            answer = str(result.get("answer") or result.get("final_answer") or "").strip()
+            metrics = build_run_metrics(result, duration_ms=0)
+            error_json = result.get("agent_error") if isinstance(result, dict) else None
+            if status == AgentRunStatus.AWAITING_HUMAN.value:
+                if hasattr(trace_recorder, "record_interrupted_snapshot"):
+                    trace_recorder.record_interrupted_snapshot(
+                        interrupt=result.get("pending_interrupt") or {},
+                        state=result,
+                    )
+                debug_payload = trace_recorder.finalize(
+                    run=run,
+                    chat_turn_id=None,
+                    metrics=metrics,
+                    route=result.get("route"),
+                    route_reason=result.get("route_reason"),
+                    error=error_json,
+                    result=result,
                 )
-            debug_payload = trace_recorder.finalize(
-                run=run,
-                chat_turn_id=None,
-                metrics=metrics,
-                route=result.get("route"),
-                route_reason=result.get("route_reason"),
-                error=error_json,
-                result=result,
+                paused_run = await self.repository.mark_run_awaiting_human(
+                    run.id,
+                    result.get("pending_interrupt") or {},
+                    metrics_json=metrics,
+                    debug_trace_json=debug_payload,
+                )
+                if paused_run is not None:
+                    result["pending_interrupt"] = paused_run.pending_interrupt_json
+            else:
+                await self.repository.complete_run(
+                    run.id,
+                    status=status if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value} else AgentRunStatus.COMPLETED.value,
+                    metrics_json=metrics,
+                    error_json=error_json,
+                )
+                debug_payload = trace_recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, result=result)
+                await self.repository.set_run_debug_trace(run.id, debug_payload)
+            return {
+                "child_workflow_id": child_workflow_id,
+                "child_run_id": run.id,
+                "final_answer": answer,
+                "status": status,
+                "pending_interrupt": result.get("pending_interrupt"),
+                "result": result,
+            }
+        finally:
+            await close_agent_execution_sink(
+                execution_event_sink,
+                terminal_event=(
+                    "run.failed"
+                    if status == AgentRunStatus.FAILED.value
+                    else "run.completed"
+                    if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}
+                    else None
+                ),
+                terminal_data={"run_id": run.id, "status": status},
+                boundary_only=status == AgentRunStatus.AWAITING_HUMAN.value,
             )
-            paused_run = await self.repository.mark_run_awaiting_human(
-                run.id,
-                result.get("pending_interrupt") or {},
-                metrics_json=metrics,
-                debug_trace_json=debug_payload,
-            )
-            if paused_run is not None:
-                result["pending_interrupt"] = paused_run.pending_interrupt_json
-        else:
-            await self.repository.complete_run(
-                run.id,
-                status=status if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value} else AgentRunStatus.COMPLETED.value,
-                metrics_json=metrics,
-                error_json=error_json,
-            )
-            debug_payload = trace_recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, result=result)
-            await self.repository.set_run_debug_trace(run.id, debug_payload)
-        return {
-            "child_workflow_id": child_workflow_id,
-            "child_run_id": run.id,
-            "final_answer": answer,
-            "status": status,
-            "pending_interrupt": result.get("pending_interrupt"),
-            "result": result,
-        }
 
     async def resume_agent_run(
         self,

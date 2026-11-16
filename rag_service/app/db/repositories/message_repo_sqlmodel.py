@@ -451,6 +451,51 @@ class MessageRepository:
             await session.flush()
         return True
 
+    async def update_turn_chat_result(
+        self,
+        turn_id: str,
+        *,
+        answer: str,
+        status: str,
+        reasoning: Optional[str] = "",
+        reasoning_available: bool = False,
+        reasoning_format: str = ReasoningFormat.NONE.value,
+        web_sources: Optional[List[Dict[str, Any]]] = None,
+        document_sources: Optional[List[Dict[str, Any]]] = None,
+        used_chat_ids: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        agent_trace_refs_json: Optional[Dict[str, Any]] = None,
+        completed_at: Optional[datetime] = None,
+    ) -> Optional[ChatTurn]:
+        """Update an existing chat turn with a terminal assistant result."""
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(select(ChatTurn).where(ChatTurn.id == turn_id))
+            turn = result.scalar_one_or_none()
+            if turn is None:
+                return None
+            payload = _normalize_payload(turn.payload)
+            payload["answer"] = answer
+            payload["reasoning"] = reasoning or ""
+            payload["reasoning_available"] = reasoning_available
+            payload["reasoning_format"] = reasoning_format or ReasoningFormat.NONE.value
+            payload["web_sources"] = web_sources or []
+            payload["document_sources"] = document_sources or []
+            payload["used_chat_ids"] = used_chat_ids or []
+            if metadata:
+                merged_metadata = dict(payload.get("metadata") or {})
+                merged_metadata.update(metadata)
+                payload["metadata"] = merged_metadata
+            replace_jsonb_field(turn, "payload", payload)
+            turn.status = status
+            if agent_trace_refs_json is not None:
+                turn.agent_trace_refs_json = agent_trace_refs_json
+            now = completed_at or utc_now()
+            turn.completed_at = now if answer not in (None, "") else turn.completed_at
+            await session.flush()
+            await session.refresh(turn)
+            return turn
+
     async def update_web_sources(
         self,
         message_id: str,

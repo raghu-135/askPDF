@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
-from app.db import ChatTurnStatus, ReasoningFormat, create_chat_turn, increment_qa_stats
+from app.db import ChatTurnStatus, ReasoningFormat, create_chat_turn, increment_qa_stats, update_chat_turn_result
 from app.services.embedding_model_service import (
     EmbeddingModelResolutionError,
     EmbeddingModelUnavailableError,
@@ -83,6 +83,7 @@ class AgentRuntimeProjection:
         existing = None
         repository = None
         projection: dict[str, Any] = {}
+        delegated_parent_run_id: str | None = None
         if run_id:
             from app.product_orchestration.repository import AgentWorkflowRepository
 
@@ -128,6 +129,16 @@ class AgentRuntimeProjection:
                 ),
                 None,
             )
+            delegated_parent_run_id = str(getattr(fresh_run, "parent_run_id", "") or "").strip() or None
+            if delegated_parent_run_id and existing is None:
+                parent_turns = await repository.list_chat_turns_for_run(delegated_parent_run_id)
+                existing = next(
+                    (
+                        turn for turn in parent_turns
+                        if turn.agent_run_turn_kind == "assistant_final" and turn.agent_run_sequence == 0
+                    ),
+                    None,
+                )
         if existing is None:
             answer = str(
                 projected.get("final_answer")
@@ -152,13 +163,39 @@ class AgentRuntimeProjection:
                     "agent_route": projected.get("route"),
                     "agent_route_reason": projected.get("route_reason"),
                 },
-                agent_run_id=run_id,
+                agent_run_id=delegated_parent_run_id or run_id,
                 agent_run_turn_kind="assistant_final",
                 agent_run_sequence=0,
                 agent_trace_refs_json=projected.get("agent_trace_refs"),
             )
         else:
-            turn = existing
+            answer = str(
+                projected.get("final_answer")
+                or projected.get("answer")
+                or (getattr(existing, "payload", None) or {}).get("answer")
+                or ""
+            )
+            if str(getattr(existing, "id", "") or ""):
+                updated = await update_chat_turn_result(
+                    str(existing.id),
+                    answer=answer,
+                    status=ChatTurnStatus.COMPLETED.value if status == ChatTurnStatus.COMPLETED.value else "failed",
+                    reasoning=projected.get("reasoning") or "",
+                    reasoning_available=bool(projected.get("reasoning_available")),
+                    reasoning_format=projected.get("reasoning_format") or ReasoningFormat.NONE.value,
+                    web_sources=projected.get("web_sources") or [],
+                    document_sources=projected.get("document_sources") or [],
+                    used_chat_ids=projected.get("used_chat_ids") or [],
+                    metadata={
+                        "agent_workflow_id": run_context.get("agent_workflow_id"),
+                        "agent_route": projected.get("route"),
+                        "agent_route_reason": projected.get("route_reason"),
+                    },
+                    agent_trace_refs_json=projected.get("agent_trace_refs"),
+                )
+                turn = updated or existing
+            else:
+                turn = existing
         embedding_model = await _resolve_chat_memory_embedding_model(thread_id, projected)
         llm_name = str(projected.get("llm_model") or run_context.get("llm_model") or "").strip() or None
         if embedding_model:
