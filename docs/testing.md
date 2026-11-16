@@ -7,7 +7,8 @@ the same service topology.
 
     ./run_tests.sh
 
-The runner starts an isolated Compose project with its own PostgreSQL,
+The runner uses `COMPOSE_PROFILES=test` with `docker-compose.yml` and
+`docker-compose.override.yml`. It starts an isolated Compose project with its own PostgreSQL,
 Weaviate, network, and volumes. The normal application stack can remain
 running because test services do not publish the same host ports.
 

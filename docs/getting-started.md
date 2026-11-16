@@ -72,7 +72,7 @@ Open http://localhost:3000.
 
 The default Compose stack includes the frontend, control plane, PostgreSQL,
 Weaviate, browser capture, and LangGraph runtime. `.env.example` sets
-`COMPOSE_PROFILES=hermes`, so Hermes starts unless you clear that variable.
+`COMPOSE_PROFILES=stack,hermes`, so the product stack and Hermes start unless you change it.
 
 ## Stop and restart
 
@@ -83,9 +83,20 @@ Persistent database and content volumes are retained unless explicitly removed.
 
 ## Development frontend
 
-For frontend hot reload, use the development Compose override:
+For frontend hot reload, use `docker-compose.override.yml` (dev bind mounts and
+`npm run dev` on the frontend). Ports stay in the Compose YAML, not `.env`.
 
-    docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+    COMPOSE_PROFILES=stack,hermes docker compose -f docker-compose.yml -f docker-compose.override.yml up --build
+
+### Parallel preview (`preview` profile)
+
+Run a second worktree stack beside the default ports with
+`COMPOSE_PROFILES=stack,preview` (same two compose files). Intended host ports
+are literals in Compose: frontend `3100`, rag-service `18000`, Weaviate
+`18080`, PostgreSQL `15432`, browser-capture `18090` (see profile `preview` in
+`docker-compose.yml` / override). Preview offsets are not yet merged into the
+override merge path for the frontend service; use distinct project names
+(`-p askpdf-canvas`) when experimenting.
 
 ## Operational checks
 

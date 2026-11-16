@@ -20,7 +20,8 @@ SAMPLE_PDF="${REPO_ROOT}/rag_service/tests/01030000000000.pdf"
 mkdir -p "$LOG_DIR"
 PROXY_PID_FILE="${LOG_DIR}/openrouter-proxy.pid"
 DOCKERD_PID_FILE="${LOG_DIR}/dockerd.pid"
-COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.vm-hostgateway.override.yml)
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.override.yml)
+STACK_COMPOSE_PROFILES="${ASKPDF_STACK_COMPOSE_PROFILES:-stack,hermes}"
 
 export DEBIAN_FRONTEND=noninteractive
 if docker buildx version >/dev/null 2>&1; then
@@ -186,13 +187,13 @@ ASKPDF_USE_CLOUD_TEST_OVERRIDE=1
 EOF
     log "wrote .askpdf-cloud-agent.env for host-gateway test overrides"
     log "pre-building test runner image and warming postgres/weaviate..."
-    compose_cmd -p askpdf-test -f docker-compose.test.yml -f docker-compose.cloud-agent.test.override.yml build --pull test-runner
+    COMPOSE_PROFILES=test compose_cmd -p askpdf-test "${COMPOSE_FILES[@]}" build --pull test-runner
     prefetch_docling_models
     log "verifying Docling inside test-runner with host HF cache..."
-    compose_cmd -p askpdf-test -f docker-compose.test.yml -f docker-compose.cloud-agent.test.override.yml \
+    COMPOSE_PROFILES=test compose_cmd -p askpdf-test "${COMPOSE_FILES[@]}" \
       run --rm --entrypoint python test-runner \
       -c "from docling.document_converter import DocumentConverter; DocumentConverter(); print('test_runner_docling_ready')"
-    compose_cmd -p askpdf-test -f docker-compose.test.yml -f docker-compose.cloud-agent.test.override.yml up -d postgresql weaviate fake-llm
+    COMPOSE_PROFILES=test compose_cmd -p askpdf-test "${COMPOSE_FILES[@]}" up -d test-postgresql test-weaviate fake-llm
     for _ in $(seq 1 120); do
       if curl -sf http://127.0.0.1:8080/v1/.well-known/ready >/dev/null 2>&1; then
         if command -v pg_isready >/dev/null 2>&1 && pg_isready -h 127.0.0.1 -p 5432 -U postgres >/dev/null 2>&1; then
@@ -214,9 +215,9 @@ EOF
 
   # VM dev stack: Hermes profile + host OpenRouter proxy (containers use host.docker.internal:12345).
   if grep -q '^COMPOSE_PROFILES=' .env; then
-    sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=hermes/' .env
+    sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=stack,hermes/' .env
   else
-    echo 'COMPOSE_PROFILES=hermes' >>.env
+    echo 'COMPOSE_PROFILES=stack,hermes' >>.env
   fi
 
   if grep -q '^LLM_API_URL=' .env; then
@@ -393,9 +394,9 @@ prefetch_docling_models() {
 
 compose_up_stack() {
   log "building and starting askPDF stack (host-gateway override)..."
-  compose_cmd --env-file .env "${COMPOSE_FILES[@]}" build \
+  COMPOSE_PROFILES="${STACK_COMPOSE_PROFILES}" compose_cmd --env-file .env "${COMPOSE_FILES[@]}" build \
     --build-arg BUILDKIT_INLINE_CACHE=1
-  compose_cmd --env-file .env "${COMPOSE_FILES[@]}" up -d
+  COMPOSE_PROFILES="${STACK_COMPOSE_PROFILES}" compose_cmd --env-file .env "${COMPOSE_FILES[@]}" up -d
 
   for _ in $(seq 1 180); do
     if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1 && curl -sf http://127.0.0.1:3000 >/dev/null 2>&1; then
@@ -441,7 +442,7 @@ Usage: bash scripts/cloud-agent-setup.sh <install|start|stack|tests-env>
 
   install    Install Docker, write .env (Hermes), prefetch Docling models
   start      Ensure dockerd + OpenRouter host proxy
-  stack      install + start + docker compose up (vm-hostgateway override)
+  stack      install + start + COMPOSE_PROFILES=stack,hermes compose up (override.yml)
   tests-env  Ensure dockerd and write .env.ci for ./run_tests.sh
 EOF
 }
