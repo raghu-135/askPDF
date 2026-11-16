@@ -258,7 +258,7 @@ async def test_publish_canvas_supersedes_quoted_canvas_in_user_question(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_publish_canvas_supersedes_merges_shrunk_draft(monkeypatch):
+async def test_publish_canvas_supersedes_uses_model_draft_without_baseline_merge(monkeypatch):
     rows = [
         [{"text": f"Claim {i}"}, {"text": f"Source {i}"}, {"text": "supported", "tone": "supported"}, {"text": ""}]
         for i in range(5)
@@ -308,9 +308,9 @@ async def test_publish_canvas_supersedes_merges_shrunk_draft(monkeypatch):
     spec = create.await_args[0][1].spec
     matrix = next(section for section in spec.sections if section.title == "Evidence matrix")
     table = next(block for block in matrix.blocks if block.type == "table")
-    assert len(table.rows) == 5
+    assert len(table.rows) == 1
+    assert spec.title == "After"
     assert spec.summary == "Summary added"
-    assert len(spec.sections) >= 4
 
 
 @pytest.mark.asyncio

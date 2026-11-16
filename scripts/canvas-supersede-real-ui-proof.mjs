@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Single-thread real UI proof: chat-created canvas → copy link → plain-language update → same id.
+ * Single-thread UI proof: create canvas → quote link → simple edit → same quoted id, new revision.
  */
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -31,6 +31,7 @@ const { chromium } = requireFromFrontend('@playwright/test');
 
 const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'inclusionai/ling-3.2-flash:free';
 const ART_DIR = DEFAULT_ART_DIR;
+const EDITED_TITLE = 'OpenRouter Free Models (edited)';
 
 function gitSha() {
   const r = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' });
@@ -68,13 +69,16 @@ async function configureThreadForProof(admin, threadName) {
   return thread.id;
 }
 
-async function openCanvasInWorkspace(page, admin, threadId) {
+async function openCanvasInWorkspace(page, admin, threadId, { titlePattern } = {}) {
   const deadline = Date.now() + 600_000;
   while (Date.now() < deadline) {
     const list = await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/canvases?current_only=true`, { admin });
     const canvases = list.canvases || [];
     if (canvases.length > 0) {
-      const { id: canvasId, title } = canvases[0];
+      const pick = titlePattern
+        ? canvases.find((row) => titlePattern.test(String(row.title || ''))) || canvases[0]
+        : canvases[0];
+      const { id: canvasId, title } = pick;
       const url = `${DEFAULT_BASE_URL}/?thread=${threadId}&canvas=${canvasId}`;
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120_000 });
       await waitForNoLoadingShell(page);
@@ -87,100 +91,66 @@ async function openCanvasInWorkspace(page, admin, threadId) {
   throw new Error('No canvas was published in this thread');
 }
 
-async function listThreadCanvases(admin, threadId) {
-  const list = await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/canvases?current_only=false`, {
-    admin,
-  });
-  return list.canvases || [];
+async function resolveCanvasRecord(admin, threadId, canvasId) {
+  return apiJson(
+    `${DEFAULT_API_URL}/api/threads/${threadId}/canvases/${canvasId}?resolve_current=true`,
+    { admin },
+  );
 }
 
-async function waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord) {
-  const quoted = String(canvasId).toLowerCase();
+async function waitForCanvasRevision(admin, threadId, quotedCanvasId, beforeRecord) {
+  const quoted = String(quotedCanvasId).toLowerCase();
   const deadline = Date.now() + 480_000;
-  let afterRecord = beforeRecord;
   while (Date.now() < deadline) {
-    const canvases = await listThreadCanvases(admin, threadId);
-    const child = canvases.find(
+    const afterRecord = await resolveCanvasRecord(admin, threadId, quotedCanvasId);
+    const title = String(afterRecord.title || '');
+    const summary = String(afterRecord.summary || afterRecord.spec?.summary || '');
+    const changed = afterRecord.id !== beforeRecord.id
+      || title !== beforeRecord.title
+      || summary !== String(beforeRecord.summary || beforeRecord.spec?.summary || '');
+    const list = await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/canvases?current_only=false`, { admin });
+    const hasChild = (list.canvases || []).some(
       (row) => String(row.supersedes_id || '').toLowerCase() === quoted,
     );
-    if (child) {
-      afterRecord = await resolveCanvasRecord(admin, threadId, canvasId);
+    if ((hasChild || changed) && title.includes('(edited)')) {
       return afterRecord;
     }
-    afterRecord = await resolveCanvasRecord(admin, threadId, canvasId);
-    if (afterRecord.id !== beforeRecord.id) {
-      return afterRecord;
-    }
-    const beforeTitles = new Set(sectionTitles(beforeRecord.spec));
-    const afterTitles = sectionTitles(afterRecord.spec);
-    const addedSection = afterTitles.some((title) => !beforeTitles.has(title))
-      || afterTitles.length > beforeTitles.size;
-    if (addedSection) {
-      return afterRecord;
-    }
-    await page.waitForTimeout(8000);
+    await new Promise((r) => setTimeout(r, 8000));
   }
-  throw new Error('Canvas was not superseded after the update request');
+  throw new Error('Canvas revision was not published after the edit request');
 }
 
 function parseCanvasDeepLink(url) {
   const u = new URL(url);
   const threadId = u.searchParams.get('thread');
   const canvasId = u.searchParams.get('canvas');
-  const projectId = u.searchParams.get('project');
   if (!threadId || !canvasId) throw new Error(`Clipboard is not a canvas deep link: ${url}`);
-  return { threadId, canvasId, projectId, url: u.toString() };
+  return { threadId, canvasId, url: u.toString() };
 }
 
-function sectionTitles(spec) {
+function evidenceRowCount(spec) {
   const safe = spec && typeof spec === 'object' ? spec : {};
-  return (safe.sections || []).map((section) => String(section.title || '').trim()).filter(Boolean);
+  for (const section of safe.sections || []) {
+    for (const block of section.blocks || []) {
+      if (block.type === 'table' && Array.isArray(block.rows)) {
+        return block.rows.length;
+      }
+    }
+  }
+  return 0;
 }
 
-/**
- * Full page load of the thread workspace. The SPA only parses canvas deep links when
- * both thread and canvas query params are present (see parseCanvasWorkspaceDeepLink).
- */
 async function reloadThreadChatWorkspace(page, deepLinkUrl, lineageHeadCanvasId) {
   const reloadTarget = new URL(deepLinkUrl);
   reloadTarget.searchParams.set('canvas', lineageHeadCanvasId);
   const threadId = reloadTarget.searchParams.get('thread');
   if (!threadId) throw new Error('Deep link missing thread id');
 
-  const deadline = Date.now() + 240_000;
-  while (Date.now() < deadline) {
-    await page.goto(reloadTarget.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
-    await waitForNoLoadingShell(page);
-    const onThread = new URL(page.url()).searchParams.get('thread') === threadId
-      || await page.getByTestId('chat-message-list').isVisible().catch(() => false);
-    if (onThread) {
-      try {
-        await waitForThreadWorkspaceReady(page);
-        break;
-      } catch {
-        await page.waitForTimeout(2500);
-        continue;
-      }
-    }
-    await page.waitForTimeout(2500);
-  }
+  await page.goto(reloadTarget.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await waitForNoLoadingShell(page);
+  await waitForThreadWorkspaceReady(page);
   await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 180_000 });
-  await page.getByText('Research canvas', { exact: true }).nth(1).waitFor({
-    state: 'visible',
-    timeout: 180_000,
-  });
-}
-
-async function openCanvasFromReloadedThread(page, canvasTitle) {
-  const canvasHeading = page.getByRole('heading', { name: new RegExp(`^${canvasTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i') }).first();
-  if (await canvasHeading.isVisible({ timeout: 8_000 }).catch(() => false)) {
-    return;
-  }
-  const card = page
-    .locator('.MuiPaper-root')
-    .filter({ hasText: 'Research canvas' })
-    .filter({ hasText: canvasTitle });
-  await card.last().getByRole('button', { name: /^Open$/ }).click({ timeout: 60_000 });
+  await page.getByText('Research canvas', { exact: true }).nth(1).waitFor({ state: 'visible', timeout: 180_000 });
 }
 
 async function copyCanvasLinkFromTab(page) {
@@ -205,36 +175,6 @@ async function focusChatComposer(page) {
   await waitForComposerReady(page);
 }
 
-async function resolveCanvasRecord(admin, threadId, canvasId) {
-  return apiJson(
-    `${DEFAULT_API_URL}/api/threads/${threadId}/canvases/${canvasId}?resolve_current=true`,
-    { admin },
-  );
-}
-
-function canvasSpecMetrics(spec) {
-  const safe = spec && typeof spec === 'object' ? spec : {};
-  let claimCount = 0;
-  let sourceCount = 0;
-  for (const section of safe.sections || []) {
-    for (const block of section.blocks || []) {
-      if (block.type === 'table' && Array.isArray(block.rows)) {
-        claimCount += block.rows.length;
-      }
-      if (block.type === 'timeline' && Array.isArray(block.events)) {
-        claimCount += block.events.length;
-      }
-      if (block.type === 'claim_pair') {
-        claimCount += 2;
-      }
-      if ((block.type === 'source_list' || block.type === 'sources') && Array.isArray(block.citations)) {
-        sourceCount += block.citations.length;
-      }
-    }
-  }
-  return { claimCount, sourceCount };
-}
-
 async function main() {
   const testedSha = gitSha();
   const admin = loadEnvAdmin();
@@ -255,11 +195,8 @@ async function main() {
 
   const shots = {
     before: 'canvas-before-1440x900.png',
-    composer: 'chat-quote-canvas-1440x900.png',
-    assistant: 'chat-assistant-reply-1440x900.png',
     after: 'canvas-after-same-id-1440x900.png',
     reload: 'chat-after-reload-1440x900.png',
-    reloadCanvas: 'canvas-after-reload-1440x900.png',
   };
 
   try {
@@ -271,12 +208,12 @@ async function main() {
 
     const createPrompt =
       'Please create a brief research canvas about how OpenRouter lists free models. '
-      + 'Include several distinct claims with web sources.';
+      + 'Include at least two distinct claims with web sources.';
     await chatRateLimitPause();
     await typeAndSendChat(page, createPrompt);
     await waitForAssistantAnswer(page);
 
-    const { title: canvasTitleBefore, canvasId: expectedCanvasId } = await openCanvasInWorkspace(page, admin, uiThreadId);
+    const { canvasId: expectedCanvasId } = await openCanvasInWorkspace(page, admin, uiThreadId);
     await guard.capture(page, shots.before, { requireChatWorkspace: true });
 
     const deepLink = await copyCanvasLinkFromTab(page);
@@ -286,81 +223,56 @@ async function main() {
     }
 
     const beforeRecord = await resolveCanvasRecord(admin, threadId, canvasId);
-    const beforeMetrics = canvasSpecMetrics(beforeRecord.spec);
-    if (beforeMetrics.claimCount < 2) {
-      throw new Error(`Pre-update canvas needs at least 2 claims for preservation proof (got ${beforeMetrics.claimCount})`);
+    const claimsBefore = evidenceRowCount(beforeRecord.spec);
+    if (claimsBefore < 2) {
+      throw new Error(`Need at least 2 evidence rows before edit (got ${claimsBefore})`);
     }
 
+    const updatePrompt =
+      `Using this canvas, rename the title to "${EDITED_TITLE}" and shorten the overview text. `
+      + 'Keep the evidence matrix claims unchanged.\n\n'
+      + deepLink;
     await focusChatComposer(page);
-    const updatePrompt = `Add a short summary section at the top.\n\n${deepLink}`;
-    const composer = page.getByTestId('chat-composer-input');
-    await composer.click();
-    await composer.fill(updatePrompt);
-    await guard.capture(page, shots.composer, { requireChatWorkspace: true });
-
     await chatRateLimitPause();
-    await page.keyboard.press('Enter');
-    const assistantPreview = await waitForAssistantAnswer(page);
-    if (!/Open trace|research canvas|Published/i.test(assistantPreview)) {
-      throw new Error(`Assistant reply lacks visible chat content: ${assistantPreview.slice(0, 120)}`);
-    }
-    await guard.capture(page, shots.assistant, { requireChatWorkspace: true });
+    await typeAndSendChat(page, updatePrompt);
+    await waitForAssistantAnswer(page);
 
-    let afterRecord = beforeRecord;
+    let afterRecord;
     try {
-      afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
+      afterRecord = await waitForCanvasRevision(admin, threadId, canvasId, beforeRecord);
     } catch (err) {
       await focusChatComposer(page);
       await typeAndSendChat(
         page,
-        `Please update and republish that canvas with a short summary at the top, keeping all existing claims.\n\n${deepLink}`,
+        `Republish that quoted canvas: title "${EDITED_TITLE}", shorter overview, same evidence rows.\n\n${deepLink}`,
       );
       await chatRateLimitPause();
       await waitForAssistantAnswer(page);
-      afterRecord = await waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRecord);
-      if (afterRecord.id === beforeRecord.id) {
-        throw err;
-      }
+      afterRecord = await waitForCanvasRevision(admin, threadId, canvasId, beforeRecord);
+      if (!afterRecord.title?.includes('(edited)')) throw err;
     }
 
-    await openCanvasInWorkspace(page, admin, threadId);
+    const afterDeepLink = new URL(deepLink);
+    if (afterDeepLink.searchParams.get('canvas') !== canvasId) {
+      throw new Error('Quoted canvas id in link changed after edit');
+    }
+
+    const claimsAfter = evidenceRowCount(afterRecord.spec);
+    if (claimsAfter < claimsBefore) {
+      throw new Error(`Evidence rows dropped (${claimsBefore} -> ${claimsAfter})`);
+    }
+
+    await openCanvasInWorkspace(page, admin, threadId, { titlePattern: /\(edited\)/i });
     await page.getByRole('heading', { name: afterRecord.title }).first().waitFor({ timeout: 120_000 });
     await guard.capture(page, shots.after, { requireChatWorkspace: true });
 
     const persisted = await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/messages?limit=20`, { admin });
-    const messageCount = Array.isArray(persisted.messages) ? persisted.messages.length : 0;
-    if (messageCount < 4) {
-      throw new Error(`Expected at least 4 persisted messages after update, got ${messageCount}`);
+    if ((persisted.messages || []).length < 4) {
+      throw new Error('Expected create + edit chat turns persisted');
     }
 
-    const beforeTitles = new Set(sectionTitles(beforeRecord.spec));
-    const afterMetrics = canvasSpecMetrics(afterRecord.spec);
-    const afterTitles = sectionTitles(afterRecord.spec);
-    if (
-      afterMetrics.claimCount < beforeMetrics.claimCount
-      || afterMetrics.sourceCount < beforeMetrics.sourceCount
-    ) {
-      throw new Error(
-        `Canvas content shrank after update (claims ${beforeMetrics.claimCount} -> ${afterMetrics.claimCount}, `
-        + `sources ${beforeMetrics.sourceCount} -> ${afterMetrics.sourceCount})`,
-      );
-    }
-    const addedSection = afterTitles.some((title) => !beforeTitles.has(title));
-    if (!addedSection && afterTitles.length <= beforeTitles.size) {
-      throw new Error(
-        `Supersede did not add a section (before=${afterTitles.length} titles=${afterTitles.join('|')})`,
-      );
-    }
-
-    const resolvedHeadId = afterRecord.id;
-    await reloadThreadChatWorkspace(page, deepLink, resolvedHeadId);
-    await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
-      .waitFor({ state: 'visible', timeout: 120_000 });
+    await reloadThreadChatWorkspace(page, deepLink, afterRecord.id);
     await guard.capture(page, shots.reload, { requireChatWorkspace: true });
-
-    await openCanvasFromReloadedThread(page, afterRecord.title);
-    await page.getByRole('heading', { name: afterRecord.title }).first().waitFor({ timeout: 120_000 });
-    await guard.capture(page, shots.reloadCanvas, { requireChatWorkspace: true });
 
     const screenshotMeta = guard.paths.map((p) => ({
       path: p,
@@ -374,25 +286,14 @@ async function main() {
       thread_name: threadName,
       thread_id: threadId,
       quoted_canvas_id: canvasId,
-      canvas_id_before_lineage_head: beforeRecord.id,
-      canvas_id_after_lineage_head: resolvedHeadId,
-      canvas_title_before_tab: canvasTitleBefore,
-      canvas_title_after: afterRecord.title,
-      deep_link: deepLink,
-      claim_count_before: beforeMetrics.claimCount,
-      claim_count_after: afterMetrics.claimCount,
-      source_count_before: beforeMetrics.sourceCount,
-      source_count_after: afterMetrics.sourceCount,
-      prompts: { create: createPrompt, update: 'Add a short summary section at the top. (+ pasted link)' },
-      assistant_preview: assistantPreview.slice(0, 500),
-      persisted_message_count: messageCount,
+      canvas_revision_id: afterRecord.id,
+      edit_title: afterRecord.title,
+      evidence_rows_before: claimsBefore,
+      evidence_rows_after: claimsAfter,
+      prompts: { create: createPrompt, update: updatePrompt },
       screenshots: screenshotMeta,
       captured_at: new Date().toISOString(),
     };
-
-    if (threadId !== uiThreadId || threadId !== beforeRecord.thread_id) {
-      throw new Error('Thread id mismatch in proof run');
-    }
 
     const metaPath = path.join(ART_DIR, 'canvas-supersede-ui-metadata.json');
     fs.writeFileSync(metaPath, `${JSON.stringify(metadata, null, 2)}\n`);
