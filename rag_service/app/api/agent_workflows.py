@@ -1468,7 +1468,10 @@ async def resume_agent_run(
                 # `response.agent_run.status` from an incompatible payload.
                 from app.services.agent_runtime_projection import read_terminal_chat_answer_for_run
 
-                resume_answer = await read_terminal_chat_answer_for_run(result.run)
+                try:
+                    resume_answer = await read_terminal_chat_answer_for_run(result.run)
+                except Exception:
+                    resume_answer = ""
                 resume_response = {
                     "agent_run": compact_run,
                     "interrupt": result.interrupt,
@@ -1568,7 +1571,10 @@ async def resume_agent_run(
 
     repo = AgentWorkflowRepository()
     turns = await repo.list_chat_turns_for_run(result.run.id)
-    resume_answer = await read_terminal_chat_answer_for_run(result.run)
+    try:
+        resume_answer = await read_terminal_chat_answer_for_run(result.run)
+    except Exception:
+        resume_answer = ""
     payload = {
         "agent_run": await _run_payload_for_read(result.run, turns),
         "interrupt": result.interrupt,

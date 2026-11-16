@@ -156,3 +156,58 @@ async def test_read_terminal_chat_answer_prefers_parent_turn_over_placeholder(mo
     monkeypatch.setattr("app.product_orchestration.repository.AgentWorkflowRepository", Repository)
     answer = await read_terminal_chat_answer_for_run(child)
     assert "https://example.com/paper-one" in answer
+
+
+@pytest.mark.asyncio
+async def test_delegated_child_resume_json_surfaces_parent_final_answer(monkeypatch):
+    from app.api import agent_workflows as agent_workflows_api
+
+    child_run = SimpleNamespace(
+        id="child-run",
+        parent_run_id="parent-run",
+        thread_id="thread-1",
+        workflow_id="external_research",
+        status="completed",
+        pending_interrupt_json=None,
+    )
+
+    async def ready_thread(thread_id):
+        return SimpleNamespace(id=thread_id)
+
+    class CompletingService:
+        async def resume_agent_run(self, *args, **kwargs):
+            return SimpleNamespace(
+                run=child_run,
+                interrupt=None,
+                outcome="completed",
+                duplicate=False,
+            )
+
+    async def parent_answer(run):
+        assert run.parent_run_id == "parent-run"
+        return "Similar work: https://arxiv.org/abs/1706.03762"
+
+    monkeypatch.setattr(agent_workflows_api, "get_thread", ready_thread)
+    monkeypatch.setattr(agent_workflows_api, "AgentRunService", CompletingService)
+    monkeypatch.setattr(
+        agent_workflows_api,
+        "AgentWorkflowRepository",
+        lambda: SimpleNamespace(list_chat_turns_for_run=AsyncMock(return_value=[])),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_runtime_projection.read_terminal_chat_answer_for_run",
+        parent_answer,
+    )
+    monkeypatch.setattr(
+        agent_workflows_api,
+        "_run_payload_for_read",
+        AsyncMock(return_value={"id": "child-run", "status": "completed"}),
+    )
+
+    request = agent_workflows_api.AgentRunResumeRequest(
+        thread_id="thread-1",
+        interrupt_id="interrupt-1",
+        action="approve",
+    )
+    payload = await agent_workflows_api.resume_agent_run("child-run", request)
+    assert "arxiv.org" in payload["answer"]

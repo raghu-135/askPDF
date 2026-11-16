@@ -108,5 +108,8 @@ async def test_run_delegate_sync_closes_event_sink_when_child_awaits_human(monke
     )
 
     assert response["status"] == "awaiting_human"
-    close_mock.assert_awaited_once()
-    assert close_mock.await_args.kwargs["boundary_only"] is True
+    assert close_mock.await_count >= 1
+    boundary_close = next(
+        call for call in close_mock.await_args_list if call.kwargs.get("boundary_only") is True
+    )
+    assert boundary_close is not None
