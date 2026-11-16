@@ -14,6 +14,12 @@ def _compose(name: str) -> dict:
         pass
 
     ComposeLoader.add_constructor("!reset", lambda loader, node: loader.construct_sequence(node))
+    def _compose_override(loader, node):
+        if node.id == "sequence":
+            return loader.construct_sequence(node)
+        return loader.construct_mapping(node)
+
+    ComposeLoader.add_constructor("!override", _compose_override)
     return yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
 
 
