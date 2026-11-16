@@ -46,11 +46,17 @@ fi
 
 TEST_PROJECT_NAME="${ASKPDF_TEST_PROJECT_NAME:-askpdf-test}"
 COMPOSE_ARGS=(-p "$TEST_PROJECT_NAME" -f docker-compose.test.yml)
+if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -f docker-compose.test.ci.yml ]; then
+    COMPOSE_ARGS+=(-f docker-compose.test.ci.yml)
+fi
 if [ -f docker-compose.cloud-agent.test.override.yml ] && [ "${ASKPDF_USE_CLOUD_TEST_OVERRIDE:-}" = "1" ]; then
     COMPOSE_ARGS+=(-f docker-compose.cloud-agent.test.override.yml)
 fi
 EXTERNAL_RUNTIME_PROJECT_NAME="${ASKPDF_RUNTIME_TEST_PROJECT_NAME:-${ASKPDF_EXTERNAL_RUNTIME_PROJECT_NAME:-askpdf-runtime-integration-test-$$}}"
 EXTERNAL_RUNTIME_COMPOSE_ARGS=(-p "$EXTERNAL_RUNTIME_PROJECT_NAME" -f docker-compose.runtime-integration.yml)
+if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -f docker-compose.runtime-integration.ci.yml ]; then
+    EXTERNAL_RUNTIME_COMPOSE_ARGS+=(-f docker-compose.runtime-integration.ci.yml)
+fi
 
 args=("$@")
 for arg in "${args[@]}"; do
@@ -101,17 +107,40 @@ external_runtime_test() {
     fi
 }
 
+runtime_compose_images_ready() {
+    docker image inspect askpdf-runtime-control-plane >/dev/null 2>&1 \
+        && docker image inspect askpdf-langgraph-runtime >/dev/null 2>&1 \
+        && docker image inspect askpdf-fake-llm:ci >/dev/null 2>&1
+}
+
+hermes_compose_images_ready() {
+    runtime_compose_images_ready \
+        && docker image inspect "askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:-2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19}" >/dev/null 2>&1 \
+        && docker image inspect askpdf-hermes-gateway:ci >/dev/null 2>&1 \
+        && docker image inspect askpdf-hermes-runtime:ci >/dev/null 2>&1
+}
+
 ensure_runtime_compose_images() {
     if [ "${ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD:-}" = "1" ]; then
         echo "Skipping runtime compose build (ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD=1)"
         return 0
     fi
-    if docker image inspect askpdf-runtime-control-plane >/dev/null 2>&1 \
-        && docker image inspect askpdf-langgraph-runtime >/dev/null 2>&1; then
+    if runtime_compose_images_ready; then
         echo "Runtime integration images already present; skipping compose build"
         return 0
     fi
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service langgraph-runtime
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service langgraph-runtime fake-llm
+}
+
+ensure_hermes_compose_images() {
+    if [ "${ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD:-}" = "1" ]; then
+        return 0
+    fi
+    if hermes_compose_images_ready; then
+        echo "Hermes integration images already present; skipping compose build"
+        return 0
+    fi
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build hermes-upstream hermes hermes-runtime
 }
 
 wait_for_external_job() {
@@ -299,6 +328,7 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
     export HERMES_RUNTIME_INTEGRATION=true
     echo "Starting deterministic Hermes runtime Hermes runtime proof..."
     trap external_runtime_diagnostics ERR
+    ensure_hermes_compose_images
     if [ "${ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD:-}" != "1" ] \
         && ! docker image inspect askpdf-runtime-control-plane >/dev/null 2>&1; then
         "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service
@@ -404,7 +434,11 @@ if [ "$frontend_only" = "1" ] && [ "${#backend_args[@]}" -eq 0 ]; then
     exit 0
 fi
 
-"${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" run --rm --build test-runner "${backend_args[@]}"
+TEST_RUN_ARGS=(run --rm)
+if [ "${ASKPDF_SKIP_TEST_RUNNER_BUILD:-}" != "1" ]; then
+    TEST_RUN_ARGS+=(--build)
+fi
+"${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" "${TEST_RUN_ARGS[@]}" test-runner "${backend_args[@]}"
 
 if [ "${SKIP_RAG_IMAGE_SMOKE:-}" != "1" ] && [ "${RUN_LANGGRAPH_RUNTIME:-0}" != "1" ] && [ "${RUN_HERMES_RUNTIME:-0}" != "1" ]; then
     echo "Running rag-service image import smoke..."

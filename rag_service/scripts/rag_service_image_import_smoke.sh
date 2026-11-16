@@ -5,8 +5,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IMAGE="${ASKPDF_RAG_IMAGE_SMOKE_TAG:-askpdf-rag-service-smoke:local}"
 
-echo "Building rag-service image: ${IMAGE}"
-docker build -f "${ROOT}/rag_service/Dockerfile" -t "${IMAGE}" "${ROOT}"
+if [ "${ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD:-}" = "1" ] && docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+  echo "Using existing rag-service image for smoke: ${IMAGE}"
+else
+  echo "Building rag-service image: ${IMAGE}"
+  docker build -f "${ROOT}/rag_service/Dockerfile" -t "${IMAGE}" "${ROOT}"
+fi
 
 ENV_FILE_ARGS=()
 if [ -f "${ROOT}/.env" ]; then
