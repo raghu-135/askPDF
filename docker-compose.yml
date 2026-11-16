@@ -359,6 +359,15 @@ services:
     - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
     - env_secrets:/secrets:ro
     - hermes_data:/opt/data
+  hermes-upstream:
+    profiles:
+    - hermes
+    - integration
+    image: askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+    build:
+      context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+    entrypoint:
+    - /bin/true
   hermes:
     profiles:
     - hermes
@@ -366,7 +375,7 @@ services:
       context: .
       dockerfile: hermes_runtime/Dockerfile.gateway
       additional_contexts:
-        hermes-upstream: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
+        hermes-upstream: service:hermes-upstream
     environment:
     - API_SERVER_ENABLED=true
     - API_SERVER_HOST=0.0.0.0
@@ -389,6 +398,8 @@ services:
     - gateway
     depends_on:
       env-secrets:
+        condition: service_completed_successfully
+      hermes-upstream:
         condition: service_completed_successfully
       hermes-config-init:
         condition: service_completed_successfully
@@ -697,6 +708,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+  hermes-upstream-real:
+    profiles:
+    - real-hermes
+    image: askpdf-hermes-upstream:2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+    build:
+      context: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+    entrypoint:
+    - /bin/true
   hermes-real:
     profiles:
     - real-hermes
@@ -704,7 +723,7 @@ services:
       context: .
       dockerfile: hermes_runtime/Dockerfile.gateway
       additional_contexts:
-        hermes-upstream: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+        hermes-upstream: service:hermes-upstream-real
     environment:
       API_SERVER_ENABLED: 'true'
       API_SERVER_HOST: 0.0.0.0
@@ -728,6 +747,8 @@ services:
       timeout: 5s
       retries: 30
     depends_on:
+      hermes-upstream-real:
+        condition: service_completed_successfully
       fake-llm:
         condition: service_healthy
   hermes-runtime-real:

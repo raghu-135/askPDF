@@ -306,7 +306,7 @@ services:
       context: .
       dockerfile: hermes_runtime/Dockerfile.gateway
       additional_contexts:
-        hermes-upstream: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+        hermes-upstream: service:hermes-upstream
     environment:
       API_SERVER_ENABLED: 'true'
       API_SERVER_HOST: 0.0.0.0
@@ -323,6 +323,8 @@ services:
     command:
     - gateway
     depends_on:
+      hermes-upstream:
+        condition: service_completed_successfully
       fake-llm:
         condition: service_healthy
       integration-rag-service:

@@ -23,6 +23,13 @@
 
 set -e
 
+echo "askPDF run_tests.sh at commit $(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || git rev-parse HEAD)"
+
+if [ "${ASKPDF_COMPOSE_PRODUCT_BUILD_GATE:-}" = "1" ]; then
+    echo "ASKPDF_COMPOSE_PRODUCT_BUILD_GATE=1: verifying product Hermes compose builds..."
+    bash "$(dirname "$0")/scripts/ci_product_compose_build.sh"
+fi
+
 if [ -f .askpdf-cloud-agent.env ]; then
     set -a
     # shellcheck disable=SC1091
@@ -151,7 +158,7 @@ ensure_hermes_compose_images() {
         echo "Hermes integration images already present; skipping compose build"
         return 0
     fi
-    runtime_compose build "$RT_HERMES" "$RT_HERMES_RUNTIME"
+    runtime_compose build hermes-upstream "$RT_HERMES" "$RT_HERMES_RUNTIME"
 }
 
 if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
