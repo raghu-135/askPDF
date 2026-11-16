@@ -137,9 +137,9 @@ async function main() {
   await chatRateLimitPause();
   await page.waitForTimeout(4000);
   const cancelThreadName = `clarify-cancel-${Date.now()}`;
-  const createInProject = page.getByRole('button', { name: /Create thread in /i }).first();
-  await createInProject.waitFor({ timeout: 60_000 });
-  await createInProject.click();
+  const createInProject = page.locator('[aria-label^="Create thread in"]').first();
+  await createInProject.waitFor({ state: 'visible', timeout: 60_000 });
+  await createInProject.evaluate((node) => node.click());
   await page.getByRole('textbox').first().fill(cancelThreadName);
   await page.getByRole('button', { name: /^Create$/i }).click();
   await waitForThreadWorkspaceReady(page);
