@@ -281,6 +281,7 @@ const ChatComposer = React.memo(function ChatComposer({
     onOpenSettings,
     onOpenMemoryReview,
     humanReviewPending = false,
+    clarificationPending = false,
 }: {
     inputRef: React.Ref<HTMLInputElement | HTMLTextAreaElement>;
     seedText: string;
@@ -299,6 +300,7 @@ const ChatComposer = React.memo(function ChatComposer({
     onOpenSettings: () => void;
     onOpenMemoryReview?: (draftContent?: string) => void;
     humanReviewPending?: boolean;
+    clarificationPending?: boolean;
 }) {
     const [draftPresent, setDraftPresent] = useState(Boolean(seedText));
     useEffect(() => setDraftPresent(Boolean(seedText.trim())), [seedText, seedVersion]);
@@ -312,7 +314,9 @@ const ChatComposer = React.memo(function ChatComposer({
         indexingStatus,
         hasInput: draftPresent,
         humanReviewPending,
+        clarificationPending,
     }), [
+        clarificationPending,
         draftPresent,
         humanReviewPending,
         indexingStatus,
@@ -949,6 +953,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setComposerSeed(text);
         setComposerSeedVersion((version) => version + 1);
     }, []);
+
+    const focusComposer = useCallback(() => {
+        requestAnimationFrame(() => composerInputRef.current?.focus());
+    }, []);
+
+    const seedClarificationComposer = useCallback((text: string) => {
+        setClarificationOptions(null);
+        setClarificationDismissSeed('');
+        setComposerText(text);
+        focusComposer();
+    }, [focusComposer, setComposerText]);
 
     const applyThreadSettingsToState = useCallback((settings?: Thread['settings']) => {
         setReplans(settings?.replans ?? 1);
@@ -3201,21 +3216,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     }}
                 >
                     <DecisionChoiceList
-                        presentation="buttons"
+                        presentation="editable"
                         choices={clarificationOptions.map((choice, index) => ({
                             id: String(index),
                             label: choice.text,
+                            text: choice.text,
                         }))}
                         disabled={loading}
                         onSelect={(_selectedChoice, text) => {
-                            setClarificationOptions(null);
-                            setClarificationDismissSeed('');
-                            void handleSend(text, { bypassClarification: true });
+                            seedClarificationComposer(text);
                         }}
                         onCustomSubmit={(text) => {
-                            setClarificationOptions(null);
-                            setClarificationDismissSeed('');
-                            void handleSend(text, { bypassClarification: true });
+                            seedClarificationComposer(text);
                         }}
                         customPlaceholder="Type your own question"
                     />
@@ -3269,7 +3281,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     liveExecution={liveExecution}
                     liveRunCapabilities={liveRunCapabilities}
                     isTestRuntime={isTestRuntime}
-                    humanReviewPending={composerHumanReviewPending(pendingReviewInterrupt) || Boolean(clarificationOptions?.length)}
+                    humanReviewPending={composerHumanReviewPending(pendingReviewInterrupt)}
+                    clarificationPending={Boolean(clarificationOptions?.length)}
                     onSubmit={(text) => void handleSend(text)}
                     onStop={handleStopChat}
                     onOpenSettings={handleOpenThreadSettings}

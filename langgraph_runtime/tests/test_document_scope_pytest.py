@@ -38,7 +38,7 @@ def test_attachment_scope_declines_on_low_prefetch_scores_despite_evidence_text(
     }
     assert attachment_retrieval_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
     assert router_attachment_scope_decline(state, RouterRoute.CLARIFY.value) is None
-    assert router_attachment_scope_decline(state, RouterRoute.DIRECT.value) == DOCUMENT_SCOPE_DECLINE_ANSWER
+    assert router_attachment_scope_decline(state, RouterRoute.DIRECT.value) is None
 
 
 def test_attachment_scope_keeps_in_scope_high_scoring_prefetch():

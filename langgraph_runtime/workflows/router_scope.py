@@ -5,7 +5,6 @@ from typing import Any, Mapping
 from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     _combined_document_evidence_text,
-    attachment_retrieval_scope_decline,
     thread_has_attached_documents,
 )
 from langgraph_runtime.workflows.enums import RouterRoute
@@ -28,9 +27,7 @@ def router_attachment_scope_decline(state: Mapping[str, Any], route: str | None)
         return None
     if route == RouterRoute.CLARIFY.value:
         return None
-    score_decline = attachment_retrieval_scope_decline(state)
-    if score_decline:
-        return score_decline
+    # Prefetch-only retrieval scores are not authoritative before the document worker runs.
     if _prefetch_has_non_document_evidence(state):
         return None
     bundle = state.get("pre_fetch_bundle") or {}

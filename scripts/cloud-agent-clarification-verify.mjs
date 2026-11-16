@@ -4,6 +4,7 @@
  * Uses scripts/cloud-agent-e2e-lib.mjs (PR #110).
  */
 import { execSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -46,6 +47,11 @@ async function waitOutOfSending(page) {
   }
 }
 
+function md5File(filePath) {
+  const data = fs.readFileSync(filePath);
+  return crypto.createHash('md5').update(data).digest('hex');
+}
+
 async function main() {
   const sha = execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
   const admin = loadEnvAdmin();
@@ -78,38 +84,69 @@ async function main() {
   await guard.capture(page, 'clarification-05-custom-box.png', { requireChatWorkspace: true });
   await page.getByRole('button', { name: 'Cancel custom response' }).click();
 
-  const option = page.getByRole('button').filter({ hasText: /Compare|MORAN/i }).first();
-  const optionLabel = (await option.innerText()).trim();
-  await option.click();
-  const sendingAfterOption = page.getByPlaceholder(/Sending/i);
-  await sendingAfterOption.waitFor({ state: 'visible', timeout: 120_000 });
-  await guard.capture(page, 'clarification-06-option-sending.png', { requireChatWorkspace: true, allowLoadingShell: true });
+  const optionField = page.locator('textarea.MuiInputBase-inputMultiline').first();
+  const optionText = (await optionField.inputValue()).trim();
+  if (!optionText) {
+    throw new Error('Clarification option field had no seed text');
+  }
+  await optionField.click();
+  await guard.capture(page, 'clarification-06-option-field.png', { requireChatWorkspace: true });
+
+  await page.locator('button[aria-label^="Send "]').first().click();
+  const composer = page.getByTestId('chat-composer-input');
+  await composer.waitFor({ state: 'visible', timeout: 30_000 });
+  const seeded = (await composer.inputValue()).trim();
+  if (!seeded.includes(optionText.slice(0, Math.min(24, optionText.length)))) {
+    throw new Error(`Composer was not seeded from option; expected fragment of ${JSON.stringify(optionText)}`);
+  }
+  await guard.capture(page, 'clarification-07-composer-seeded.png', { requireChatWorkspace: true });
+
+  const edited = `${seeded.replace(/\s+$/, '')} (edited for send)`;
+  await composer.fill(edited);
+  await guard.capture(page, 'clarification-08-composer-edited.png', { requireChatWorkspace: true });
+
+  await chatRateLimitPause();
+  await typeAndSendChat(page, edited);
   await waitOutOfSending(page);
   await waitForComposerReady(page);
-  await guard.capture(page, 'clarification-07-option-answered.png', { requireChatWorkspace: true });
+  const listText = (await page.getByTestId('chat-message-list').innerText()).trim();
+  const lastAnswer = listText;
+  if (/attached documents do not address/i.test(lastAnswer)) {
+    throw new Error(`Got scope-decline answer after clarified send: ${lastAnswer.slice(0, 240)}`);
+  }
+  if (!/(MORAN|DINER|encoder|architecture|layer|attention)/i.test(lastAnswer)) {
+    throw new Error(`Answer does not look PDF-grounded: ${lastAnswer.slice(-400)}`);
+  }
+  await guard.capture(page, 'clarification-09-grounded-answer.png', { requireChatWorkspace: true });
 
   await chatRateLimitPause();
   await page.waitForTimeout(4000);
   await waitForComposerReady(page);
   await typeAndSendChat(page, QUESTION);
   await waitClarificationCard(page);
-  await guard.capture(page, 'clarification-08-card-before-cancel.png', { requireChatWorkspace: true });
+  await guard.capture(page, 'clarification-10-card-before-cancel.png', { requireChatWorkspace: true });
   await page.getByLabel('Close decision panel').click();
   await waitForComposerReady(page);
-  const composer = page.getByTestId('chat-composer-input');
   const reseed = await composer.inputValue();
   if (!reseed.includes(QUESTION)) {
     throw new Error(`Cancel did not re-seed composer with ${JSON.stringify(QUESTION)}; got ${JSON.stringify(reseed)}`);
   }
-  await guard.capture(page, 'clarification-09-cancel-reseed.png', { requireChatWorkspace: true });
+  await guard.capture(page, 'clarification-11-cancel-reseed.png', { requireChatWorkspace: true });
+
+  const screenshotMd5 = Object.fromEntries(
+    guard.paths.map((p) => [path.basename(p), md5File(p)]),
+  );
 
   const meta = {
     tested_sha: sha,
     model: MODEL,
     question: QUESTION,
-    picked_option: optionLabel,
+    picked_option: optionText,
+    sent_question: edited,
+    assistant_answer_preview: lastAnswer.slice(0, 280),
     custom_question: CUSTOM,
     screenshots: guard.paths,
+    screenshot_md5: screenshotMd5,
   };
   fs.writeFileSync(path.join(DEFAULT_ART_DIR, 'clarification-verify-metadata.json'), JSON.stringify(meta, null, 2));
   await browser.close();
