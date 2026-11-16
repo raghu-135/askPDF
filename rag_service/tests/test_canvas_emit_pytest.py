@@ -192,12 +192,47 @@ async def test_publish_canvas_supersedes_quoted_canvas_in_user_question(monkeypa
     )
     canvas_id = "41a7cdc2-1234-5678-9abc-def012345678"
     create = AsyncMock(return_value={"id": "canvas-2", "title": "Skills"})
+    prior_spec = {
+        "schema_version": 1,
+        "title": "Prior canvas",
+        "summary": "Baseline opening",
+        "sections": [
+            {
+                "title": "Overview",
+                "blocks": [{"type": "stat", "value": "2", "label": "Claims reviewed", "tone": "info"}],
+            },
+            {
+                "title": "Evidence matrix",
+                "blocks": [
+                    {
+                        "type": "table",
+                        "headers": ["Claim", "Source", "Support", "Notes"],
+                        "rows": [
+                            [
+                                {"text": "Prior claim"},
+                                {"text": "Prior source"},
+                                {"text": "supported", "tone": "supported"},
+                                {"text": ""},
+                            ]
+                        ],
+                    }
+                ],
+            },
+            {
+                "title": "Sources",
+                "blocks": [{
+                    "type": "sources",
+                    "citations": [{"kind": "web", "label": "Prior source", "url": "https://example.com/prior"}],
+                }],
+            },
+        ],
+    }
     service = CanvasService()
     monkeypatch.setattr(service, "create", create)
     monkeypatch.setattr(
         service,
         "get",
-        AsyncMock(return_value={"id": canvas_id, "title": "Prior", "spec": valid_spec()}),
+        AsyncMock(return_value={"id": canvas_id, "title": "Prior", "spec": prior_spec}),
     )
     monkeypatch.setattr("app.tools.publish_canvas.CanvasService", lambda: service)
 
