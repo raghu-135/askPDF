@@ -283,14 +283,13 @@ async function main() {
     }
 
     const showOverviewChat = async () => {
-      const overview = page.getByRole('tab', { name: /Overview/i }).first();
-      if (await overview.isVisible({ timeout: 15_000 }).catch(() => false)) {
-        await overview.click();
-      }
+      await focusChatComposer(page);
       await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 120_000 });
     };
     await showOverviewChat();
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
+    const reloadTarget = new URL(deepLink);
+    reloadTarget.searchParams.delete('canvas');
+    await page.goto(reloadTarget.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
     await waitForNoLoadingShell(page);
     await showOverviewChat();
     await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
