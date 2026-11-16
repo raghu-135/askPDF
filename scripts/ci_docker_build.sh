@@ -55,15 +55,54 @@ fi
 echo "Building main compose services: ${CORE_SERVICES[*]}"
 main_compose build "${CORE_SERVICES[@]}"
 
-rag_id="$(main_compose images rag-service --quiet | head -1)"
-langgraph_id="$(main_compose images langgraph-runtime --quiet | head -1)"
+image_id_for_service() {
+  local compose_fn=(main_compose)
+  local service="$1"
+  local id
+  id="$("${compose_fn[@]}" images "$service" --quiet 2>/dev/null | head -1)"
+  if [ -n "$id" ]; then
+    echo "$id"
+    return 0
+  fi
+  id="$(docker images --quiet --filter "label=com.docker.compose.service=$service" | head -1)"
+  if [ -n "$id" ]; then
+    echo "$id"
+    return 0
+  fi
+  echo "could not resolve image id for service $service" >&2
+  return 1
+}
+
+rag_id="$(image_id_for_service rag-service)"
+langgraph_id="$(image_id_for_service langgraph-runtime)"
 docker tag "$rag_id" askpdf-runtime-control-plane
 docker tag "$rag_id" askpdf-control-plane
 docker tag "$langgraph_id" askpdf-langgraph-runtime
 
+runtime_image_id_for_service() {
+  local project="$1"
+  local service="$2"
+  local id
+  id="$(runtime_compose "$project" images "$service" --quiet 2>/dev/null | head -1)"
+  if [ -n "$id" ]; then
+    echo "$id"
+    return 0
+  fi
+  id="$(docker images --quiet --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$service" | head -1)"
+  if [ -n "$id" ]; then
+    echo "$id"
+    return 0
+  fi
+  echo "could not resolve image id for $project/$service" >&2
+  return 1
+}
+
 echo "Building test-runner image"
 test_compose build test-runner
 test_id="$(test_compose images test-runner --quiet | head -1)"
+if [ -z "$test_id" ]; then
+  test_id="$(docker images --quiet --filter "label=com.docker.compose.project=askpdf-test" --filter "label=com.docker.compose.service=test-runner" | head -1)"
+fi
 docker tag "$test_id" askpdf-test-runner:ci
 docker tag "$test_id" askpdf-control-plane-tests
 
@@ -82,7 +121,7 @@ tag_from_runtime() {
   local service="$1"
   local tag="$2"
   local id
-  id="$(runtime_compose askpdf-ci-prefetch images "$service" --quiet | head -1)"
+  id="$(runtime_image_id_for_service askpdf-ci-prefetch "$service")"
   docker tag "$id" "$tag"
 }
 
@@ -93,7 +132,7 @@ tag_from_runtime hermes askpdf-hermes-gateway:ci
 tag_from_runtime hermes-runtime askpdf-hermes-runtime:ci
 tag_from_runtime hermes-upstream "$HERMES_UPSTREAM_IMAGE"
 
-runtime_test_id="$(runtime_compose askpdf-ci-prefetch images runtime-test-runner --quiet | head -1)"
+runtime_test_id="$(runtime_image_id_for_service askpdf-ci-prefetch runtime-test-runner)"
 docker tag "$runtime_test_id" askpdf-langgraph-runtime-tests
 
 echo "CI image build complete"

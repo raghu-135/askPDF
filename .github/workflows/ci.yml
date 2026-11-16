@@ -79,6 +79,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # Keep images in the local daemon so compose tag/publish steps can see them.
+          driver: docker
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
