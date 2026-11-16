@@ -20,9 +20,9 @@ permissions:
 
 env:
   COMPOSE_FILE: docker-compose.yml:docker-compose.override.yml
-  ASKPDF_CI_MAIN_PROFILES: stack,buildkit
-  ASKPDF_CI_TEST_PROFILES: test,buildkit
-  ASKPDF_CI_RUNTIME_PROFILES: integration,buildkit
+  ASKPDF_CI_MAIN_PROFILES: ""
+  ASKPDF_CI_TEST_PROFILES: test
+  ASKPDF_CI_RUNTIME_PROFILES: integration
   WEAVIATE_HYBRID_ALPHA: "0.7"
   QUERY_DEFAULTS_LIMIT: "20"
   LOCAL_EMBEDDING_MODEL: BAAI/bge-m3

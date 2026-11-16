@@ -21,7 +21,7 @@ mkdir -p "$LOG_DIR"
 PROXY_PID_FILE="${LOG_DIR}/openrouter-proxy.pid"
 DOCKERD_PID_FILE="${LOG_DIR}/dockerd.pid"
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.override.yml)
-STACK_COMPOSE_PROFILES="${ASKPDF_STACK_COMPOSE_PROFILES:-stack,hermes}"
+STACK_COMPOSE_PROFILES="${ASKPDF_STACK_COMPOSE_PROFILES:-hermes}"
 
 export DEBIAN_FRONTEND=noninteractive
 if docker buildx version >/dev/null 2>&1; then
@@ -215,9 +215,9 @@ EOF
 
   # VM dev stack: Hermes profile + host OpenRouter proxy (containers use host.docker.internal:12345).
   if grep -q '^COMPOSE_PROFILES=' .env; then
-    sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=stack,hermes/' .env
+    sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=hermes/' .env
   else
-    echo 'COMPOSE_PROFILES=stack,hermes' >>.env
+    echo 'COMPOSE_PROFILES=hermes' >>.env
   fi
 
   if grep -q '^LLM_API_URL=' .env; then
@@ -442,7 +442,7 @@ Usage: bash scripts/cloud-agent-setup.sh <install|start|stack|tests-env>
 
   install    Install Docker, write .env (Hermes), prefetch Docling models
   start      Ensure dockerd + OpenRouter host proxy
-  stack      install + start + COMPOSE_PROFILES=stack,hermes compose up (override.yml)
+  stack      install + start + COMPOSE_PROFILES=hermes compose up (override.yml)
   tests-env  Ensure dockerd and write .env.ci for ./run_tests.sh
 EOF
 }

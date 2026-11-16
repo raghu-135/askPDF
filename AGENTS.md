@@ -29,9 +29,9 @@ Subcommands:
 
 | Command | Purpose |
 | --- | --- |
-| `install` | Install `docker.io`, write `.env` (`COMPOSE_PROFILES=stack,hermes`), warm Docling models |
+| `install` | Install `docker.io`, write `.env` (`COMPOSE_PROFILES=hermes`), warm Docling models |
 | `start` | Start `dockerd` and the OpenRouter proxy on `:12345` |
-| `stack` | `install` + `start` + `COMPOSE_PROFILES=stack,hermes docker compose -f docker-compose.yml -f docker-compose.override.yml up -d` |
+| `stack` | `install` + `start` + `docker compose -f docker-compose.yml -f docker-compose.override.yml up -d` |
 | `tests-env` | Docker + copy `.env.ci` for `./run_tests.sh` only |
 
 Repository-managed environments can wire `.cursor/environment.json` (`install` /
@@ -72,7 +72,7 @@ If chat fails with 401, confirm a secret is set in the environment dashboard
 
 ```bash
 # Stop the dev stack first if it is running (both use host 5432/8080).
-COMPOSE_PROFILES=stack,hermes docker compose -f docker-compose.yml -f docker-compose.override.yml down 2>/dev/null || true
+docker compose -f docker-compose.yml -f docker-compose.override.yml down 2>/dev/null || true
 bash scripts/cloud-agent-setup.sh tests-env
 ./run_tests.sh
 ```

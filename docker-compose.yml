@@ -48,8 +48,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    profiles:
-    - stack
   rag-service:
     build:
       context: .
@@ -142,8 +140,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    profiles:
-    - stack
   langgraph-runtime:
     image: askpdf-langgraph-runtime
     build:
@@ -242,8 +238,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
-    profiles:
-    - stack
   hermes-config-init:
     profiles:
     - hermes
@@ -451,8 +445,6 @@ services:
     - /secrets/runtime.env
     - --ready
     - /secrets/ready
-    profiles:
-    - stack
   runtime-db-bootstrap:
     image: askpdf-langgraph-runtime
     build:
@@ -475,8 +467,6 @@ services:
     depends_on:
       postgresql:
         condition: service_healthy
-    profiles:
-    - stack
   db-migrate:
     build:
       context: .
@@ -527,8 +517,6 @@ services:
     volumes:
     - ./rag_service:/app
     - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
-    profiles:
-    - stack
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.36.2
     ports:
@@ -550,8 +538,6 @@ services:
       retries: 5
     volumes:
     - weaviate_data:/var/lib/weaviate
-    profiles:
-    - stack
   postgresql:
     image: postgres:16-alpine
     environment:
@@ -570,8 +556,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    profiles:
-    - stack
   browser-capture:
     build:
       context: ./browser_capture
@@ -603,8 +587,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-    profiles:
-    - stack
   frontend-test-runner:
     image: node:22-bookworm-slim
     working_dir: /workspace/frontend

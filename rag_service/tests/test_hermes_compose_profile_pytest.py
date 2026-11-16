@@ -30,7 +30,7 @@ def test_example_environment_enables_hermes_with_distinct_placeholder_tokens():
             key, value = line.split("=", 1)
             values[key] = value
 
-    assert values["COMPOSE_PROFILES"] == "stack,hermes"
+    assert values["COMPOSE_PROFILES"] == "hermes"
     assert values["HERMES_RUNTIME_TOKEN"] != values["HERMES_API_TOKEN"]
     assert values["HERMES_API_TOKEN"].startswith("replace-with-")
 
@@ -68,7 +68,7 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
         "weaviate",
         "browser-capture",
     ):
-        assert "stack" in services[name]["profiles"]
+        assert "profiles" not in services[name]
     hermes = services["hermes"]
     adapter = services["hermes-runtime"]
     assert hermes["profiles"] == ["hermes"]

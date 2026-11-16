@@ -72,7 +72,7 @@ Open http://localhost:3000.
 
 The default Compose stack includes the frontend, control plane, PostgreSQL,
 Weaviate, browser capture, and LangGraph runtime. `.env.example` sets
-`COMPOSE_PROFILES=stack,hermes`, so the product stack and Hermes start unless you change it.
+`COMPOSE_PROFILES=hermes`, so Hermes starts with the default product services unless you change it.
 
 ## Stop and restart
 
@@ -86,12 +86,12 @@ Persistent database and content volumes are retained unless explicitly removed.
 For frontend hot reload, use `docker-compose.override.yml` (dev bind mounts and
 `npm run dev` on the frontend). Ports stay in the Compose YAML, not `.env`.
 
-    COMPOSE_PROFILES=stack,hermes docker compose -f docker-compose.yml -f docker-compose.override.yml up --build
+    docker compose -f docker-compose.yml -f docker-compose.override.yml up --build
 
 ### Parallel preview (`preview` profile)
 
 Run a second worktree stack beside the default ports with
-`COMPOSE_PROFILES=stack,preview` (same two compose files). Intended host ports
+`COMPOSE_PROFILES=preview` (same two compose files). Intended host ports
 are literals in Compose: frontend `3100`, rag-service `18000`, Weaviate
 `18080`, PostgreSQL `15432`, browser-capture `18090` (see profile `preview` in
 `docker-compose.yml` / override). Preview offsets are not yet merged into the
