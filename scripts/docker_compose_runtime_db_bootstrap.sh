@@ -7,8 +7,7 @@ import os
 import socket
 import time
 
-import psycopg2
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import psycopg
 
 host = os.environ.get("RUNTIME_BOOTSTRAP_PG_HOST", "postgresql")
 user = os.environ.get("RUNTIME_BOOTSTRAP_PG_USER", "postgres")
@@ -25,14 +24,14 @@ for _ in range(60):
 else:
     raise SystemExit(f"database endpoint {host}:{port} not reachable after 60s")
 
-conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname="askpdf")
-conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-with conn.cursor() as cur:
-    cur.execute("SELECT 1 FROM pg_database WHERE datname='runtime_checkpoints'")
-    if cur.fetchone() is None:
-        cur.execute("CREATE DATABASE runtime_checkpoints")
-        print("Created database runtime_checkpoints", flush=True)
-conn.close()
+with psycopg.connect(
+    host=host, port=port, user=user, password=password, dbname="askpdf", autocommit=True
+) as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_database WHERE datname='runtime_checkpoints'")
+        if cur.fetchone() is None:
+            cur.execute("CREATE DATABASE runtime_checkpoints")
+            print("Created database runtime_checkpoints", flush=True)
 PY
 
 exec /bin/sh /opt/askpdf/docker_compose_db_migrate.sh langgraph_runtime.migrate
