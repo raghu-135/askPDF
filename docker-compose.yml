@@ -1,8 +1,6 @@
 x-rag-service-build: &rag-service-build
   context: .
   dockerfile: rag_service/Dockerfile
-  args:
-    DOWNLOAD_LOCAL_MODELS: 'false'
 
 x-langgraph-runtime-build: &langgraph-runtime-build
   context: .
