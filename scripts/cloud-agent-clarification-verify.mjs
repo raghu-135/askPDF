@@ -16,45 +16,59 @@ const { chromium } = requireFromFrontend('@playwright/test');
 import {
   DEFAULT_ART_DIR,
   REPO_ROOT,
+  REAL_UI_VIEWPORT,
   ScreenshotGuard,
+  assertGroundedPdfAnswer,
+  assertNotScopeDecline,
   chatRateLimitPause,
+  chatTranscriptText,
+  clarificationPanel,
   ensureProjectAndThread,
   loadEnvAdmin,
   selectLlmModel,
   typeAndSendChat,
   uploadPdfThroughUi,
-  waitForComposerReady,
+  waitClarificationCard,
+  waitComposerReady,
+  waitOutOfSending,
+  waitRepeatClarifyOrGrounded,
   waitForThreadWorkspaceReady,
 } from './cloud-agent-e2e-lib.mjs';
 
 const MODEL = process.env.ASKPDF_E2E_LLM_MODEL || 'inclusionai/ling-3.2-flash:free';
 const PDF = process.env.ASKPDF_E2E_PDF || path.join(REPO_ROOT, 'rag_service/tests/01030000000000.pdf');
 const QUESTION = process.env.ASKPDF_CLARIFY_QUESTION || 'Compare them.';
-const CUSTOM = 'Summarize the architecture section in one paragraph.';
-
-function clarificationPanel(page) {
-  return page
-    .locator('div')
-    .filter({ has: page.getByText('I need a bit more clarification') })
-    .filter({ has: page.getByRole('button', { name: /Something else/i }) })
-    .last();
-}
-
-async function waitClarificationCard(page) {
-  await page.getByText('I need a bit more clarification').waitFor({ timeout: 600_000 });
-  await page.getByRole('button', { name: /Something else/i }).waitFor({ timeout: 60_000 });
-}
-
-async function waitOutOfSending(page) {
-  const sending = page.getByPlaceholder(/Sending/i);
-  if (await sending.isVisible({ timeout: 120_000 }).catch(() => false)) {
-    await sending.waitFor({ state: 'hidden', timeout: 900_000 });
-  }
-}
+const CUSTOM = process.env.ASKPDF_CLARIFY_CUSTOM || 'Summarize the architecture section in one paragraph.';
 
 function md5File(filePath) {
   const data = fs.readFileSync(filePath);
   return crypto.createHash('md5').update(data).digest('hex');
+}
+
+async function seedComposerFromOption(page, composer) {
+  const decisionPanel = clarificationPanel(page);
+  const optionFields = decisionPanel.locator('textarea.MuiInputBase-inputMultiline');
+  const optionCount = await optionFields.count();
+  let optionText = '';
+  let optionIndex = 0;
+  for (let index = 0; index < optionCount; index += 1) {
+    const candidate = (await optionFields.nth(index).inputValue()).trim();
+    if (/compare|MORAN|DINER|them/i.test(candidate)) {
+      optionText = candidate;
+      optionIndex = index;
+      break;
+    }
+  }
+  if (!optionText) {
+    throw new Error('No clarification option matching the uploaded PDF was found');
+  }
+  await decisionPanel.locator('button[aria-label^="Send "]').nth(optionIndex).click();
+  await composer.waitFor({ state: 'visible', timeout: 30_000 });
+  const seeded = (await composer.inputValue()).trim();
+  if (!seeded.includes(optionText.slice(0, Math.min(24, optionText.length)))) {
+    throw new Error(`Composer was not seeded from option; expected fragment of ${JSON.stringify(optionText)}`);
+  }
+  return optionText;
 }
 
 async function main() {
@@ -62,8 +76,7 @@ async function main() {
   const admin = loadEnvAdmin();
   const guard = new ScreenshotGuard(DEFAULT_ART_DIR);
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
-  await page.setViewportSize({ width: 1440, height: 900 });
+  const page = await browser.newPage({ viewport: REAL_UI_VIEWPORT });
   await page.addInitScript(({ token, model }) => {
     window.localStorage.setItem('auth_token', token);
     window.localStorage.setItem('last_llm_model', model);
@@ -94,10 +107,9 @@ async function main() {
 
   const panel = clarificationPanel(page);
   await guard.capture(page, 'clarification-06-card-before-cancel.png', { requireChatWorkspace: true });
-  const closeBtn = panel.getByRole('button', { name: /Close decision panel/i });
-  await closeBtn.evaluate((node) => node.click());
+  await panel.getByRole('button', { name: /Close decision panel/i }).evaluate((node) => node.click());
   await waitForComposerReady(page);
-  let reseed = (await composer.inputValue()).trim();
+  const reseed = (await composer.inputValue()).trim();
   if (!reseed.includes(QUESTION)) {
     throw new Error(`Cancel did not re-seed composer with ${JSON.stringify(QUESTION)}; got ${JSON.stringify(reseed)}`);
   }
@@ -108,49 +120,60 @@ async function main() {
   await waitClarificationCard(page);
   await guard.capture(page, 'clarification-08-card-after-resend.png', { requireChatWorkspace: true });
 
-  const decisionPanel = clarificationPanel(page);
-  const optionFields = decisionPanel.locator('textarea.MuiInputBase-inputMultiline');
-  const optionCount = await optionFields.count();
-  let optionText = '';
-  let optionIndex = 0;
-  for (let index = 0; index < optionCount; index += 1) {
-    const candidate = (await optionFields.nth(index).inputValue()).trim();
-    if (/compare|MORAN|DINER|them/i.test(candidate)) {
-      optionText = candidate;
-      optionIndex = index;
-      break;
-    }
-  }
-  if (!optionText) {
-    throw new Error('No clarification option matching the uploaded PDF was found');
-  }
-  await optionFields.nth(optionIndex).click();
-  await guard.capture(page, 'clarification-09-option-field.png', { requireChatWorkspace: true });
-
-  await decisionPanel.locator('button[aria-label^="Send "]').nth(optionIndex).click();
+  await page.getByRole('button', { name: /Something else/i }).click();
+  await page.getByRole('textbox', { name: 'Your response' }).fill(CUSTOM);
+  await guard.capture(page, 'clarification-09-custom-filled.png', { requireChatWorkspace: true });
+  await page.getByRole('button', { name: 'Send custom response' }).click();
   await composer.waitFor({ state: 'visible', timeout: 30_000 });
-  const seeded = (await composer.inputValue()).trim();
-  if (!seeded.includes(optionText.slice(0, Math.min(24, optionText.length)))) {
-    throw new Error(`Composer was not seeded from option; expected fragment of ${JSON.stringify(optionText)}`);
+  const customSeeded = (await composer.inputValue()).trim();
+  if (customSeeded !== CUSTOM.trim()) {
+    throw new Error(`Custom response did not seed composer; expected ${JSON.stringify(CUSTOM)}; got ${JSON.stringify(customSeeded)}`);
   }
-  await guard.capture(page, 'clarification-10-composer-seeded.png', { requireChatWorkspace: true });
+  await guard.capture(page, 'clarification-10-custom-composer-seeded.png', { requireChatWorkspace: true });
 
-  const edited = `${seeded.replace(/\s+$/, '')} (edited for send)`;
+  await chatRateLimitPause();
+  await typeAndSendChat(page, customSeeded);
+  await waitOutOfSending(page);
+  await waitForComposerReady(page);
+  let customAnswer = await chatTranscriptText(page);
+  assertGroundedPdfAnswer(customAnswer, { extraPattern: /(architecture|MORAN|encoder|layer|network)/i });
+  await guard.capture(page, 'clarification-11-custom-grounded-answer.png', { requireChatWorkspace: true });
+
+  await chatRateLimitPause();
+  await typeAndSendChat(page, QUESTION);
+  await waitClarificationCard(page);
+  await guard.capture(page, 'clarification-12-card-for-option-flow.png', { requireChatWorkspace: true });
+
+  const optionText = await seedComposerFromOption(page, composer);
+  await guard.capture(page, 'clarification-13-composer-seeded.png', { requireChatWorkspace: true });
+
+  const edited = `${(await composer.inputValue()).trim().replace(/\s+$/, '')} (edited for send)`;
   await composer.fill(edited);
-  await guard.capture(page, 'clarification-11-composer-edited.png', { requireChatWorkspace: true });
+  await guard.capture(page, 'clarification-14-composer-edited.png', { requireChatWorkspace: true });
 
   await chatRateLimitPause();
   await typeAndSendChat(page, edited);
   await waitOutOfSending(page);
   await waitForComposerReady(page);
-  const lastAnswer = (await page.getByTestId('chat-message-list').innerText()).trim();
-  if (/attached documents do not address/i.test(lastAnswer)) {
-    throw new Error(`Got scope-decline answer after clarified send: ${lastAnswer.slice(0, 240)}`);
+  const optionAnswer = await chatTranscriptText(page);
+  assertGroundedPdfAnswer(optionAnswer);
+  await guard.capture(page, 'clarification-15-grounded-answer.png', { requireChatWorkspace: true });
+
+  await chatRateLimitPause();
+  await waitForComposerReady(page);
+  await typeAndSendChat(page, QUESTION);
+  const repeatOutcome = await waitRepeatClarifyOrGrounded(page);
+  if (repeatOutcome === 'clarification') {
+    await guard.capture(page, 'clarification-16-repeat-compare-card.png', { requireChatWorkspace: true });
+    await clarificationPanel(page).getByRole('button', { name: /Close decision panel/i }).evaluate((node) => node.click());
+  } else {
+    await waitOutOfSending(page);
+    await waitForComposerReady(page);
+    const repeatText = await chatTranscriptText(page);
+    assertNotScopeDecline(repeatText);
+    assertGroundedPdfAnswer(repeatText);
+    await guard.capture(page, 'clarification-16-repeat-compare-answer.png', { requireChatWorkspace: true });
   }
-  if (!/(MORAN|DINER|encoder|architecture|layer|attention)/i.test(lastAnswer)) {
-    throw new Error(`Answer does not look PDF-grounded: ${lastAnswer.slice(-400)}`);
-  }
-  await guard.capture(page, 'clarification-12-grounded-answer.png', { requireChatWorkspace: true });
 
   const screenshotMd5 = Object.fromEntries(
     guard.paths.map((p) => [path.basename(p), md5File(p)]),
@@ -162,8 +185,10 @@ async function main() {
     question: QUESTION,
     picked_option: optionText,
     sent_question: edited,
-    assistant_answer_preview: lastAnswer.slice(0, 280),
     custom_question: CUSTOM,
+    repeat_compare_outcome: repeatOutcome,
+    assistant_answer_preview: optionAnswer.slice(0, 280),
+    custom_answer_preview: customAnswer.slice(0, 280),
     screenshots: guard.paths,
     screenshot_md5: screenshotMd5,
   };

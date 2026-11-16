@@ -5,6 +5,7 @@ from typing import Any, Mapping
 from langgraph_runtime.workflows.document_scope import (
     DOCUMENT_SCOPE_DECLINE_ANSWER,
     _combined_document_evidence_text,
+    _finalize_attachment_scope_decline,
     thread_has_attached_documents,
 )
 from langgraph_runtime.workflows.enums import RouterRoute
@@ -34,5 +35,5 @@ def router_attachment_scope_decline(state: Mapping[str, Any], route: str | None)
     if not str(bundle.get("document_evidence_text") or "").strip():
         if _combined_document_evidence_text(state).strip():
             return None
-        return DOCUMENT_SCOPE_DECLINE_ANSWER
+        return _finalize_attachment_scope_decline(state, DOCUMENT_SCOPE_DECLINE_ANSWER)
     return None

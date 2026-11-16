@@ -117,6 +117,26 @@ def test_router_post_retrieval_decline_not_blocked_by_document_route():
     assert workflow_post_retrieval_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
 
 
+def test_attachment_scope_suppressed_on_follow_up_with_recent_dialogue():
+    state = {
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_evidence_text": "Unrelated prefetch excerpt.",
+            "document_sources": [{"file_hash": "a" * 32, "score": 0.12}],
+            "recent_history_text": (
+                "User: Compare them.\n"
+                "Assistant: MORAN compares against CRNN on ICDAR benchmarks."
+            ),
+        },
+        "question": "Compare them.",
+        "workflow_id": "router_rag_agent",
+        "route": "document",
+    }
+    assert attachment_retrieval_scope_decline(state) is None
+    assert workflow_post_retrieval_scope_decline(state) is None
+    assert router_attachment_scope_decline(state, RouterRoute.DIRECT.value) is None
+
+
 def test_attachment_scope_skips_decline_after_worker_document_sources():
     state = {
         "pre_fetch_bundle": {"documents": [{"file_hash": "a" * 32}]},

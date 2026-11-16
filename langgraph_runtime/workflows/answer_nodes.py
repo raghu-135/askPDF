@@ -33,6 +33,7 @@ from langgraph_runtime.workflows.workers import _evidence_packet_scores_for_trac
 from langgraph_runtime.workflows.document_scope import (
     merged_state_document_sources,
     postprocess_grounded_document_answer,
+    suppress_attachment_scope_decline_for_dialogue,
 )
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
@@ -90,6 +91,8 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         decline == DOCUMENT_SCOPE_DECLINE_ANSWER
         and merged_state_document_sources(state)
     ):
+        decline = None
+    if decline == DOCUMENT_SCOPE_DECLINE_ANSWER and suppress_attachment_scope_decline_for_dialogue(state):
         decline = None
     if decline:
         data = {

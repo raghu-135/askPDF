@@ -13,6 +13,25 @@ ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE = 0.42
 ATTACHMENT_WEAK_RETRIEVAL_SCORE = 0.25
 
 
+def recent_thread_dialogue_in_prefetch(state: Mapping[str, Any]) -> bool:
+    """Whether pre-fetch included recent turns from this thread (follow-up dialogue)."""
+
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    return bool(str(bundle.get("recent_history_text") or "").strip())
+
+
+def suppress_attachment_scope_decline_for_dialogue(state: Mapping[str, Any]) -> bool:
+    """Avoid hard scope declines on attachment follow-ups when recent thread dialogue exists."""
+
+    return thread_has_attached_documents(state) and recent_thread_dialogue_in_prefetch(state)
+
+
+def _finalize_attachment_scope_decline(state: Mapping[str, Any], decline: str | None) -> str | None:
+    if decline == DOCUMENT_SCOPE_DECLINE_ANSWER and suppress_attachment_scope_decline_for_dialogue(state):
+        return None
+    return decline
+
+
 def thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
     documents = bundle.get("documents")
@@ -182,7 +201,7 @@ def decline_when_all_document_packets_irrelevant(state: Mapping[str, Any]) -> st
             str(packet.get("content") or "").strip() for packet in doc_packets
         ):
             return None
-    return DOCUMENT_SCOPE_DECLINE_ANSWER
+    return _finalize_attachment_scope_decline(state, DOCUMENT_SCOPE_DECLINE_ANSWER)
 
 
 def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
@@ -204,7 +223,7 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
                 return None
             if any(str(packet.get("content") or "").strip() for packet in doc_packets):
                 return None
-            return DOCUMENT_SCOPE_DECLINE_ANSWER
+            return _finalize_attachment_scope_decline(state, DOCUMENT_SCOPE_DECLINE_ANSWER)
         if any(str(packet.get("content") or "").strip() for packet in doc_packets):
             return None
     prefetch_scores = prefetch_document_retrieval_scores(state)
@@ -213,7 +232,7 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
         if peak_prefetch >= ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE:
             return None
         if peak_prefetch < ATTACHMENT_WEAK_RETRIEVAL_SCORE:
-            return DOCUMENT_SCOPE_DECLINE_ANSWER
+            return _finalize_attachment_scope_decline(state, DOCUMENT_SCOPE_DECLINE_ANSWER)
     return None
 
 
