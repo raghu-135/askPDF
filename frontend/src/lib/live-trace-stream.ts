@@ -13,6 +13,7 @@ export const LIVE_TRACE_TERMINAL_EVENTS = new Set([
   'run.completed',
   'run.failed',
   'run.cancelled',
+  'run.clarification',
   'interrupt.requested',
 ]);
 
@@ -28,6 +29,7 @@ export const liveTraceStatusFromEvent = (
   if (terminalError || eventName === 'run.failed') return 'failed';
   if (eventName === 'interrupt.requested') return 'review';
   if (eventName === 'run.cancelled') return 'cancelled';
+  if (eventName === 'run.clarification') return 'clarification';
   if (eventName === 'run.completed') return fallbackStatus || 'completed';
   return fallbackStatus || 'running';
 };

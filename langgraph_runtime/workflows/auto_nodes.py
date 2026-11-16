@@ -20,6 +20,12 @@ from langgraph_runtime.workflows.enums import AutoOrchestratorRoute, NodeEventSt
 from langgraph_runtime.workflows.runtime_invocation import append_event, log_node_end
 from langgraph_runtime.workflows.state import RouterRagState
 from langgraph_runtime.workflows.trace import compact_preview
+from langgraph_runtime.workflows.clarification_terminal import (
+    clarification_options_from_mapping,
+    clarification_terminal_active,
+    clarification_terminal_state_update,
+    is_clarification_terminal_status,
+)
 
 AUTO_WORKFLOW_ID = "auto_rag_agent"
 ROUTER_WORKFLOW_ID = "router_rag_agent"
@@ -83,9 +89,9 @@ def auto_scope_decline(state: Mapping[str, Any], *, workflow_id: str = "") -> st
             return None
     score_decline = attachment_retrieval_scope_decline(state)
     if score_decline:
-        return score_decline
+        return None
     if not str(bundle.get("document_evidence_text") or "").strip():
-        return DOCUMENT_SCOPE_DECLINE_ANSWER
+        return None
     return None
 
 
@@ -197,7 +203,32 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         tool_instructions=state.get("tool_instructions") if isinstance(state.get("tool_instructions"), dict) else {},
     )
     child_run_id = str(response.get("child_run_id") or "")
-    child_final_answer = str(response.get("final_answer") or response.get("message") or "")
+    child_result = response.get("result") if isinstance(response.get("result"), dict) else {}
+    child_status = response.get("status") or child_result.get("status")
+    child_options = clarification_options_from_mapping({**child_result, "clarification_options": response.get("clarification_options") or child_result.get("clarification_options")})
+    if clarification_terminal_active({**child_result, "status": child_status, "clarification_options": child_options}):
+        data = {
+            "status": NodeEventStatus.COMPLETED.value,
+            "child_run_id": child_run_id,
+            "child_workflow_id": child_workflow_id,
+            "output_preview": {"clarification_options": child_options},
+            "llm_result_summary": {"clarification_option_count": len(child_options)},
+        }
+        log_node_end(state, "workflow_delegate", started, data)
+        return {
+            **clarification_terminal_state_update(child_options),
+            "child_run_id": child_run_id,
+            "child_workflow_id": child_workflow_id,
+            "delegate_child_run_id": child_run_id,
+            "delegate_child_workflow_id": child_workflow_id,
+            "delegate_child_output": response,
+            "node_events": append_event(state, "workflow_delegate", data, started=started, config=config),
+        }
+
+    child_final_answer = str(response.get("final_answer") or response.get("message") or child_result.get("answer") or "")
+    if is_clarification_terminal_status(child_status) and child_final_answer:
+        # Legacy child runs may still return prose; drop it so the card can own UX.
+        child_final_answer = ""
     agent_task_id = response.get("agent_task_id")
     data = {
         "status": NodeEventStatus.COMPLETED.value,
@@ -225,6 +256,21 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
 
 async def delegate_synthesizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
+    if state.get("clarification_options"):
+        options = list(state.get("clarification_options") or [])
+        data = {
+            "status": NodeEventStatus.COMPLETED.value,
+            "child_run_id": state.get("child_run_id"),
+            "child_workflow_id": state.get("child_workflow_id"),
+            "output_preview": {"clarification_options": options},
+            "llm_result_summary": {"clarification_option_count": len(options)},
+        }
+        log_node_end(state, "delegate_synthesizer", started, data)
+        return {
+            **clarification_terminal_state_update(options),
+            "debug_trace": state.get("debug_trace"),
+            "node_events": append_event(state, "delegate_synthesizer", data, started=started, config=config),
+        }
     answer = str(state.get("child_final_answer") or state.get("final_answer") or "").strip()
     if not answer and state.get("agent_task_id"):
         task_id = str(state.get("agent_task_id"))

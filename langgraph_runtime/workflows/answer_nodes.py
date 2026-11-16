@@ -28,10 +28,12 @@ from langgraph_runtime.workflows.corrective_nodes import (
     document_scope_decline,
     synthesized_answer_grounded_in_corrective_evidence,
 )
+from langgraph_runtime.workflows.clarification_terminal import clarification_terminal_state_update
 from langgraph_runtime.workflows.workers import _evidence_packet_scores_for_trace
 from langgraph_runtime.workflows.document_scope import (
     merged_state_document_sources,
     postprocess_grounded_document_answer,
+    suppress_attachment_scope_decline_for_dialogue,
 )
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.prompting import build_final_answer_messages
@@ -79,9 +81,19 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
         PARALLEL_REFERENCE_WORKFLOW_ID,
         CORRECTIVE_WORKFLOW_ID,
     }:
-        decline = state.get("attachment_scope_decline") or router_attachment_scope_decline(
+        stale_router_decline = state.get("attachment_scope_decline")
+        if stale_router_decline and document_scope_decline(state) is None:
+            stale_router_decline = None
+        decline = stale_router_decline or router_attachment_scope_decline(
             state, str(state.get("route") or "")
         )
+    if (
+        decline == DOCUMENT_SCOPE_DECLINE_ANSWER
+        and merged_state_document_sources(state)
+    ):
+        decline = None
+    if decline == DOCUMENT_SCOPE_DECLINE_ANSWER and suppress_attachment_scope_decline_for_dialogue(state):
+        decline = None
     if decline:
         data = {
             "status": NodeEventStatus.COMPLETED.value,
@@ -341,38 +353,20 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
         }
     if state.get("clarification_options") and not state.get("final_answer"):
-        decline = router_attachment_scope_decline(state, RouterRoute.CLARIFY.value)
-        if decline:
-            data = {
-                "status": NodeEventStatus.COMPLETED.value,
-                "answer_chars": len(decline),
-                "output_preview": {"answer": compact_preview(decline)},
-            }
-            log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
-            return {
-                "final_answer": decline,
-                "reasoning": "",
-                "reasoning_available": False,
-                "reasoning_format": "none",
-                "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
-            }
-        answer = "I need a bit more clarification. Did you mean:\n" + "\n".join(
-            f"- {option}" for option in state["clarification_options"]
-        )
+        options = list(state["clarification_options"])
         data = {
             "status": NodeEventStatus.COMPLETED.value,
-            "answer_chars": len(answer),
+            "answer_chars": 0,
             "output_preview": {
-                "answer": compact_preview(answer),
-                "clarification_options": state.get("clarification_options"),
+                "clarification_options": options,
             },
             "llm_result_summary": {
-                "clarification_option_count": len(state.get("clarification_options") or []),
+                "clarification_option_count": len(options),
             },
         }
         log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
         return {
-            "final_answer": answer,
+            **clarification_terminal_state_update(options),
             "reasoning": "",
             "reasoning_available": False,
             "reasoning_format": "none",

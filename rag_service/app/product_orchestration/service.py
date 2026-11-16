@@ -8,6 +8,11 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional
 
 from app.product_orchestration.chat_cancellation import chat_run_cancel_requested
+from app.product_orchestration.clarification import (
+    CLARIFICATION_REQUIRED_STATUS,
+    is_clarification_terminal_result,
+    normalize_clarification_terminal_status,
+)
 from app.product_orchestration.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.product_orchestration.enums import AgentRunResumeAction, InterruptStatus
 from app.product_orchestration.execution_stream import AgentExecutionEventSink
@@ -58,7 +63,6 @@ from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
 
 logger = logging.getLogger(__name__)
-CLARIFICATION_REQUIRED_STATUS = "clarification_required"
 
 
 async def _finish_human_review_boundary(
@@ -569,10 +573,11 @@ class AgentRunService:
                 status = (
                     AgentRunStatus.FAILED.value
                     if error_json
-                    else ChatTurnStatus.CLARIFICATION.value
-                    if result.get("clarification_options")
+                    else CLARIFICATION_REQUIRED_STATUS
+                    if is_clarification_terminal_result(result)
                     else AgentRunStatus.COMPLETED.value
                 )
+            status = normalize_clarification_terminal_status(status, result)
             if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}:
                 result = await self.projection.project_chat_result(
                     thread_id=thread_id,
@@ -877,7 +882,6 @@ class AgentRunService:
             custom_instructions_override=custom_instructions,
             tool_instructions_override=tool_instructions or {},
             pre_fetch_bundle=pre_fetch_bundle,
-            bypass_clarification=True,
         )
         adapter = adapter_for_definition(definition)
         runtime_request = AgentRuntimeRequest(
@@ -912,9 +916,33 @@ class AgentRunService:
         runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
         runtime_result = await adapter.start(runtime_request, context=runtime_context)
         result = result_to_product_payload(runtime_result)
-        status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
-        answer = str(result.get("answer") or result.get("final_answer") or "").strip()
+        status = normalize_clarification_terminal_status(
+            result.get("status") if isinstance(result.get("status"), str) else None,
+            result,
+        )
         metrics = build_run_metrics(result, duration_ms=0)
+        if status == CLARIFICATION_REQUIRED_STATUS:
+            await self.repository.complete_run(
+                run.id,
+                status=AgentRunStatus.CLARIFICATION.value,
+                metrics_json=metrics,
+                error_json=result.get("agent_error"),
+            )
+            await self._cleanup_run(adapter, run.id)
+            deleted = await self.repository.delete_run(run.id)
+            if not deleted:
+                raise RuntimeError(f"Clarification child run {run.id} was not found during cleanup")
+            result["status"] = status
+            return {
+                "child_workflow_id": child_workflow_id,
+                "child_run_id": None,
+                "final_answer": "",
+                "status": status,
+                "clarification_options": result.get("clarification_options"),
+                "result": result,
+            }
+
+        answer = str(result.get("answer") or result.get("final_answer") or "").strip()
         await self.repository.complete_run(
             run.id,
             status=status if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value, AgentRunStatus.AWAITING_HUMAN.value} else AgentRunStatus.COMPLETED.value,
@@ -928,6 +956,7 @@ class AgentRunService:
             "child_run_id": run.id,
             "final_answer": answer,
             "status": status,
+            "clarification_options": result.get("clarification_options"),
             "result": result,
         }
 
