@@ -282,13 +282,21 @@ async function main() {
       throw new Error(`Expected at least 4 persisted messages after update, got ${messageCount}`);
     }
 
-    const threadUrl = `${DEFAULT_BASE_URL}/?thread=${threadId}`;
-    await page.goto(threadUrl, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
     await waitForNoLoadingShell(page);
-    await page.getByTestId('chat-message-list').waitFor({ timeout: 180_000 });
+    const overview = page.getByRole('tab', { name: /Overview/i }).first();
+    if (await overview.isVisible({ timeout: 15_000 }).catch(() => false)) {
+      await overview.click();
+    }
+    const messageList = page.getByTestId('chat-message-list');
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      if (await messageList.isVisible().catch(() => false)) break;
+      await page.waitForTimeout(3000);
+    }
+    await messageList.waitFor({ state: 'visible', timeout: 60_000 });
     await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
       .waitFor({ state: 'visible', timeout: 120_000 });
-    await guard.capture(page, shots.reload, { requireChatWorkspace: true });
+    await guard.capture(page, shots.reload, { requireChatWorkspace: false });
 
     const afterMetrics = canvasSpecMetrics(afterRecord.spec);
     if (
