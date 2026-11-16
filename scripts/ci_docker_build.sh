@@ -59,10 +59,11 @@ fi
 
 echo "Building control-plane images (shared registry cache)"
 build_with_cache askpdf-langgraph-runtime -f langgraph_runtime/Dockerfile
-build_with_cache askpdf-runtime-control-plane \
+build_with_cache askpdf-rag-service \
   -f rag_service/Dockerfile \
   --build-arg "DOWNLOAD_LOCAL_MODELS=false"
-docker tag askpdf-runtime-control-plane askpdf-control-plane
+docker tag askpdf-rag-service askpdf-runtime-control-plane
+docker tag askpdf-rag-service askpdf-control-plane
 
 build_with_cache askpdf-test-runner:ci \
   -f rag_service/Dockerfile.test \
@@ -77,8 +78,8 @@ build_with_cache askpdf-hermes-runtime \
   -f hermes_runtime/Dockerfile
 docker tag askpdf-hermes-runtime askpdf-hermes-runtime:ci
 
-# Integration-only services (gateway depends on hermes-upstream additional_contexts).
-RUNTIME_CI_BUILD_SERVICES=(fake-llm hermes-upstream hermes)
+# Integration-only services (gateway build pulls upstream git context directly).
+RUNTIME_CI_BUILD_SERVICES=(fake-llm hermes)
 echo "Building runtime integration services (no duplicate rag/langgraph/test rebuild): ${RUNTIME_CI_BUILD_SERVICES[*]}"
 runtime_compose askpdf-ci-prefetch build "${RUNTIME_CI_BUILD_SERVICES[@]}"
 
@@ -102,8 +103,6 @@ tag_runtime_compose_image() {
 
 tag_runtime_compose_image fake-llm askpdf-fake-llm:ci
 tag_runtime_compose_image hermes askpdf-hermes-gateway:ci
-tag_runtime_compose_image hermes-upstream "$HERMES_UPSTREAM_IMAGE"
-
 echo "CI image build complete"
 for tag in "${ASKPDF_CI_IMAGE_TAGS[@]}"; do
   if ! docker image inspect "$tag" >/dev/null 2>&1; then

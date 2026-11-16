@@ -224,8 +224,6 @@ services:
       HERMES_RUNTIME_URL: http://host.docker.internal:8200
       HF_HOME: /models/hf
       HF_HUB_CACHE: /models/hf
-      HF_HUB_OFFLINE: '1'
-      TRANSFORMERS_OFFLINE: '1'
     extra_hosts:
     - host.docker.internal:host-gateway
     healthcheck:
@@ -234,19 +232,9 @@ services:
       - sh
       - -c
       - curl -f http://localhost:8000/ready && curl -f http://host.docker.internal:8080/v1/.well-known/ready
-  db-migrate:
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/askpdf
-      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/test_askpdf
-      WEAVIATE_URL: http://host.docker.internal:8080
-    extra_hosts:
-    - host.docker.internal:host-gateway
-  runtime-db-bootstrap:
+  langgraph-runtime:
     environment:
       RUNTIME_BOOTSTRAP_PG_HOST: host.docker.internal
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/runtime_checkpoints
-      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/runtime_checkpoints
-      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:5432/runtime_checkpoints
     extra_hosts:
     - host.docker.internal:host-gateway
   test-postgresql:
@@ -284,8 +272,6 @@ services:
       OPENAI_API_KEY: null
       HF_HOME: /models/hf
       HF_HUB_CACHE: /models/hf
-      HF_HUB_OFFLINE: '1'
-      TRANSFORMERS_OFFLINE: '1'
     extra_hosts:
     - host.docker.internal:host-gateway
     depends_on:

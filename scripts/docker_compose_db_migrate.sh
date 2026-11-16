@@ -35,8 +35,9 @@ else:
 PY
 
 attempt=1
+LOCK_KEY="askpdf-migrate:${MODULE}"
 while [ "$attempt" -le 15 ]; do
-  if python -m "$MODULE"; then
+  if python /opt/askpdf/postgres_advisory_lock.py "$LOCK_KEY" "$MODULE"; then
     exit 0
   fi
   echo "Migration attempt $attempt failed; retrying..." >&2

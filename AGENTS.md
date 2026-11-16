@@ -77,6 +77,11 @@ bash scripts/cloud-agent-setup.sh tests-env
 ./run_tests.sh
 ```
 
+Product and LangGraph containers run Postgres migrations at startup (advisory
+lock); Compose no longer ships one-shot `db-migrate` / `runtime-db-bootstrap`
+services. Hermes gateway builds pull the pinned upstream git context directly
+(no `hermes-upstream` Compose service).
+
 `tests-env` writes `.askpdf-cloud-agent.env` (gitignored), which sets
 `ASKPDF_USE_CLOUD_AGENT_OVERRIDE=1` so `./run_tests.sh` loads
 `docker-compose.cloud-agent.override.yml` (host `node_modules`, published
