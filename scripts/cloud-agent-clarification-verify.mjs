@@ -140,7 +140,7 @@ async function main() {
   await typeAndSendChat(page, QUESTION);
   await waitClarificationCard(page);
   await guard.capture(page, 'clarification-10-card-before-cancel.png', { requireChatWorkspace: true });
-  await page.getByLabel('Close decision panel').click();
+  await page.getByLabel('Close decision panel').click({ force: true });
   await waitForComposerReady(page);
   const reseed = await composer.inputValue();
   if (!reseed.includes(QUESTION)) {
