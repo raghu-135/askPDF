@@ -155,12 +155,12 @@ class TestAPIIntegration:
             fake_index_document_for_thread,
         )
 
-        async def noop_enqueue_pdf_conversion(*_args, **_kwargs):
+        async def noop_queue_project(*_args, **_kwargs):
             return None
 
         monkeypatch.setattr(
-            "app.services.file_processing_service._enqueue_pdf_conversion",
-            noop_enqueue_pdf_conversion,
+            "app.api.files.queue_project_file_processing",
+            noop_queue_project,
         )
 
         pdf_path = Path(__file__).with_name("01030000000000.pdf")
