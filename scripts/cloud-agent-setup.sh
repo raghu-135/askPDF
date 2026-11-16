@@ -20,7 +20,7 @@ SAMPLE_PDF="${REPO_ROOT}/rag_service/tests/01030000000000.pdf"
 mkdir -p "$LOG_DIR"
 PROXY_PID_FILE="${LOG_DIR}/openrouter-proxy.pid"
 DOCKERD_PID_FILE="${LOG_DIR}/dockerd.pid"
-COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.override.yml)
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.cloud-agent.override.yml -f docker-compose.integration.yml)
 STACK_COMPOSE_PROFILES="${ASKPDF_STACK_COMPOSE_PROFILES:-hermes}"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -183,9 +183,9 @@ write_env_file() {
       (cd frontend && npm ci --ignore-scripts --fetch-timeout=600000 --fetch-retries=5)
     fi
     cat >.askpdf-cloud-agent.env <<'EOF'
-ASKPDF_USE_CLOUD_TEST_OVERRIDE=1
+ASKPDF_USE_CLOUD_AGENT_OVERRIDE=1
 EOF
-    log "wrote .askpdf-cloud-agent.env for host-gateway test overrides"
+    log "wrote .askpdf-cloud-agent.env (loads docker-compose.cloud-agent.override.yml for tests)"
     log "pre-building test runner image and warming postgres/weaviate..."
     COMPOSE_PROFILES=test compose_cmd -p askpdf-test "${COMPOSE_FILES[@]}" build --pull test-runner
     prefetch_docling_models
@@ -442,7 +442,7 @@ Usage: bash scripts/cloud-agent-setup.sh <install|start|stack|tests-env>
 
   install    Install Docker, write .env (Hermes), prefetch Docling models
   start      Ensure dockerd + OpenRouter host proxy
-  stack      install + start + COMPOSE_PROFILES=hermes compose up (override.yml)
+  stack      install + start + COMPOSE_PROFILES=hermes compose up (cloud-agent override)
   tests-env  Ensure dockerd and write .env.ci for ./run_tests.sh
 EOF
 }

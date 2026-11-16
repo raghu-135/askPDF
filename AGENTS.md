@@ -31,7 +31,7 @@ Subcommands:
 | --- | --- |
 | `install` | Install `docker.io`, write `.env` (`COMPOSE_PROFILES=hermes`), warm Docling models |
 | `start` | Start `dockerd` and the OpenRouter proxy on `:12345` |
-| `stack` | `install` + `start` + `docker compose -f docker-compose.yml -f docker-compose.override.yml up -d` |
+| `stack` | `install` + `start` + compose up with `docker-compose.cloud-agent.override.yml` |
 | `tests-env` | Docker + copy `.env.ci` for `./run_tests.sh` only |
 
 Repository-managed environments can wire `.cursor/environment.json` (`install` /
@@ -39,9 +39,9 @@ Repository-managed environments can wire `.cursor/environment.json` (`install` /
 
 ### Networking and LLM
 
-- **Bridge DNS timeout:** use `docker-compose.override.yml` (host-gateway patches) so
-  containers reach Postgres, Weaviate, and runtimes via `host.docker.internal`
-  published ports instead of Compose service DNS.
+- **Bridge DNS timeout:** `docker-compose.cloud-agent.override.yml` (loaded only on
+  cloud VMs) rewires containers to Postgres, Weaviate, and runtimes via
+  `host.docker.internal` published ports instead of Compose service DNS.
 - **LLM egress:** containers use `LLM_API_URL=http://host.docker.internal:12345/v1`.
   The VM host runs `scripts/openrouter_host_proxy.py`, forwarding to OpenRouter with
   `OPENAI_API_KEY` or `OPENROUTER_API_KEY` from the agent secrets (never committed).
@@ -50,8 +50,8 @@ Repository-managed environments can wire `.cursor/environment.json` (`install` /
 
 `install` builds `rag-service`, copies image-layer weights into gitignored
 `.askpdf-hf-cache/`, then runs one online Docling sample-PDF parse into that
-directory. `docker-compose.override.yml` mounts
-`.askpdf-hf-cache` on `/models/hf` (with `HF_HUB_CACHE=/models/hf` so baked
+directory. The cloud-agent override mounts `.askpdf-hf-cache` on `/models/hf` (with
+`HF_HUB_CACHE=/models/hf` so baked
 embedding weights and Docling hub artifacts share one tree) and sets
 `HF_HUB_OFFLINE=1` so containers
 use the cache instead of Hugging Face egress (often blocked in cloud VMs).
@@ -72,15 +72,20 @@ If chat fails with 401, confirm a secret is set in the environment dashboard
 
 ```bash
 # Stop the dev stack first if it is running (both use host 5432/8080).
-docker compose -f docker-compose.yml -f docker-compose.override.yml down 2>/dev/null || true
+docker compose -f docker-compose.yml -f docker-compose.cloud-agent.override.yml down 2>/dev/null || true
 bash scripts/cloud-agent-setup.sh tests-env
 ./run_tests.sh
 ```
 
-`tests-env` writes `.askpdf-cloud-agent.env` (gitignored), which enables
-`docker-compose.override.yml` (test profile): host `node_modules`, published
-DB/Weaviate ports, and `host.docker.internal` URLs when Compose bridge DNS is
-flaky. CI does not set this file.
+`tests-env` writes `.askpdf-cloud-agent.env` (gitignored), which sets
+`ASKPDF_USE_CLOUD_AGENT_OVERRIDE=1` so `./run_tests.sh` loads
+`docker-compose.cloud-agent.override.yml` (host `node_modules`, published
+DB/Weaviate ports, HF cache, host-gateway URLs). CI and laptop runs without
+that file use only `docker-compose.yml` + `.env`.
+
+On a normal Mac, `cp .env.example .env && docker compose up --build` respects
+`LLM_API_URL` from `.env` (no auto-loaded override). Optional frontend hot reload:
+`docker compose -f docker-compose.yml -f docker-compose.development.override.yml up --build`.
 
 ### Dev URLs (stack)
 

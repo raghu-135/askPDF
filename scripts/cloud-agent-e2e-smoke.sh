@@ -42,13 +42,13 @@ project_id=$(curl -sf "${API_URL}/api/projects" "${AUTH[@]}" \
 thread_id=$(curl -sf "${API_URL}/api/projects/${project_id}/threads" "${AUTH[@]}" \
   -d '{"name":"proof"}' -X POST | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 
-upload=$(curl -sf "${API_URL}/api/projects/${project_id}/files" \
+upload=$(curl -sf "${API_URL}/api/projects/${project_id}/files/upload" \
   -H "Authorization: Bearer ${ADMIN}" \
   -F "file=@${PDF}")
-file_id=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['id'])" "$upload")
+file_hash=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['file_hash'])" "$upload")
 
 curl -sf "${API_URL}/api/threads/${thread_id}/files" "${AUTH[@]}" \
-  -d "{\"file_id\":\"${file_id}\"}" -X POST >/dev/null
+  -d "{\"file_hash\":\"${file_hash}\",\"file_name\":\"$(basename "$PDF")\"}" -X POST >/dev/null
 
 echo "[e2e] langgraph chat (cited answer)..."
 lg=$(curl -sf "${API_URL}/api/threads/${thread_id}/messages" "${AUTH[@]}" -d "{

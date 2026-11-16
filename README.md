@@ -27,7 +27,7 @@ Set up the environment and start the stack:
 
     cp .env.example .env
     # Edit .env: LLM_API_URL, and OPENAI_API_KEY when the server requires it.
-    docker compose -f docker-compose.yml -f docker-compose.override.yml up --build
+    docker compose up --build
 
 Open http://localhost:3000.
 

@@ -1,4 +1,6 @@
-# Development bind mounts, VM host-gateway, and cloud-agent test overrides.
+# Cursor Cloud Agent only: host-gateway networking, OpenRouter host proxy (:12345),
+# dev bind mounts, published test ports, and test-runner HF cache. Loaded via
+# scripts/cloud-agent-setup.sh — never auto-merged on laptop `docker compose up`.
 
 services:
   langgraph-runtime:
@@ -247,11 +249,6 @@ services:
       AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:5432/runtime_checkpoints
     extra_hosts:
     - host.docker.internal:host-gateway
-  frontend-test-runner:
-    command:
-    - npm test
-    volumes:
-    - ./frontend/node_modules:/workspace/frontend/node_modules:ro
   test-postgresql:
     ports:
     - 5432:5432
@@ -271,6 +268,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+  frontend-test-runner:
+    command:
+    - npm test
+    volumes:
+    - ./frontend/node_modules:/workspace/frontend/node_modules:ro
   test-runner:
     volumes:
     - ./.askpdf-hf-cache:/models/hf

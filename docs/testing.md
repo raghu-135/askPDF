@@ -8,7 +8,9 @@ the same service topology.
     ./run_tests.sh
 
 The runner uses `COMPOSE_PROFILES=test` with `docker-compose.yml` and
-`docker-compose.override.yml`. It starts an isolated Compose project with its own PostgreSQL,
+`docker-compose.integration.yml` (plus `docker-compose.cloud-agent.override.yml`
+only when `.askpdf-cloud-agent.env` sets `ASKPDF_USE_CLOUD_AGENT_OVERRIDE=1`).
+It starts an isolated Compose project with its own PostgreSQL,
 Weaviate, network, and volumes. The normal application stack can remain
 running because test services do not publish the same host ports.
 

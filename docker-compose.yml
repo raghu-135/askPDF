@@ -1,3 +1,109 @@
+x-rag-service-build: &rag-service-build
+  context: .
+  dockerfile: rag_service/Dockerfile
+  args:
+    DOWNLOAD_LOCAL_MODELS: 'false'
+
+x-langgraph-runtime-build: &langgraph-runtime-build
+  context: .
+  dockerfile: langgraph_runtime/Dockerfile
+
+x-hermes-runtime-build: &hermes-runtime-build
+  context: .
+  dockerfile: hermes_runtime/Dockerfile
+
+x-postgres-16: &postgres-16
+  image: postgres:16-alpine
+  environment:
+    POSTGRES_DB: askpdf
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+
+x-weaviate-image: &weaviate-image cr.weaviate.io/semitechnologies/weaviate:1.36.2
+
+x-weaviate-base-env: &weaviate-base-env
+  QUERY_DEFAULTS_LIMIT: 20
+  AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+  PERSISTENCE_DATA_PATH: /var/lib/weaviate
+  DEFAULT_VECTORIZER_MODULE: none
+  ENABLE_API_BASED_MODULES: 'true'
+  CLUSTER_HOSTNAME: node1
+
+x-healthcheck-postgres-product: &healthcheck-postgres-product
+  test:
+    - CMD-SHELL
+    - pg_isready -U postgres -d askpdf
+  interval: 5s
+  timeout: 5s
+  retries: 5
+  start_period: 10s
+
+x-healthcheck-postgres-integration: &healthcheck-postgres-integration
+  test:
+    - CMD-SHELL
+    - pg_isready -U postgres -d askpdf
+  interval: 5s
+  timeout: 5s
+  retries: 12
+
+x-healthcheck-weaviate-product: &healthcheck-weaviate-product
+  test:
+    - CMD-SHELL
+    - wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1
+  interval: 30s
+  timeout: 10s
+  retries: 5
+
+x-healthcheck-weaviate-integration: &healthcheck-weaviate-integration
+  test:
+    - CMD-SHELL
+    - wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1
+  interval: 10s
+  timeout: 5s
+  retries: 12
+
+x-healthcheck-hermes-gateway: &healthcheck-hermes-gateway
+  test:
+    - CMD
+    - curl
+    - -f
+    - http://localhost:8642/health
+  interval: 10s
+  timeout: 5s
+  retries: 30
+
+x-healthcheck-hermes-runtime: &healthcheck-hermes-runtime
+  test:
+    - CMD
+    - curl
+    - -f
+    - http://localhost:8200/readyz
+  interval: 10s
+  timeout: 5s
+  retries: 12
+
+x-healthcheck-langgraph-startupz: &healthcheck-langgraph-startupz
+  test:
+    - CMD
+    - curl
+    - -f
+    - http://localhost:8100/startupz
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 30s
+
+x-healthcheck-rag-integration: &healthcheck-rag-integration
+  test:
+    - CMD
+    - curl
+    - -f
+    - http://localhost:8000/health
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 30s
+
 x-env-secrets-entrypoint: &env-secrets-entrypoint
   ["/bin/sh", "/opt/askpdf/docker_load_env_secrets.sh"]
 
@@ -49,11 +155,7 @@ services:
       retries: 3
       start_period: 30s
   rag-service:
-    build:
-      context: .
-      dockerfile: rag_service/Dockerfile
-      args:
-        DOWNLOAD_LOCAL_MODELS: 'false'
+    build: *rag-service-build
     ports:
     - 127.0.0.1:8000:8000
     environment:
@@ -70,7 +172,8 @@ services:
     - LOCAL_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
     - EMBEDDING_DEVICE=cpu
     - RERANKER_DEVICE=cpu
-    - LLM_API_URL=http://host.docker.internal:1234/v1
+    - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
+    - OPENAI_BASE_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
     - DEFAULT_TOKEN_BUDGET=8192
     - REPLANS_LIMIT=10
     - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
@@ -142,9 +245,7 @@ services:
       start_period: 30s
   langgraph-runtime:
     image: askpdf-langgraph-runtime
-    build:
-      context: .
-      dockerfile: langgraph_runtime/Dockerfile
+    build: *langgraph-runtime-build
     env_file: []
     environment:
     - LOG_LEVEL=INFO
@@ -228,22 +329,11 @@ services:
         condition: service_completed_successfully
       runtime-db-bootstrap:
         condition: service_completed_successfully
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -f
-      - http://localhost:8100/startupz
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
+    healthcheck: *healthcheck-langgraph-startupz
   hermes-config-init:
     profiles:
     - hermes
-    build:
-      context: .
-      dockerfile: hermes_runtime/Dockerfile
+    build: *hermes-runtime-build
     command:
     - python
     - -m
@@ -311,6 +401,8 @@ services:
         condition: service_completed_successfully
       hermes-config-init:
         condition: service_completed_successfully
+      # service_started (not service_healthy): rag /ready includes Hermes readiness, so
+      # waiting for healthy here would deadlock startup before Hermes can start.
       rag-service:
         condition: service_started
     volumes:
@@ -319,21 +411,11 @@ services:
     - hermes_data:/opt/data
     - ./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro
     - ./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -f
-      - http://localhost:8642/health
-      interval: 10s
-      timeout: 5s
-      retries: 30
+    healthcheck: *healthcheck-hermes-gateway
   hermes-runtime:
     profiles:
     - hermes
-    build:
-      context: .
-      dockerfile: hermes_runtime/Dockerfile
+    build: *hermes-runtime-build
     environment:
     - LOG_LEVEL=INFO
     - HERMES_API_URL=http://hermes:8642
@@ -405,17 +487,10 @@ services:
         condition: service_completed_successfully
       hermes:
         condition: service_healthy
+      # See hermes.depends_on.rag-service — same Hermes /ready cycle.
       rag-service:
         condition: service_started
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -f
-      - http://localhost:8200/readyz
-      interval: 10s
-      timeout: 5s
-      retries: 12
+    healthcheck: *healthcheck-hermes-runtime
     volumes:
     - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
     - env_secrets:/secrets:ro
@@ -447,9 +522,7 @@ services:
     - /secrets/ready
   runtime-db-bootstrap:
     image: askpdf-langgraph-runtime
-    build:
-      context: .
-      dockerfile: langgraph_runtime/Dockerfile
+    build: *langgraph-runtime-build
     command:
     - /bin/sh
     - /opt/askpdf/docker_compose_runtime_db_bootstrap.sh
@@ -468,11 +541,7 @@ services:
       postgresql:
         condition: service_healthy
   db-migrate:
-    build:
-      context: .
-      dockerfile: rag_service/Dockerfile
-      args:
-        DOWNLOAD_LOCAL_MODELS: 'false'
+    build: *rag-service-build
     command:
     - /bin/sh
     - /opt/askpdf/docker_compose_db_migrate.sh
@@ -492,7 +561,7 @@ services:
     - LOCAL_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
     - EMBEDDING_DEVICE=cpu
     - RERANKER_DEVICE=cpu
-    - LLM_API_URL=http://host.docker.internal:1234/v1
+    - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
     - DEFAULT_TOKEN_BUDGET=8192
     - REPLANS_LIMIT=10
     - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
@@ -518,44 +587,22 @@ services:
     - ./rag_service:/app
     - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
   weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.36.2
+    image: *weaviate-image
     ports:
     - 8080:8080
     - 50051:50051
     environment:
-    - QUERY_DEFAULTS_LIMIT=20
-    - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
-    - PERSISTENCE_DATA_PATH=/var/lib/weaviate
-    - DEFAULT_VECTORIZER_MODULE=none
-    - ENABLE_API_BASED_MODULES=true
-    - CLUSTER_HOSTNAME=node1
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      <<: *weaviate-base-env
+    healthcheck: *healthcheck-weaviate-product
     volumes:
     - weaviate_data:/var/lib/weaviate
   postgresql:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: askpdf
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+    <<: *postgres-16
     ports:
     - 5432:5432
     volumes:
     - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - pg_isready -U postgres -d askpdf
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    healthcheck: *healthcheck-postgres-product
   browser-capture:
     build:
       context: ./browser_capture
@@ -600,7 +647,7 @@ services:
     - ./frontend/package-lock.json:/workspace/frontend/package-lock.json:ro
     - ./frontend/src:/workspace/frontend/src:ro
     - ./frontend/tests:/workspace/frontend/tests:ro
-    - ./docker-compose.override.yml:/workspace/docker-compose.override.yml:ro
+    - ./docker-compose.development.override.yml:/workspace/docker-compose.development.override.yml:ro
     - ./rag_service/app/workflow_catalog/builtins:/workspace/rag_service/app/workflow_catalog/builtins:ro
     - frontend_test_node_modules:/workspace/frontend/node_modules
     profiles:
@@ -646,8 +693,6 @@ services:
     - LOCAL_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
     - EMBEDDING_DEVICE=cpu
     - RERANKER_DEVICE=cpu
-    - LLM_API_URL=http://host.docker.internal:1234/v1
-    - OPENAI_API_KEY=
     - LANGGRAPH_RUNTIME_TOKEN=test-langgraph-runtime-token-32-characters
     - MCP_TRANSPORT=in_process
     - MCP_LOOPBACK_URL=http://127.0.0.1:8000/internal/mcp/
@@ -675,6 +720,8 @@ services:
         condition: service_healthy
       test-weaviate:
         condition: service_healthy
+      fake-llm:
+        condition: service_healthy
     volumes:
     - .:/workspace:ro
     - test_data:/data
@@ -685,21 +732,10 @@ services:
     - test
     image: askpdf-test-runner:ci
   test-weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.36.2
+    image: *weaviate-image
     environment:
-    - QUERY_DEFAULTS_LIMIT=20
-    - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
-    - PERSISTENCE_DATA_PATH=/var/lib/weaviate
-    - DEFAULT_VECTORIZER_MODULE=none
-    - ENABLE_API_BASED_MODULES=true
-    - CLUSTER_HOSTNAME=node1
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      <<: *weaviate-base-env
+    healthcheck: *healthcheck-weaviate-product
     volumes:
     - weaviate_test_data:/var/lib/weaviate
     profiles:
@@ -709,18 +745,8 @@ services:
         aliases:
         - weaviate
   test-postgresql:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: askpdf
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - pg_isready -U postgres -d askpdf
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    <<: *postgres-16
+    healthcheck: *healthcheck-postgres-product
     volumes:
     - postgres_test_data:/var/lib/postgresql/data
     profiles:
@@ -729,316 +755,6 @@ services:
       default:
         aliases:
         - postgresql
-  integration-postgresql:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: askpdf
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - pg_isready -U postgres -d askpdf
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    volumes:
-    - runtime_integration_postgres_data:/var/lib/postgresql/data
-    profiles:
-    - integration
-    networks:
-      default:
-        aliases:
-        - postgresql
-  integration-weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.36.2
-    environment:
-      QUERY_DEFAULTS_LIMIT: 20
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH: /var/lib/weaviate
-      DEFAULT_VECTORIZER_MODULE: none
-      ENABLE_API_BASED_MODULES: 'true'
-      CLUSTER_HOSTNAME: node1
-      RAFT_BOOTSTRAP_EXPECT: '1'
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1
-      interval: 10s
-      timeout: 5s
-      retries: 12
-    volumes:
-    - runtime_integration_weaviate_data:/var/lib/weaviate
-    profiles:
-    - integration
-    networks:
-      default:
-        aliases:
-        - weaviate
-  integration-rag-service:
-    image: askpdf-runtime-control-plane
-    build:
-      context: .
-      dockerfile: rag_service/Dockerfile
-      args:
-        DOWNLOAD_LOCAL_MODELS: 'false'
-    command:
-    - uvicorn
-    - main:app
-    - --host
-    - 0.0.0.0
-    - --port
-    - '8000'
-    environment:
-      LOG_LEVEL: INFO
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
-      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
-      POSTGRES_POOL_SIZE: '5'
-      POSTGRES_MAX_OVERFLOW: '5'
-      AGENT_CHECKPOINT_DATABASE_URL: ''
-      AGENT_RUNTIME_EXECUTION_DATABASE_URL: ''
-      LANGGRAPH_RUNTIME_BINDING_SECRET: ''
-      LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
-      LANGGRAPH_RUNTIME_TOKEN: langgraph-runtime-integration-token-012345678901234567890123
-      ASKPDF_ADMIN_TOKEN: integration-control-plane-token-012345678901234567890123
-      COMPOSE_PROFILES: ${HERMES_RUNTIME_COMPOSE_PROFILES:-}
-      HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
-      MCP_EXECUTION_CONTEXT_SECRET: integration-mcp-execution-context-secret-32-bytes-minimum
-      HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
-      HERMES_RUNTIME_URL: http://hermes-runtime:8200
-      HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
-      ASKPDF_MCP_REQUIRED: 'true'
-      ASKPDF_CORS_ORIGINS: http://localhost:3000
-      MCP_OTEL_ENABLED: 'false'
-      WEAVIATE_URL: http://weaviate:8080
-      WEAVIATE_HYBRID_ALPHA: '0.7'
-      QUERY_DEFAULTS_LIMIT: '20'
-      MCP_TRANSPORT: in_process
-      MCP_LOOPBACK_URL: http://127.0.0.1:8000/internal/mcp/
-      MCP_REQUEST_TIMEOUT_SECONDS: '120'
-      AGENT_RUNTIME_LEASE_SECONDS: '120'
-      AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS: '30'
-      AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS: '300'
-      AGENT_RUNTIME_READ_TIMEOUT_SECONDS: '600'
-      AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS: '120'
-      AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_EVENT_POLL_INTERVAL_SECONDS: '1'
-      AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS: '12'
-      AGENT_CANCELLATION_POLL_INTERVAL_SECONDS: '0.5'
-      AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS: '2'
-      AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO: '0.01'
-      AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS: '30'
-      AGENT_RUNTIME_RECOVERY_BATCH_SIZE: '100'
-      AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS: '10'
-      AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS: '1'
-      AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS: '600'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS: '0.5'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES: '8192'
-      NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS: '2000'
-      NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS: '2000'
-      AGENT_TASK_HEARTBEAT_INTERVAL_SECONDS: '15'
-      AGENT_TASK_CANCELLATION_RETRY_SECONDS: '2'
-      AGENT_TASK_MAINTENANCE_INTERVAL_SECONDS: '60'
-      AGENT_TASK_MAINTENANCE_BATCH_SIZE: '100'
-      TASK_CHECKPOINT_RETENTION_DAYS: '7'
-      RUNTIME_OPERATION_LEASE_SECONDS: '300'
-      MEMORY_MAINTENANCE_INTERVAL_SECONDS: '300'
-      MEMORY_MAINTENANCE_BATCH_SIZE: '100'
-      MEMORY_MANAGER_MAX_TOOL_CALLS: '4'
-      MEMORY_MANAGER_MAX_WEB_CALLS: '2'
-      CONTEXT_USABLE_RATIO: '0.80'
-      CONTEXT_RECENT_RATIO: '0.22'
-      CONTEXT_SEMANTIC_RATIO: '0.12'
-      CONTEXT_DURABLE_MEMORY_RATIO: '0.06'
-      CONTEXT_DOCUMENT_RATIO: '0.28'
-      CONTEXT_MEMORY_EXPANDED_RATIO: '0.12'
-      CONTEXT_EVIDENCE_RATIO: '0.45'
-      CONTEXT_DRAFT_RATIO: '0.25'
-      CONTEXT_PLAN_SECTION_RATIO: '0.20'
-      CONTEXT_PLAN_TOTAL_RATIO: '0.50'
-      CONTEXT_PLAN_MEMORY_RATIO: '0.12'
-      LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
-      ASKPDF_REPO_DIR: /workspace
-    env_file:
-    - path: .env
-      required: true
-    depends_on:
-      integration-postgresql:
-        condition: service_healthy
-      integration-weaviate:
-        condition: service_healthy
-      integration-db-migrate:
-        condition: service_completed_successfully
-      integration-langgraph-runtime:
-        condition: service_healthy
-    volumes:
-    - runtime_integration_product_data:/static
-    extra_hosts:
-    - host.docker.internal:host-gateway
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -f
-      - http://localhost:8000/health
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-    profiles:
-    - integration
-    networks:
-      default:
-        aliases:
-        - rag-service
-  integration-db-migrate:
-    image: askpdf-runtime-control-plane
-    command:
-    - /bin/sh
-    - /opt/askpdf/docker_compose_db_migrate.sh
-    - app.db.migrate
-    volumes:
-    - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
-      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
-      POSTGRES_POOL_SIZE: '5'
-      POSTGRES_MAX_OVERFLOW: '5'
-      RUN_DB_MIGRATIONS: 'true'
-      LOCAL_EMBEDDING_MODEL: BAAI/bge-m3
-      LOCAL_RERANKER_MODEL: BAAI/bge-reranker-v2-m3
-    depends_on:
-      integration-postgresql:
-        condition: service_healthy
-    profiles:
-    - integration
-    build:
-      context: .
-      dockerfile: rag_service/Dockerfile
-      args:
-        DOWNLOAD_LOCAL_MODELS: 'false'
-  integration-runtime-db-bootstrap:
-    image: askpdf-langgraph-runtime
-    build:
-      context: .
-      dockerfile: langgraph_runtime/Dockerfile
-    command:
-    - /bin/sh
-    - /opt/askpdf/docker_compose_runtime_db_bootstrap.sh
-    volumes:
-    - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
-    - ./scripts/docker_compose_runtime_db_bootstrap.sh:/opt/askpdf/docker_compose_runtime_db_bootstrap.sh:ro
-    environment:
-      RUNTIME_BOOTSTRAP_PG_HOST: postgresql
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
-      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
-      POSTGRES_POOL_SIZE: '1'
-      POSTGRES_MAX_OVERFLOW: '1'
-      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      RUN_RUNTIME_DB_MIGRATIONS: 'true'
-    depends_on:
-      integration-postgresql:
-        condition: service_healthy
-    profiles:
-    - integration
-  integration-langgraph-runtime:
-    image: askpdf-langgraph-runtime
-    build:
-      context: .
-      dockerfile: langgraph_runtime/Dockerfile
-    environment:
-      LOG_LEVEL: INFO
-      ASKPDF_AGENT_CHECKPOINTER: postgres
-      AGENT_CHECKPOINT_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      ASKPDF_AGENT_CHECKPOINTER_SETUP: 'true'
-      MCP_TRANSPORT: loopback_http
-      MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
-      MCP_REQUEST_TIMEOUT_SECONDS: '120'
-      LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
-      OPENAI_API_KEY: ''
-      DEFAULT_TOKEN_BUDGET: ${DEFAULT_TOKEN_BUDGET:?DEFAULT_TOKEN_BUDGET must be set in .env}
-      REPLANS_LIMIT: ${REPLANS_LIMIT:?REPLANS_LIMIT must be set in .env}
-      MAX_CUSTOM_INSTRUCTIONS_CHARS: ${MAX_CUSTOM_INSTRUCTIONS_CHARS:?MAX_CUSTOM_INSTRUCTIONS_CHARS must be set in .env}
-      MAX_SYSTEM_ROLE_CHARS: ${MAX_SYSTEM_ROLE_CHARS:?MAX_SYSTEM_ROLE_CHARS must be set in .env}
-      CONTEXT_USABLE_RATIO: '0.80'
-      CONTEXT_RECENT_RATIO: '0.22'
-      CONTEXT_SEMANTIC_RATIO: '0.12'
-      CONTEXT_DURABLE_MEMORY_RATIO: '0.06'
-      CONTEXT_DOCUMENT_RATIO: '0.28'
-      CONTEXT_MEMORY_EXPANDED_RATIO: '0.12'
-      CONTEXT_EVIDENCE_RATIO: '0.45'
-      CONTEXT_DRAFT_RATIO: '0.25'
-      CONTEXT_PLAN_SECTION_RATIO: '0.20'
-      CONTEXT_PLAN_TOTAL_RATIO: '0.50'
-      CONTEXT_PLAN_MEMORY_RATIO: '0.12'
-      AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS: '2'
-      AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO: '0.01'
-      LANGGRAPH_RUNTIME_TOKEN: langgraph-runtime-integration-token-012345678901234567890123
-      LANGGRAPH_RUNTIME_BINDING_SECRET: langgraph-runtime-integration-binding-012345678901234567890123
-      MCP_OTEL_ENABLED: 'false'
-      AGENT_RUNTIME_LEASE_SECONDS: '120'
-      AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS: '30'
-      AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS: '300'
-      AGENT_RUNTIME_READ_TIMEOUT_SECONDS: '600'
-      AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS: '120'
-      AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_EVENT_POLL_INTERVAL_SECONDS: '1'
-      AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS: '12'
-      AGENT_CANCELLATION_POLL_INTERVAL_SECONDS: '0.5'
-      NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS: '2000'
-      NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS: '2000'
-      AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS: '30'
-      AGENT_RUNTIME_RECOVERY_BATCH_SIZE: '100'
-      AGENT_RUNTIME_RECOVERY_LOOP_ENABLED: 'true'
-      AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS: '10'
-      AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS: '1'
-      AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS: '600'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS: '0.5'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES: '8192'
-      DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS: '10000'
-      DEEP_AGENT_LANGGRAPH_MAX_MODEL_TOKENS: '500000'
-      DEEP_AGENT_LANGGRAPH_MAX_TOOL_CALLS: '100'
-      DEEP_AGENT_LANGGRAPH_MAX_ACTIVE_RUNTIME_MS: '7200000'
-      DEEP_AGENT_LANGGRAPH_MAX_DURATION_MS: '7200000'
-      DEEP_AGENT_LANGGRAPH_MAX_OUTPUT_CHARS: '50000'
-      DEEP_AGENT_LANGGRAPH_MAX_EVENT_COUNT: '5000'
-      DEEP_AGENT_LANGGRAPH_MAX_PLAN_ATTEMPTS: '10'
-      DEEP_AGENT_LANGGRAPH_MAX_PLAN_VALIDATION_ERRORS: '20'
-      DEEP_AGENT_LANGGRAPH_SUBAGENT_TIMEOUT_MS: '600000'
-      DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS: '600000'
-      DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS: '600000'
-      DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS: '600000'
-      DATABASE_URL: ''
-      TEST_DATABASE_URL: ''
-    env_file: []
-    depends_on:
-      fake-llm:
-        condition: service_healthy
-      integration-runtime-db-bootstrap:
-        condition: service_completed_successfully
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -f
-      - http://localhost:8100/startupz
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-    profiles:
-    - integration
-    networks:
-      default:
-        aliases:
-        - langgraph-runtime
   fake-llm:
     profiles:
     - integration
@@ -1056,382 +772,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
-  integration-hermes-config-init:
-    profiles:
-    - integration
-    build:
-      context: .
-      dockerfile: hermes_runtime/Dockerfile
-    command:
-    - python
-    - -m
-    - hermes_runtime.profile_manager
-    environment:
-      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
-      HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
-      HERMES_DATA_ROOT: /opt/data
-      HERMES_CONFIG_TEMPLATE_ROOT: /app/hermes_runtime
-      HERMES_PROFILE_ROOT: /opt/data/profiles
-      HERMES_PROFILE_UID: '10000'
-      HERMES_PROFILE_GID: '10000'
-      LLM_API_URL: http://fake-llm:9000/v1
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-    volumes:
-    - runtime_integration_hermes_data:/opt/data
-  integration-hermes-upstream:
-    profiles:
-    - integration
-    image: askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
-    build:
-      context: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
-    entrypoint:
-    - /bin/true
-  integration-hermes:
-    profiles:
-    - integration
-    build:
-      context: .
-      dockerfile: hermes_runtime/Dockerfile.gateway
-      additional_contexts:
-        hermes-upstream: service:integration-hermes-upstream
-    environment:
-      API_SERVER_ENABLED: 'true'
-      API_SERVER_HOST: 0.0.0.0
-      API_SERVER_PORT: '8642'
-      API_SERVER_KEY: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
-      OPENAI_API_KEY: askpdf-hermes-integration-local
-      LLM_API_URL: http://fake-llm:9000/v1
-      OPENAI_BASE_URL: http://fake-llm:9000/v1
-      HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
-      GATEWAY_MULTIPLEX_PROFILES: 'true'
-      HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
-      ASKPDF_HERMES_COMPAT_ENABLED: '1'
-      PYTHONPATH: /opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib
-    command:
-    - gateway
-    depends_on:
-      fake-llm:
-        condition: service_healthy
-      integration-rag-service:
-        condition: service_healthy
-      integration-hermes-config-init:
-        condition: service_completed_successfully
-      integration-hermes-upstream:
-        condition: service_completed_successfully
-    volumes:
-    - runtime_integration_hermes_data:/opt/data
-    - ./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro
-    - ./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro
-    configs:
-    - source: hermes_integration_env
-      target: /opt/data/.env
-    - source: hermes_integration_env
-      target: /opt/data/profiles/askpdf-deep-offline/.env
-    - source: hermes_integration_env
-      target: /opt/data/profiles/askpdf-deep-external/.env
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -f
-      - http://localhost:8642/health
-      interval: 10s
-      timeout: 5s
-      retries: 30
-    networks:
-      default:
-        aliases:
-        - hermes
-    image: askpdf-hermes-gateway:ci
-  integration-hermes-runtime:
-    profiles:
-    - integration
-    build:
-      context: .
-      dockerfile: hermes_runtime/Dockerfile
-    environment:
-      LOG_LEVEL: INFO
-      HERMES_API_URL: http://hermes:8642
-      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
-      HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
-      OPENAI_API_KEY: askpdf-hermes-integration-local
-      LLM_API_URL: http://fake-llm:9000/v1
-      ASKPDF_MCP_URL: http://rag-service:8000/internal/mcp/
-      ASKPDF_MCP_HEALTH_URL: http://rag-service:8000/health
-      ASKPDF_MCP_REQUIRED: 'true'
-      HERMES_UPSTREAM_REVISION: 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
-      HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
-      HERMES_RUNTIME_STORAGE_BACKEND: file
-      HERMES_RUNTIME_VERSION: integration
-      HERMES_RUNTIME_WORKERS: '1'
-      PYTHONPATH: /workspace:/app
-      HERMES_MODEL_CONTEXT_LENGTH: ${HERMES_MODEL_CONTEXT_LENGTH:?HERMES_MODEL_CONTEXT_LENGTH must be set in .env}
-      HERMES_DATA_ROOT: /opt/data
-      HERMES_GATEWAY_HOME: /opt/data
-      HERMES_PROFILE_ROOT: /opt/data/profiles
-      HERMES_PROFILE_UID: '10000'
-      HERMES_PROFILE_GID: '10000'
-      HERMES_RUN_PROFILE_MAX_AGE_SECONDS: '86400'
-      HERMES_RUN_PROFILE_SWEEP_INTERVAL_SECONDS: '60'
-      MCP_TRANSPORT: loopback_http
-      MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
-      MCP_REQUEST_TIMEOUT_SECONDS: '120'
-      MCP_OTEL_ENABLED: 'false'
-      AGENT_RUNTIME_LEASE_SECONDS: '120'
-      AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS: '30'
-      AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS: '300'
-      AGENT_RUNTIME_READ_TIMEOUT_SECONDS: '600'
-      AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS: '10'
-      AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS: '1'
-      AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS: '600'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS: '0.5'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES: '8192'
-      AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS: '120'
-      AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_EVENT_POLL_INTERVAL_SECONDS: '1'
-      AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS: '12'
-      AGENT_CANCELLATION_POLL_INTERVAL_SECONDS: '0.5'
-      AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS: '2'
-      AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO: '0.01'
-      AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS: '30'
-      AGENT_RUNTIME_RECOVERY_BATCH_SIZE: '100'
-      NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS: '2000'
-      NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS: '2000'
-      DEEP_AGENT_HERMES_MAX_MODEL_CALLS: '10000'
-      DEEP_AGENT_HERMES_MAX_MODEL_TOKENS: '500000'
-      DEEP_AGENT_HERMES_MAX_TOOL_CALLS: '100'
-      DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS: '7200000'
-      DEEP_AGENT_HERMES_MAX_DURATION_MS: '7200000'
-      DEEP_AGENT_HERMES_MAX_OUTPUT_CHARS: '50000'
-      DEEP_AGENT_HERMES_MAX_EVENT_COUNT: '5000'
-    env_file: []
-    depends_on:
-      integration-rag-service:
-        condition: service_healthy
-      integration-hermes:
-        condition: service_healthy
-    volumes:
-    - runtime_integration_hermes_state:/var/lib/hermes
-    - runtime_integration_hermes_data:/opt/data
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -f
-      - http://localhost:8200/readyz
-      interval: 5s
-      timeout: 3s
-      retries: 24
-    networks:
-      default:
-        aliases:
-        - hermes-runtime
-    image: askpdf-hermes-runtime:ci
-  integration-test-runner:
-    build:
-      context: .
-      dockerfile: rag_service/Dockerfile.test
-    entrypoint:
-    - python
-    - scripts/run_tests.py
-    environment:
-      LOG_LEVEL: INFO
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
-      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
-      POSTGRES_POOL_SIZE: '5'
-      POSTGRES_MAX_OVERFLOW: '5'
-      EXTERNAL_RUNTIME_SMOKE_TIMEOUT_SECONDS: '120'
-      EXTERNAL_RUNTIME_EMBEDDING_MODEL: external_runtime-deterministic-embedding
-      AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS: '30'
-      AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS: '300'
-      AGENT_RUNTIME_READ_TIMEOUT_SECONDS: '600'
-      AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS: '120'
-      AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS: '2'
-      AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO: '0.01'
-      AGENT_RUNTIME_LEASE_SECONDS: '120'
-      AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS: '30'
-      AGENT_RUNTIME_RECOVERY_BATCH_SIZE: '100'
-      AGENT_RUNTIME_RECOVERY_LOOP_ENABLED: 'true'
-      AGENT_EVENT_POLL_INTERVAL_SECONDS: '1'
-      AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS: '12'
-      AGENT_CANCELLATION_POLL_INTERVAL_SECONDS: '0.5'
-      AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS: '10'
-      AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS: '1'
-      AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS: '600'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS: '0.5'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES: '8192'
-      DEFAULT_TOKEN_BUDGET: '8192'
-      REPLANS_LIMIT: '10'
-      MAX_CUSTOM_INSTRUCTIONS_CHARS: '2000'
-      MAX_SYSTEM_ROLE_CHARS: '500'
-      LANGGRAPH_RUNTIME_BINDING_SECRET: langgraph-runtime-integration-binding-secret-012345678901234567890123
-      MAX_TOOL_INSTRUCTION_CHARS: '2000'
-      MAX_ITERATIONS_SUFFICIENT_COVERAGE: '3'
-      MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE: '2'
-      WEB_SEARCH_ITERATION_BONUS: '1'
-      LOCAL_EMBEDDING_MODEL: external_runtime-deterministic-embedding
-      LOCAL_RERANKER_MODEL: external_runtime-deterministic-reranker
-      ASKPDF_ADMIN_TOKEN: integration-control-plane-token-012345678901234567890123
-      DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS: '10000'
-      DEEP_AGENT_LANGGRAPH_MAX_MODEL_TOKENS: '500000'
-      DEEP_AGENT_LANGGRAPH_MAX_TOOL_CALLS: '100'
-      DEEP_AGENT_LANGGRAPH_MAX_ACTIVE_RUNTIME_MS: '7200000'
-      DEEP_AGENT_LANGGRAPH_MAX_DURATION_MS: '7200000'
-      DEEP_AGENT_LANGGRAPH_MAX_OUTPUT_CHARS: '50000'
-      DEEP_AGENT_LANGGRAPH_MAX_EVENT_COUNT: '5000'
-      DEEP_AGENT_LANGGRAPH_MAX_PLAN_ATTEMPTS: '10'
-      DEEP_AGENT_LANGGRAPH_MAX_PLAN_VALIDATION_ERRORS: '20'
-      DEEP_AGENT_LANGGRAPH_SUBAGENT_TIMEOUT_MS: '600000'
-      DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS: '600000'
-      DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS: '600000'
-      DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS: '600000'
-      HERMES_MODEL_CONTEXT_LENGTH: '64000'
-      DEEP_AGENT_HERMES_MAX_MODEL_CALLS: '10000'
-      DEEP_AGENT_HERMES_MAX_MODEL_TOKENS: '500000'
-      DEEP_AGENT_HERMES_MAX_TOOL_CALLS: '100'
-      DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS: '7200000'
-      DEEP_AGENT_HERMES_MAX_DURATION_MS: '7200000'
-      DEEP_AGENT_HERMES_MAX_OUTPUT_CHARS: '50000'
-      DEEP_AGENT_HERMES_MAX_EVENT_COUNT: '5000'
-      LANGGRAPH_RUNTIME_URL: http://langgraph-runtime:8100
-      LANGGRAPH_RUNTIME_TOKEN: langgraph-runtime-integration-token-012345678901234567890123
-      MCP_TRANSPORT: loopback_http
-      MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
-      MCP_REQUEST_TIMEOUT_SECONDS: '120'
-      MCP_OTEL_ENABLED: 'false'
-      NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS: '2000'
-      NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS: '2000'
-      COMPOSE_PROFILES: hermes
-      MCP_EXECUTION_CONTEXT_SECRET: integration-mcp-execution-context-secret-32-bytes-minimum
-      HERMES_RUNTIME_URL: http://hermes-runtime:8200
-      HERMES_API_URL: http://hermes:8642
-      HERMES_API_TOKEN: 7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
-      HERMES_RUNTIME_TOKEN: hermes-runtime-integration-token-012345678901234567890123
-      HERMES_RUNTIME_STATE_PATH: /var/lib/hermes/runtime-state.json
-      HERMES_RUNTIME_STORAGE_BACKEND: file
-      HERMES_RUNTIME_WORKERS: '1'
-      PYTHONPATH: /workspace:/app
-      WEAVIATE_URL: http://weaviate:8080
-      WEAVIATE_HYBRID_ALPHA: '0.7'
-      QUERY_DEFAULTS_LIMIT: '20'
-      CONTEXT_USABLE_RATIO: '0.80'
-      CONTEXT_RECENT_RATIO: '0.22'
-      CONTEXT_SEMANTIC_RATIO: '0.12'
-      CONTEXT_DURABLE_MEMORY_RATIO: '0.06'
-      CONTEXT_DOCUMENT_RATIO: '0.28'
-      CONTEXT_MEMORY_EXPANDED_RATIO: '0.12'
-      CONTEXT_EVIDENCE_RATIO: '0.45'
-      CONTEXT_DRAFT_RATIO: '0.25'
-      CONTEXT_PLAN_SECTION_RATIO: '0.20'
-      CONTEXT_PLAN_TOTAL_RATIO: '0.50'
-      CONTEXT_PLAN_MEMORY_RATIO: '0.12'
-      LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
-      OPENAI_API_KEY: ''
-      ASKPDF_REPO_DIR: /workspace
-    env_file: []
-    depends_on:
-      integration-hermes-runtime:
-        condition: service_healthy
-    volumes:
-    - ./rag_service:/app
-    - .:/workspace:ro
-    - runtime_integration_test_data:/data
-    - runtime_integration_product_data:/static
-    - runtime_integration_hermes_state:/var/lib/hermes
-    extra_hosts:
-    - host.docker.internal:host-gateway
-    profiles:
-    - integration
-    image: askpdf-test-runner:ci
-  runtime-test-runner:
-    build:
-      context: .
-      dockerfile: langgraph_runtime/Dockerfile.test
-    entrypoint:
-    - python
-    - -m
-    - langgraph_runtime.test_runner
-    environment:
-      LOG_LEVEL: INFO
-      RUN_RUNTIME_DB_MIGRATIONS: 'false'
-      RUNTIME_TEST_TARGET: /app/langgraph_runtime/tests
-      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
-      AGENT_CHECKPOINT_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
-      ASKPDF_AGENT_CHECKPOINTER: postgres
-      ASKPDF_AGENT_CHECKPOINTER_SETUP: 'true'
-      MCP_TRANSPORT: loopback_http
-      MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
-      MCP_REQUEST_TIMEOUT_SECONDS: '120'
-      MCP_OTEL_ENABLED: 'false'
-      LLM_API_URL: ${EXTERNAL_RUNTIME_LLM_API_URL:-http://fake-llm:9000/v1}
-      OPENAI_API_KEY: ''
-      DEFAULT_TOKEN_BUDGET: '8192'
-      REPLANS_LIMIT: '10'
-      MAX_CUSTOM_INSTRUCTIONS_CHARS: '2000'
-      MAX_SYSTEM_ROLE_CHARS: '500'
-      LANGGRAPH_RUNTIME_TOKEN: langgraph-runtime-integration-token-012345678901234567890123
-      LANGGRAPH_RUNTIME_BINDING_SECRET: langgraph-runtime-integration-binding-secret-012345678901234567890123
-      AGENT_RUNTIME_DEPENDENCY_REFRESH_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_TIMEOUT_SECONDS: '1'
-      AGENT_RUNTIME_DEPENDENCY_STALE_SECONDS: '2'
-      AGENT_RUNTIME_DEPENDENCY_JITTER_RATIO: '0.01'
-      AGENT_RUNTIME_LEASE_SECONDS: '120'
-      AGENT_RUNTIME_CONNECT_TIMEOUT_SECONDS: '30'
-      AGENT_RUNTIME_WRITE_TIMEOUT_SECONDS: '300'
-      AGENT_RUNTIME_READ_TIMEOUT_SECONDS: '600'
-      AGENT_RUNTIME_SHUTDOWN_GRACE_SECONDS: '120'
-      AGENT_RUNTIME_CANCEL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_RUNTIME_TERMINAL_CONFIRM_TIMEOUT_SECONDS: '120'
-      AGENT_EVENT_POLL_INTERVAL_SECONDS: '1'
-      AGENT_SSE_HEARTBEAT_INTERVAL_SECONDS: '12'
-      AGENT_CANCELLATION_POLL_INTERVAL_SECONDS: '0.5'
-      AGENT_RUNTIME_RECONNECT_MAX_ATTEMPTS: '10'
-      AGENT_RUNTIME_RECONNECT_BACKOFF_SECONDS: '1'
-      AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS: '600'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_SECONDS: '0.5'
-      AGENT_RUNTIME_OUTPUT_DELTA_FLUSH_BYTES: '8192'
-      AGENT_RUNTIME_RECOVERY_INTERVAL_SECONDS: '30'
-      AGENT_RUNTIME_RECOVERY_BATCH_SIZE: '100'
-      AGENT_RUNTIME_RECOVERY_LOOP_ENABLED: 'false'
-      DEEP_AGENT_LANGGRAPH_MAX_MODEL_CALLS: '10000'
-      DEEP_AGENT_LANGGRAPH_MAX_MODEL_TOKENS: '500000'
-      DEEP_AGENT_LANGGRAPH_MAX_TOOL_CALLS: '100'
-      DEEP_AGENT_LANGGRAPH_MAX_ACTIVE_RUNTIME_MS: '7200000'
-      DEEP_AGENT_LANGGRAPH_MAX_DURATION_MS: '7200000'
-      DEEP_AGENT_LANGGRAPH_MAX_OUTPUT_CHARS: '50000'
-      DEEP_AGENT_LANGGRAPH_MAX_EVENT_COUNT: '5000'
-      DEEP_AGENT_LANGGRAPH_MAX_PLAN_ATTEMPTS: '10'
-      DEEP_AGENT_LANGGRAPH_MAX_PLAN_VALIDATION_ERRORS: '20'
-      DEEP_AGENT_LANGGRAPH_SUBAGENT_TIMEOUT_MS: '600000'
-      DEEP_AGENT_LANGGRAPH_DISPATCH_TIMEOUT_MS: '600000'
-      DEEP_AGENT_LANGGRAPH_WORKER_TIMEOUT_MS: '600000'
-      DEEP_AGENT_LANGGRAPH_WEB_WORKER_TIMEOUT_MS: '600000'
-      CONTEXT_USABLE_RATIO: '0.80'
-      CONTEXT_RECENT_RATIO: '0.22'
-      CONTEXT_SEMANTIC_RATIO: '0.12'
-      CONTEXT_DURABLE_MEMORY_RATIO: '0.06'
-      CONTEXT_DOCUMENT_RATIO: '0.28'
-      CONTEXT_MEMORY_EXPANDED_RATIO: '0.12'
-      CONTEXT_EVIDENCE_RATIO: '0.45'
-      CONTEXT_DRAFT_RATIO: '0.25'
-      CONTEXT_PLAN_SECTION_RATIO: '0.20'
-      CONTEXT_PLAN_TOTAL_RATIO: '0.50'
-      CONTEXT_PLAN_MEMORY_RATIO: '0.12'
-    depends_on:
-      integration-runtime-db-bootstrap:
-        condition: service_completed_successfully
-      integration-langgraph-runtime:
-        condition: service_healthy
-    profiles:
-    - integration
-    image: askpdf-langgraph-runtime-tests
   hermes-upstream-real:
     profiles:
     - real-hermes
@@ -1618,20 +958,5 @@ volumes:
   test_data: {}
   weaviate_test_data: {}
   content_test_data: {}
-  runtime_integration_postgres_data: {}
-  runtime_integration_weaviate_data: {}
-  runtime_integration_product_data: {}
-  runtime_integration_test_data: {}
-  runtime_integration_hermes_state: {}
-  runtime_integration_hermes_data: {}
   real_hermes_gateway_state_v2: {}
   real_hermes_profile_state_v2: {}
-configs:
-  hermes_integration_env:
-    content: 'API_SERVER_KEY=7dd5c723b63643e38fc0ccae72a7bf2a8f65c61ad44d4de88e08079b157a55c
-
-      OPENAI_API_KEY=askpdf-hermes-integration-local
-
-      OPENAI_BASE_URL=http://fake-llm:9000/v1
-
-      '

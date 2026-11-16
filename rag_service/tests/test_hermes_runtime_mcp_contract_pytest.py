@@ -245,10 +245,15 @@ def test_hermes_runtime_runner_enables_and_guards_every_integration_proof_comman
     assert hermes_runtime.count("-e ASKPDF_FAIL_IF_ALL_SKIPPED=true") == 2
     assert "hermes-fake" not in hermes_runtime
     assert "test_real_hermes_container_smoke_pytest.py" in hermes_runtime
-    assert " hermes hermes-runtime" in hermes_runtime
+    assert 'runtime_compose up -d "$RT_POSTGRESQL"' in hermes_runtime
+    assert '"$RT_HERMES"' in hermes_runtime
+    assert '"$RT_HERMES_RUNTIME"' in hermes_runtime
     assert "http://127.0.0.1:8000/health" in hermes_runtime
     assert "http://127.0.0.1:8200/readyz" in hermes_runtime
-    assert "hermes hermes-runtime hermes-config-init" in (repository / "run_tests.sh").read_text()
+    diagnostics = script.split("external_runtime_diagnostics() {", 1)[1].split("\n}", 1)[0]
+    assert '"$RT_HERMES"' in diagnostics
+    assert '"$RT_HERMES_RUNTIME"' in diagnostics
+    assert '"$RT_HERMES_CONFIG_INIT"' in diagnostics
 
 
 def test_failed_runtime_result_includes_task_orchestration_delta():

@@ -128,6 +128,72 @@ class TestAPIIntegration:
 
         await client.delete(f"/api/threads/{thread_id}")
 
+    @pytest.mark.asyncio
+    async def test_project_pdf_upload_endpoint(self, client, monkeypatch):
+        """POST /api/projects/{id}/files/upload accepts multipart PDF like thread upload."""
+        project_response = await client.post(
+            "/api/projects",
+            json={"name": "Upload project", "embedding_model": "BAAI/bge-m3"},
+        )
+        assert project_response.status_code == 200
+        project_id = project_response.json()["id"]
+        embedding_model = project_response.json()["embedding_model"]
+
+        async def fake_index_document_for_thread(**_kwargs):
+            await update_indexing_status(
+                file_hash=_kwargs["file_hash"],
+                status=ProcessStatus.COMPLETED.value,
+                embedding_model=embedding_model,
+                finished_at=iso_utc_z(utc_now()),
+                chunk_count=1,
+                total_chars=1,
+            )
+            return {"status": OperationResultStatus.SUCCESS.value}
+
+        monkeypatch.setattr(
+            "app.rag.indexer.index_document_for_thread",
+            fake_index_document_for_thread,
+        )
+
+        async def noop_queue_project(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(
+            "app.api.files.queue_project_file_processing",
+            noop_queue_project,
+        )
+
+        pdf_path = Path(__file__).with_name("01030000000000.pdf")
+        upload_response = await client.post(
+            f"/api/projects/{project_id}/files/upload",
+            files={"file": (pdf_path.name, pdf_path.read_bytes(), "application/pdf")},
+        )
+        assert upload_response.status_code == 200, upload_response.text
+        upload = upload_response.json()
+        assert upload["file_hash"]
+        assert upload["sentences"] is None
+
+        await client.delete(f"/api/projects/{project_id}")
+
+    @pytest.mark.asyncio
+    async def test_multipart_on_json_file_promote_endpoint_rejected(self, client):
+        """Multipart to POST .../files (JSON body) must not 500 with UnicodeDecodeError."""
+        project_response = await client.post(
+            "/api/projects",
+            json={"name": "Bad upload", "embedding_model": "BAAI/bge-m3"},
+        )
+        project_id = project_response.json()["id"]
+        pdf_path = Path(__file__).with_name("01030000000000.pdf")
+        bad_response = await client.post(
+            f"/api/projects/{project_id}/files",
+            files={"file": (pdf_path.name, pdf_path.read_bytes(), "application/pdf")},
+        )
+        assert bad_response.status_code in {400, 422}, bad_response.text
+        assert bad_response.status_code != 500
+        assert "UnicodeDecodeError" not in bad_response.text
+
+        await client.delete(f"/api/projects/{project_id}")
+
 
 # Note: Additional async HTTP tests are skipped due to pytest-asyncio fixture
 # isolation issues when running in a suite. Use test_api_endpoints_pytest.py

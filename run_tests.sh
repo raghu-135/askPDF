@@ -45,7 +45,10 @@ else
 fi
 
 TEST_PROJECT_NAME="${ASKPDF_TEST_PROJECT_NAME:-askpdf-test}"
-COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.override.yml)
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.integration.yml)
+if [ "${ASKPDF_USE_CLOUD_AGENT_OVERRIDE:-}" = "1" ] && [ -f docker-compose.cloud-agent.override.yml ]; then
+    COMPOSE_FILES+=(-f docker-compose.cloud-agent.override.yml)
+fi
 TEST_COMPOSE_PROFILES="${ASKPDF_TEST_COMPOSE_PROFILES:-test}"
 COMPOSE_ARGS=(-p "$TEST_PROJECT_NAME" "${COMPOSE_FILES[@]}")
 EXTERNAL_RUNTIME_PROJECT_NAME="${ASKPDF_RUNTIME_TEST_PROJECT_NAME:-${ASKPDF_EXTERNAL_RUNTIME_PROJECT_NAME:-askpdf-runtime-integration-test-$$}}"

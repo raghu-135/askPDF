@@ -20,7 +20,13 @@ def _compose(name: str) -> dict:
         return loader.construct_mapping(node)
 
     ComposeLoader.add_constructor("!override", _compose_override)
-    return yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
+    doc = yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
+    if name == "docker-compose.yml":
+        integration = REPOSITORY_ROOT / "docker-compose.integration.yml"
+        if integration.exists():
+            integration_doc = yaml.load(integration.read_text(), Loader=ComposeLoader)
+            doc.setdefault("services", {}).update(integration_doc.get("services", {}))
+    return doc
 
 
 def test_example_environment_enables_hermes_with_distinct_placeholder_tokens():
@@ -131,7 +137,7 @@ def test_main_compose_generates_service_secrets_before_app_start():
 
 
 def test_dev_hermes_runtime_does_not_inherit_control_plane_mcp_transport():
-    services = _compose("docker-compose.override.yml")["services"]
+    services = _compose("docker-compose.cloud-agent.override.yml")["services"]
     assert services["hermes-runtime"]["environment"]["MCP_TRANSPORT"] == "loopback_http"
     assert services["hermes-runtime"]["environment"]["MCP_LOOPBACK_URL"] == "http://rag-service:8000/internal/mcp/"
 
@@ -191,14 +197,14 @@ def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["integration-hermes"]["volumes"]
     assert "./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro" in compose["services"]["integration-hermes"]["volumes"]
     assert compose["services"]["integration-hermes"]["environment"]["PYTHONPATH"] == "/opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib"
-    assert compose["services"]["integration-hermes"]["depends_on"]["integration-rag-service"]["condition"] == "service_healthy"
+    assert compose["services"]["integration-hermes"]["depends_on"]["integration-rag-service"]["condition"] == "service_started"
     control_plane = compose["services"]["integration-rag-service"]
     assert control_plane["environment"]["HERMES_RUNTIME_URL"] == "http://hermes-runtime:8200"
     assert control_plane["environment"]["ASKPDF_MCP_REQUIRED"] == "true"
     service = compose["services"]["integration-hermes-runtime"]
     assert service["environment"]["HERMES_API_URL"] == "http://hermes:8642"
     assert service["environment"]["ASKPDF_MCP_REQUIRED"] == "true"
-    assert service["depends_on"]["integration-rag-service"]["condition"] == "service_healthy"
+    assert service["depends_on"]["integration-rag-service"]["condition"] == "service_started"
     assert service["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_RUNTIME_TOKEN" in service["environment"]
     assert "API_SERVER_KEY" not in service["environment"]
