@@ -248,44 +248,30 @@ def test_ci_environment_includes_control_plane_startup_settings():
     }.items() <= values.items()
 
 
+def _compose_services_for_profiles(active_profiles: set[str]) -> list[str]:
+    """Mirror Compose profile selection without invoking the Docker CLI in test-runner."""
+    services = _compose("docker-compose.yml")["services"]
+    enabled: list[str] = []
+    for name, service in services.items():
+        profiles = service.get("profiles")
+        if not profiles:
+            enabled.append(name)
+        elif active_profiles.intersection(profiles):
+            enabled.append(name)
+    return enabled
+
+
 def test_compose_service_counts_by_profile():
-    import subprocess
-
-    def count(profile: str) -> int:
-        env = {**os.environ, "COMPOSE_PROFILES": profile}
-        out = subprocess.check_output(
-            [
-                "docker",
-                "compose",
-                "-f",
-                "docker-compose.yml",
-                "-f",
-                "docker-compose.integration.yml",
-                "--env-file",
-                ".env.example",
-                "config",
-                "--services",
-            ],
-            cwd=REPOSITORY_ROOT,
-            env=env,
-            text=True,
-        )
-        return len([line for line in out.splitlines() if line.strip()])
-
-    assert count("") == 7
-    assert count("hermes") == 10
-    assert count("test") == 12
-    assert count("integration") == 17
+    assert len(_compose_services_for_profiles(set())) == 7
+    assert len(_compose_services_for_profiles({"hermes"})) == 10
+    assert len(_compose_services_for_profiles({"test"})) == 12
+    assert len(_compose_services_for_profiles({"integration"})) == 17
 
 
 def test_rag_service_image_is_shared_across_compose_builds():
     services = _compose("docker-compose.yml")["services"]
     assert services["rag-service"]["image"] == "askpdf-rag-service"
-    integration = yaml.load(
-        (REPOSITORY_ROOT / "docker-compose.integration.yml").read_text(),
-        Loader=yaml.SafeLoader,
-    )
-    assert integration["services"]["integration-rag-service"]["image"] == "askpdf-rag-service"
+    assert services["integration-rag-service"]["image"] == "askpdf-rag-service"
 
 
 def test_main_compose_does_not_mount_the_project_environment_into_hermes():
