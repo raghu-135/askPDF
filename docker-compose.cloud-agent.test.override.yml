@@ -6,3 +6,11 @@ services:
     - npm test
     volumes:
     - ./frontend/node_modules:/workspace/frontend/node_modules:ro
+  test-runner:
+    volumes:
+    - ./.askpdf-hf-cache:/models/hf
+    environment:
+      HF_HOME: /models/hf
+      HF_HUB_CACHE: /models/hf
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'

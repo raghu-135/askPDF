@@ -28,6 +28,7 @@ services:
     extends:
       file: docker-compose.yml
       service: postgresql
+    ports: !reset []
     healthcheck:
       test:
       - CMD-SHELL
@@ -47,6 +48,7 @@ services:
     extends:
       file: docker-compose.yml
       service: weaviate
+    ports: !reset []
     environment:
       RAFT_BOOTSTRAP_EXPECT: '1'
     healthcheck:
@@ -171,30 +173,44 @@ services:
         aliases:
         - rag-service
   integration-db-migrate:
-    extends:
-      file: docker-compose.yml
-      service: db-migrate
     image: askpdf-runtime-control-plane
     build: *rag-service-build
+    command:
+    - /bin/sh
+    - /opt/askpdf/docker_compose_db_migrate.sh
+    - app.db.migrate
+    volumes:
+    - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
       POSTGRES_POOL_SIZE: '5'
       POSTGRES_MAX_OVERFLOW: '5'
+      RUN_DB_MIGRATIONS: 'true'
+      LOCAL_EMBEDDING_MODEL: BAAI/bge-m3
+      LOCAL_RERANKER_MODEL: BAAI/bge-reranker-v2-m3
     depends_on:
       integration-postgresql:
         condition: service_healthy
     profiles:
     - integration
   integration-runtime-db-bootstrap:
-    extends:
-      file: docker-compose.yml
-      service: runtime-db-bootstrap
     image: askpdf-langgraph-runtime
     build: *langgraph-runtime-build
+    command:
+    - /bin/sh
+    - /opt/askpdf/docker_compose_runtime_db_bootstrap.sh
+    volumes:
+    - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
+    - ./scripts/docker_compose_runtime_db_bootstrap.sh:/opt/askpdf/docker_compose_runtime_db_bootstrap.sh:ro
     environment:
+      RUNTIME_BOOTSTRAP_PG_HOST: postgresql
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
+      POSTGRES_POOL_SIZE: '1'
+      POSTGRES_MAX_OVERFLOW: '1'
+      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
+      RUN_RUNTIME_DB_MIGRATIONS: 'true'
     depends_on:
       integration-postgresql:
         condition: service_healthy

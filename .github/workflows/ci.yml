@@ -204,5 +204,5 @@ jobs:
         if: always()
         run: |
           COMPOSE_PROFILES=integration docker compose --env-file .env.ci -p askpdf-hermes-ci \
-            -f docker-compose.yml -f docker-compose.override.yml \
+            -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.integration.yml \
             down --volumes --remove-orphans
