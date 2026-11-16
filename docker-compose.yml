@@ -5,11 +5,6 @@ x-env-secret-mounts: &env-secret-mounts
   - ./scripts/docker_load_env_secrets.sh:/opt/askpdf/docker_load_env_secrets.sh:ro
   - env_secrets:/secrets:ro
 
-x-askpdf-buildkit-registry-cache-from: &askpdf_buildkit_registry_cache_from
-  - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-x-askpdf-buildkit-registry-cache-to: &askpdf_buildkit_registry_cache_to
-  - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
-
 services:
   frontend:
     build:
@@ -20,10 +15,6 @@ services:
         NEXT_PUBLIC_API_URL: /api/backend
         NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS: ${NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS:?NEXT_PUBLIC_AGENT_TASK_POLL_INTERVAL_MS must be set in .env}
         NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS: ${NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS:?NEXT_PUBLIC_AGENT_SSE_RECONNECT_INTERVAL_MS must be set in .env}
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     ports:
     - 3000:3000
     environment:
@@ -65,10 +56,6 @@ services:
       dockerfile: rag_service/Dockerfile
       args:
         DOWNLOAD_LOCAL_MODELS: 'false'
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     ports:
     - 127.0.0.1:8000:8000
     environment:
@@ -161,10 +148,6 @@ services:
     build:
       context: .
       dockerfile: langgraph_runtime/Dockerfile
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     env_file: []
     environment:
     - LOG_LEVEL=INFO
@@ -296,10 +279,6 @@ services:
     image: askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
     build:
       context: https://github.com/NousResearch/hermes-agent.git#${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     entrypoint:
     - /bin/true
   hermes:
@@ -310,10 +289,6 @@ services:
       dockerfile: hermes_runtime/Dockerfile.gateway
       additional_contexts:
         hermes-upstream: service:hermes-upstream
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     environment:
     - API_SERVER_ENABLED=true
     - API_SERVER_HOST=0.0.0.0
@@ -364,10 +339,6 @@ services:
     build:
       context: .
       dockerfile: hermes_runtime/Dockerfile
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     environment:
     - LOG_LEVEL=INFO
     - HERMES_API_URL=http://hermes:8642
@@ -511,10 +482,6 @@ services:
       dockerfile: rag_service/Dockerfile
       args:
         DOWNLOAD_LOCAL_MODELS: 'false'
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     command:
     - /bin/sh
     - /opt/askpdf/docker_compose_db_migrate.sh
@@ -608,10 +575,6 @@ services:
     build:
       context: ./browser_capture
       dockerfile: Dockerfile
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     ports:
     - 127.0.0.1:8090:3000
     environment:
@@ -666,10 +629,6 @@ services:
       args:
         DOWNLOAD_LOCAL_MODELS: 'false'
         WARM_DOCLING_MODELS: 'false'
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     entrypoint:
     - python
     - scripts/run_tests.py
@@ -840,10 +799,6 @@ services:
       dockerfile: rag_service/Dockerfile
       args:
         DOWNLOAD_LOCAL_MODELS: 'false'
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     command:
     - uvicorn
     - main:app
@@ -978,10 +933,6 @@ services:
     profiles:
     - integration
     build:
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
   integration-runtime-db-bootstrap:
     image: askpdf-langgraph-runtime
     build:
@@ -1011,10 +962,6 @@ services:
     build:
       context: .
       dockerfile: langgraph_runtime/Dockerfile
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     environment:
       LOG_LEVEL: INFO
       ASKPDF_AGENT_CHECKPOINTER: postgres
@@ -1150,10 +1097,6 @@ services:
     image: askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
     build:
       context: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     entrypoint:
     - /bin/true
   integration-hermes:
@@ -1164,10 +1107,6 @@ services:
       dockerfile: hermes_runtime/Dockerfile.gateway
       additional_contexts:
         hermes-upstream: service:integration-hermes-upstream
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     environment:
       API_SERVER_ENABLED: 'true'
       API_SERVER_HOST: 0.0.0.0
@@ -1223,10 +1162,6 @@ services:
     build:
       context: .
       dockerfile: hermes_runtime/Dockerfile
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     environment:
       LOG_LEVEL: INFO
       HERMES_API_URL: http://hermes:8642
@@ -1312,10 +1247,6 @@ services:
     build:
       context: .
       dockerfile: rag_service/Dockerfile.test
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     entrypoint:
     - python
     - scripts/run_tests.py
@@ -1436,10 +1367,6 @@ services:
     build:
       context: .
       dockerfile: langgraph_runtime/Dockerfile.test
-      cache_from:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF:-}
-      cache_to:
-      - type=registry,ref=${ASKPDF_BUILDKIT_CACHE_REF},mode=max,compression=zstd,ignore-error=true
     entrypoint:
     - python
     - -m
