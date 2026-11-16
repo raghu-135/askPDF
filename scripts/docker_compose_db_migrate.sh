@@ -4,6 +4,9 @@ set -eu
 
 MODULE="${1:?python module e.g. app.db.migrate}"
 DB_URL_ENV="${2:-DATABASE_URL}"
+if [ "$MODULE" = "langgraph_runtime.migrate" ]; then
+  DB_URL_ENV=AGENT_RUNTIME_EXECUTION_DATABASE_URL
+fi
 
 if ! python -c "import os, sys; sys.exit(0 if os.environ.get('$DB_URL_ENV') else 1)"; then
   echo "Missing required environment variable: $DB_URL_ENV" >&2
@@ -35,9 +38,8 @@ else:
 PY
 
 attempt=1
-LOCK_KEY="askpdf-migrate:${MODULE}"
 while [ "$attempt" -le 15 ]; do
-  if python /opt/askpdf/postgres_advisory_lock.py "$LOCK_KEY" "$MODULE"; then
+  if python -m "$MODULE"; then
     exit 0
   fi
   echo "Migration attempt $attempt failed; retrying..." >&2

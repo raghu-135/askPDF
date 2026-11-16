@@ -6,4 +6,7 @@ if [ "${RUN_DB_MIGRATIONS:-true}" != "false" ] && [ "${RUN_DB_MIGRATIONS:-true}"
   /bin/sh /opt/askpdf/docker_compose_db_migrate.sh app.db.migrate
 fi
 
-exec /bin/sh /opt/askpdf/docker_load_env_secrets.sh "$@"
+if [ -f "${ASKPDF_ENV_SECRETS_READY:-/secrets/ready}" ]; then
+  exec /bin/sh /opt/askpdf/docker_load_env_secrets.sh "$@"
+fi
+exec "$@"

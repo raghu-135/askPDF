@@ -251,6 +251,13 @@ services:
     entrypoint:
     - /bin/sh
     - /opt/askpdf/docker_compose_langgraph_start.sh
+    command:
+    - uvicorn
+    - langgraph_runtime.main:app
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8100'
     depends_on:
       fake-llm:
         condition: service_healthy

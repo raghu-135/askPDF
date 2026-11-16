@@ -13,8 +13,7 @@ RUN pip install --no-deps /tmp/runtime_protocol
 
 COPY langgraph_runtime /app/langgraph_runtime
 COPY scripts/docker_compose_db_migrate.sh scripts/docker_compose_runtime_db_bootstrap.sh \
-  scripts/docker_compose_langgraph_start.sh scripts/docker_load_env_secrets.sh \
-  scripts/postgres_advisory_lock.py /opt/askpdf/
+  scripts/docker_compose_langgraph_start.sh scripts/docker_load_env_secrets.sh /opt/askpdf/
 RUN chmod +x /opt/askpdf/docker_compose_db_migrate.sh /opt/askpdf/docker_compose_runtime_db_bootstrap.sh \
   /opt/askpdf/docker_compose_langgraph_start.sh /opt/askpdf/docker_load_env_secrets.sh
 
