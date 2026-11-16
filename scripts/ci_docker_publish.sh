@@ -12,8 +12,8 @@ fi
 
 registry="${ASKPDF_CI_REGISTRY:-ghcr.io}"
 owner_lc="$(echo "${GITHUB_REPOSITORY_OWNER:-}" | tr '[:upper:]' '[:lower:]')"
-repo="${GITHUB_REPOSITORY:+${GITHUB_REPOSITORY#*/}}"
-namespace="${ASKPDF_CI_REGISTRY_NAMESPACE:-${owner_lc}/${repo}/ci}"
+repo_lc="$(echo "${GITHUB_REPOSITORY:+${GITHUB_REPOSITORY#*/}}" | tr '[:upper:]' '[:lower:]')"
+namespace="${ASKPDF_CI_REGISTRY_NAMESPACE:-${owner_lc}/${repo_lc}/ci}"
 
 manifest="${ASKPDF_CI_IMAGE_MANIFEST:-/tmp/askpdf-ci-images.txt}"
 : >"$manifest"
