@@ -67,8 +67,11 @@ services:
         aliases:
         - weaviate
   integration-rag-service:
-    image: askpdf-runtime-control-plane
+    image: askpdf-rag-service
     build: *rag-service-build
+    entrypoint:
+    - /bin/sh
+    - /opt/askpdf/docker_compose_rag_start.sh
     command:
     - uvicorn
     - main:app
@@ -80,6 +83,7 @@ services:
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      RUN_DB_MIGRATIONS: 'true'
       POSTGRES_POOL_SIZE: '5'
       POSTGRES_MAX_OVERFLOW: '5'
       AGENT_CHECKPOINT_DATABASE_URL: ''
@@ -157,8 +161,6 @@ services:
         condition: service_healthy
       integration-weaviate:
         condition: service_healthy
-      integration-db-migrate:
-        condition: service_completed_successfully
       integration-langgraph-runtime:
         condition: service_healthy
     volumes:
@@ -172,50 +174,6 @@ services:
       default:
         aliases:
         - rag-service
-  integration-db-migrate:
-    image: askpdf-runtime-control-plane
-    build: *rag-service-build
-    command:
-    - /bin/sh
-    - /opt/askpdf/docker_compose_db_migrate.sh
-    - app.db.migrate
-    volumes:
-    - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
-      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
-      POSTGRES_POOL_SIZE: '5'
-      POSTGRES_MAX_OVERFLOW: '5'
-      RUN_DB_MIGRATIONS: 'true'
-      LOCAL_EMBEDDING_MODEL: BAAI/bge-m3
-      LOCAL_RERANKER_MODEL: BAAI/bge-reranker-v2-m3
-    depends_on:
-      integration-postgresql:
-        condition: service_healthy
-    profiles:
-    - integration
-  integration-runtime-db-bootstrap:
-    image: askpdf-langgraph-runtime
-    build: *langgraph-runtime-build
-    command:
-    - /bin/sh
-    - /opt/askpdf/docker_compose_runtime_db_bootstrap.sh
-    volumes:
-    - ./scripts/docker_compose_db_migrate.sh:/opt/askpdf/docker_compose_db_migrate.sh:ro
-    - ./scripts/docker_compose_runtime_db_bootstrap.sh:/opt/askpdf/docker_compose_runtime_db_bootstrap.sh:ro
-    environment:
-      RUNTIME_BOOTSTRAP_PG_HOST: postgresql
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
-      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgresql:5432/runtime_checkpoints
-      POSTGRES_POOL_SIZE: '1'
-      POSTGRES_MAX_OVERFLOW: '1'
-      AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
-      RUN_RUNTIME_DB_MIGRATIONS: 'true'
-    depends_on:
-      integration-postgresql:
-        condition: service_healthy
-    profiles:
-    - integration
   integration-langgraph-runtime:
     image: askpdf-langgraph-runtime
     build: *langgraph-runtime-build
@@ -225,6 +183,8 @@ services:
       AGENT_CHECKPOINT_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
       AGENT_RUNTIME_EXECUTION_DATABASE_URL: postgresql://postgres:postgres@postgresql:5432/runtime_checkpoints
       ASKPDF_AGENT_CHECKPOINTER_SETUP: 'true'
+      RUNTIME_BOOTSTRAP_PG_HOST: postgresql
+      RUN_RUNTIME_DB_MIGRATIONS: 'true'
       MCP_TRANSPORT: loopback_http
       MCP_LOOPBACK_URL: http://rag-service:8000/internal/mcp/
       MCP_REQUEST_TIMEOUT_SECONDS: '120'
@@ -288,11 +248,21 @@ services:
       DATABASE_URL: ''
       TEST_DATABASE_URL: ''
     env_file: []
+    entrypoint:
+    - /bin/sh
+    - /opt/askpdf/docker_compose_langgraph_start.sh
+    command:
+    - uvicorn
+    - langgraph_runtime.main:app
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8100'
     depends_on:
       fake-llm:
         condition: service_healthy
-      integration-runtime-db-bootstrap:
-        condition: service_completed_successfully
+      integration-postgresql:
+        condition: service_healthy
     healthcheck:
       test:
       - CMD
@@ -329,14 +299,6 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
     - runtime_integration_hermes_data:/opt/data
-  integration-hermes-upstream:
-    profiles:
-    - integration
-    image: askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:?HERMES_UPSTREAM_REVISION must be set in .env}
-    build:
-      context: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
-    entrypoint:
-    - /bin/true
   integration-hermes:
     profiles:
     - integration
@@ -344,7 +306,7 @@ services:
       context: .
       dockerfile: hermes_runtime/Dockerfile.gateway
       additional_contexts:
-        hermes-upstream: service:integration-hermes-upstream
+        hermes-upstream: https://github.com/NousResearch/hermes-agent.git#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
     environment:
       API_SERVER_ENABLED: 'true'
       API_SERVER_HOST: 0.0.0.0
@@ -366,8 +328,6 @@ services:
       integration-rag-service:
         condition: service_started
       integration-hermes-config-init:
-        condition: service_completed_successfully
-      integration-hermes-upstream:
         condition: service_completed_successfully
     volumes:
     - runtime_integration_hermes_data:/opt/data
@@ -674,8 +634,8 @@ services:
       CONTEXT_PLAN_TOTAL_RATIO: '0.50'
       CONTEXT_PLAN_MEMORY_RATIO: '0.12'
     depends_on:
-      integration-runtime-db-bootstrap:
-        condition: service_completed_successfully
+      integration-postgresql:
+        condition: service_healthy
       integration-langgraph-runtime:
         condition: service_healthy
     profiles:

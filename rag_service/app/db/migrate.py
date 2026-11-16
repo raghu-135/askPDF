@@ -14,6 +14,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+APP_DB_MIGRATION_LOCK_KEY = "askpdf-app-db-migrate"
+
 
 INITIAL_REVISION = "8c8d6eac150a"
 THREAD_METADATA_REVISION = "2f6c9d1e8a4b"
@@ -139,6 +141,30 @@ async def _bootstrap_legacy_database() -> None:
         _run_alembic("stamp", INITIAL_REVISION)
 
 
+async def _run_migrations_under_lock() -> None:
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL environment variable is required")
+
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(
+                text("SELECT pg_advisory_lock(hashtextextended(:key, 0))"),
+                {"key": APP_DB_MIGRATION_LOCK_KEY},
+            )
+            try:
+                await _bootstrap_legacy_database()
+                _run_alembic("upgrade", HEAD_REVISION)
+            finally:
+                await connection.execute(
+                    text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))"),
+                    {"key": APP_DB_MIGRATION_LOCK_KEY},
+                )
+    finally:
+        await engine.dispose()
+
+
 def main() -> None:
     if not _env_flag_enabled("RUN_DB_MIGRATIONS", default=True):
         print(
@@ -149,8 +175,7 @@ def main() -> None:
         return
 
     try:
-        asyncio.run(_bootstrap_legacy_database())
-        _run_alembic("upgrade", HEAD_REVISION)
+        asyncio.run(_run_migrations_under_lock())
     except Exception as exc:
         print("", file=sys.stderr, flush=True)
         print("Database migration failed.", file=sys.stderr, flush=True)

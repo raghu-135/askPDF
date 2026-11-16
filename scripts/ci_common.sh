@@ -11,10 +11,9 @@ export COMPOSE_PROFILES="${ASKPDF_CI_COMPOSE_PROFILES:-}"
 export ASKPDF_BUILDKIT_CACHE_REF="${ASKPDF_BUILDKIT_CACHE_REF:-}"
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.integration.yml)
-HERMES_UPSTREAM_IMAGE="askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:-2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19}"
-
 # Images that downstream jobs must load (local tags).
 ASKPDF_CI_IMAGE_TAGS=(
+  askpdf-rag-service
   askpdf-runtime-control-plane
   askpdf-langgraph-runtime
   askpdf-hermes-runtime
@@ -24,7 +23,6 @@ ASKPDF_CI_IMAGE_TAGS=(
   askpdf-fake-llm:ci
   askpdf-hermes-gateway:ci
   askpdf-hermes-runtime:ci
-  "$HERMES_UPSTREAM_IMAGE"
 )
 
 compose_env() {

@@ -13,7 +13,7 @@ Copy the example environment file:
     cp .env.example .env
 
 `docker compose up` runs a one-shot `env-secrets` job (same pattern as
-`db-migrate`) that replaces the `replace-with-...` service secrets (admin
+`env-secrets`) that replaces the `replace-with-...` service secrets (admin
 token, runtime tokens, MCP context secret) and writes them into the stack.
 It does not invent `OPENAI_API_KEY`. You do not need Python on the host.
 

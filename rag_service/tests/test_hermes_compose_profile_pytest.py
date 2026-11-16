@@ -68,8 +68,6 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
         "rag-service",
         "langgraph-runtime",
         "env-secrets",
-        "runtime-db-bootstrap",
-        "db-migrate",
         "postgresql",
         "weaviate",
         "browser-capture",
@@ -82,8 +80,10 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert any(str(entry).startswith("HERMES_GATEWAY_HOME=") for entry in adapter["environment"])
     assert services["hermes-config-init"]["profiles"] == ["hermes"]
     assert hermes["build"]["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
-    assert hermes["build"]["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream"
-    assert "${HERMES_UPSTREAM_REVISION:?" in services["hermes-upstream"]["build"]["context"]
+    assert hermes["build"]["additional_contexts"]["hermes-upstream"].startswith(
+        "https://github.com/NousResearch/hermes-agent.git#"
+    )
+    assert "${HERMES_UPSTREAM_REVISION:?" in hermes["build"]["additional_contexts"]["hermes-upstream"]
     assert hermes["healthcheck"]["test"][-1].endswith("/health")
     assert "ASKPDF_HERMES_COMPAT_ENABLED=1" in set(hermes["environment"])
     assert "LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
@@ -189,8 +189,7 @@ def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     assert "hermes-fake" not in compose["services"]
     hermes_build = compose["services"]["integration-hermes"]["build"]
     assert hermes_build["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
-    assert hermes_build["additional_contexts"]["hermes-upstream"] == "service:integration-hermes-upstream"
-    assert compose["services"]["integration-hermes-upstream"]["build"]["context"].endswith(
+    assert hermes_build["additional_contexts"]["hermes-upstream"].endswith(
         "#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
     )
     assert compose["services"]["integration-hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"
@@ -247,6 +246,32 @@ def test_ci_environment_includes_control_plane_startup_settings():
         "MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE": "4",
         "WEB_SEARCH_ITERATION_BONUS": "2",
     }.items() <= values.items()
+
+
+def _compose_services_for_profiles(active_profiles: set[str]) -> list[str]:
+    """Mirror Compose profile selection without invoking the Docker CLI in test-runner."""
+    services = _compose("docker-compose.yml")["services"]
+    enabled: list[str] = []
+    for name, service in services.items():
+        profiles = service.get("profiles")
+        if not profiles:
+            enabled.append(name)
+        elif active_profiles.intersection(profiles):
+            enabled.append(name)
+    return enabled
+
+
+def test_compose_service_counts_by_profile():
+    assert len(_compose_services_for_profiles(set())) == 7
+    assert len(_compose_services_for_profiles({"hermes"})) == 10
+    assert len(_compose_services_for_profiles({"test"})) == 12
+    assert len(_compose_services_for_profiles({"integration"})) == 17
+
+
+def test_rag_service_image_is_shared_across_compose_builds():
+    services = _compose("docker-compose.yml")["services"]
+    assert services["rag-service"]["image"] == "askpdf-rag-service"
+    assert services["integration-rag-service"]["image"] == "askpdf-rag-service"
 
 
 def test_main_compose_does_not_mount_the_project_environment_into_hermes():

@@ -57,15 +57,11 @@ EXTERNAL_RUNTIME_COMPOSE_ARGS=(-p "$EXTERNAL_RUNTIME_PROJECT_NAME" "${COMPOSE_FI
 RT_POSTGRESQL=integration-postgresql
 RT_WEAVIATE=integration-weaviate
 RT_RAG_SERVICE=integration-rag-service
-RT_DB_MIGRATE=integration-db-migrate
-RT_RUNTIME_DB_BOOTSTRAP=integration-runtime-db-bootstrap
 RT_LANGGRAPH_RUNTIME=integration-langgraph-runtime
 RT_TEST_RUNNER=integration-test-runner
 RT_HERMES=integration-hermes
 RT_HERMES_RUNTIME=integration-hermes-runtime
 RT_HERMES_CONFIG_INIT=integration-hermes-config-init
-RT_HERMES_UPSTREAM=integration-hermes-upstream
-
 test_compose() {
     COMPOSE_PROFILES="$TEST_COMPOSE_PROFILES" "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" "$@"
 }
@@ -111,7 +107,7 @@ external_runtime_diagnostics() {
     echo "External runtime failed; collecting bounded service diagnostics..." >&2
     runtime_compose ps || true
     runtime_compose logs --tail=200 \
-        "$RT_RAG_SERVICE" "$RT_LANGGRAPH_RUNTIME" "$RT_DB_MIGRATE" "$RT_RUNTIME_DB_BOOTSTRAP" \
+        "$RT_RAG_SERVICE" "$RT_LANGGRAPH_RUNTIME" \
         "$RT_POSTGRESQL" fake-llm "$RT_WEAVIATE" \
         "$RT_HERMES" "$RT_HERMES_RUNTIME" "$RT_HERMES_CONFIG_INIT" || true
 }
@@ -124,14 +120,13 @@ external_runtime_test() {
 }
 
 runtime_compose_images_ready() {
-    docker image inspect askpdf-runtime-control-plane >/dev/null 2>&1 \
+    docker image inspect askpdf-rag-service >/dev/null 2>&1 \
         && docker image inspect askpdf-langgraph-runtime >/dev/null 2>&1 \
         && docker image inspect askpdf-fake-llm:ci >/dev/null 2>&1
 }
 
 hermes_compose_images_ready() {
     runtime_compose_images_ready \
-        && docker image inspect "askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:-2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19}" >/dev/null 2>&1 \
         && docker image inspect askpdf-hermes-gateway:ci >/dev/null 2>&1 \
         && docker image inspect askpdf-hermes-runtime:ci >/dev/null 2>&1
 }
@@ -156,32 +151,7 @@ ensure_hermes_compose_images() {
         echo "Hermes integration images already present; skipping compose build"
         return 0
     fi
-    runtime_compose build "$RT_HERMES_UPSTREAM" "$RT_HERMES" "$RT_HERMES_RUNTIME"
-}
-
-wait_for_external_job() {
-    local service="$1"
-    local label="$2"
-    for attempt in $(seq 1 120); do
-        local container_id
-        container_id=$(runtime_compose ps --all -q "$service" 2>/dev/null || true)
-        if [ -n "$container_id" ]; then
-            local state
-            state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$container_id" 2>/dev/null || true)
-            if [ "$state" = "exited 0" ]; then
-                return 0
-            fi
-            if [[ "$state" = "exited "* ]] || [[ "$state" = "dead "* ]]; then
-                echo "$label failed: $state" >&2
-                external_runtime_diagnostics
-                return 1
-            fi
-        fi
-        sleep 1
-    done
-    echo "$label timed out after 120 seconds" >&2
-    external_runtime_diagnostics
-    return 1
+    runtime_compose build "$RT_HERMES" "$RT_HERMES_RUNTIME"
 }
 
 if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
@@ -197,9 +167,7 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
     fi
     echo "Starting isolated LangGraph runtime Compose environment '$EXTERNAL_RUNTIME_PROJECT_NAME'..."
     ensure_runtime_compose_images
-    runtime_compose up -d "$RT_POSTGRESQL" "$RT_DB_MIGRATE" "$RT_RUNTIME_DB_BOOTSTRAP" "$RT_WEAVIATE" fake-llm "$RT_RAG_SERVICE" "$RT_LANGGRAPH_RUNTIME"
-    wait_for_external_job "$RT_DB_MIGRATE" "Product database migration"
-    wait_for_external_job "$RT_RUNTIME_DB_BOOTSTRAP" "Runtime database bootstrap"
+    runtime_compose up -d "$RT_POSTGRESQL" "$RT_WEAVIATE" fake-llm "$RT_LANGGRAPH_RUNTIME" "$RT_RAG_SERVICE"
     control_plane_ready=0
     for attempt in $(seq 1 120); do
         if runtime_compose exec -T "$RT_RAG_SERVICE" python -c \
@@ -348,10 +316,10 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
     trap external_runtime_diagnostics ERR
     ensure_hermes_compose_images
     if [ "${ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD:-}" != "1" ] \
-        && ! docker image inspect askpdf-runtime-control-plane >/dev/null 2>&1; then
+        && ! docker image inspect askpdf-rag-service >/dev/null 2>&1; then
         runtime_compose build "$RT_RAG_SERVICE"
     fi
-    if ! runtime_compose up -d "$RT_POSTGRESQL" "$RT_RUNTIME_DB_BOOTSTRAP" "$RT_WEAVIATE" "$RT_DB_MIGRATE" fake-llm "$RT_RAG_SERVICE" "$RT_HERMES" "$RT_HERMES_RUNTIME"; then
+    if ! runtime_compose up -d "$RT_POSTGRESQL" "$RT_WEAVIATE" fake-llm "$RT_LANGGRAPH_RUNTIME" "$RT_RAG_SERVICE" "$RT_HERMES" "$RT_HERMES_RUNTIME"; then
         echo "Hermes runtime Compose environment failed to start" >&2
         exit 1
     fi

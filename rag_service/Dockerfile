@@ -41,6 +41,10 @@ COPY rag_service/alembic alembic
 COPY rag_service/scripts scripts
 COPY rag_service/app app
 COPY rag_service/alembic.ini rag_service/main.py ./
+COPY scripts/docker_compose_db_migrate.sh scripts/docker_compose_rag_start.sh \
+  scripts/docker_load_env_secrets.sh /opt/askpdf/
+RUN chmod +x /opt/askpdf/docker_compose_db_migrate.sh /opt/askpdf/docker_compose_rag_start.sh \
+  /opt/askpdf/docker_load_env_secrets.sh
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
