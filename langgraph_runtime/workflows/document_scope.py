@@ -111,6 +111,23 @@ def merged_state_document_sources(state: Mapping[str, Any]) -> list[Dict[str, An
     return sources
 
 
+def live_worker_sources_imply_retrieval(state: Mapping[str, Any]) -> bool:
+    """Whether the document worker already returned usable source rows on state."""
+
+    sources = state.get("document_sources")
+    if not isinstance(sources, list):
+        return False
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        if str(source.get("snippet") or source.get("content") or "").strip():
+            return True
+        score = _score_from_mapping(source)
+        if score is not None and score >= ATTACHMENT_WEAK_RETRIEVAL_SCORE:
+            return True
+    return False
+
+
 def packet_assessments_by_id(state: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {
         str(item.get("packet_id")): item
@@ -209,8 +226,7 @@ def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
 
     if not thread_has_attached_documents(state):
         return None
-    live_sources = state.get("document_sources")
-    if isinstance(live_sources, list) and live_sources:
+    if live_worker_sources_imply_retrieval(state):
         return None
     doc_packets = document_evidence_packets(state)
     worker_scores = worker_document_retrieval_scores(state)
