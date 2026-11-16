@@ -33,7 +33,6 @@ COPY rag_service/scripts/download_embedding_tokenizers.py /tmp/download_embeddin
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
       python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); print('Downloaded local embedding + reranker models')"; \
       python /tmp/download_embedding_tokenizers.py; \
-      python -m spacy download en_core_web_sm; \
     fi
 
 RUN mkdir -p /models/hf /static
