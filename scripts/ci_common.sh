@@ -7,7 +7,7 @@ cd "$ROOT"
 
 export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}"
 export COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-1}"
-export COMPOSE_PROFILES="${ASKPDF_CI_COMPOSE_PROFILES:-stack,buildkit}"
+export COMPOSE_PROFILES="${ASKPDF_CI_COMPOSE_PROFILES:-stack}"
 export ASKPDF_BUILDKIT_CACHE_REF="${ASKPDF_BUILDKIT_CACHE_REF:-}"
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.override.yml)
@@ -32,16 +32,16 @@ compose_env() {
 }
 
 main_compose() {
-  COMPOSE_PROFILES="${ASKPDF_CI_MAIN_PROFILES:-stack,buildkit}" compose_env "$@"
+  COMPOSE_PROFILES="${ASKPDF_CI_MAIN_PROFILES:-stack}" compose_env "$@"
 }
 
 test_compose() {
-  COMPOSE_PROFILES="${ASKPDF_CI_TEST_PROFILES:-test,buildkit}" compose_env -p askpdf-test "$@"
+  COMPOSE_PROFILES="${ASKPDF_CI_TEST_PROFILES:-test}" compose_env -p askpdf-test "$@"
 }
 
 runtime_compose() {
   local project="${1:-askpdf-ci-prefetch}"
   shift
-  COMPOSE_PROFILES="${ASKPDF_CI_RUNTIME_PROFILES:-integration,buildkit}" \
+  COMPOSE_PROFILES="${ASKPDF_CI_RUNTIME_PROFILES:-integration}" \
     compose_env -p "$project" "$@"
 }

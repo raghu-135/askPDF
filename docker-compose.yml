@@ -1113,8 +1113,6 @@ services:
     build:
       context: ./rag_service
       dockerfile: Dockerfile.fake-llm
-      cache_from: *askpdf_buildkit_registry_cache_from
-      cache_to: *askpdf_buildkit_registry_cache_to
     healthcheck:
       test:
       - CMD
