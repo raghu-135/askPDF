@@ -137,7 +137,7 @@ def test_main_compose_generates_service_secrets_before_app_start():
 
 
 def test_dev_hermes_runtime_does_not_inherit_control_plane_mcp_transport():
-    services = _compose("docker-compose.override.yml")["services"]
+    services = _compose("docker-compose.cloud-agent.override.yml")["services"]
     assert services["hermes-runtime"]["environment"]["MCP_TRANSPORT"] == "loopback_http"
     assert services["hermes-runtime"]["environment"]["MCP_LOOPBACK_URL"] == "http://rag-service:8000/internal/mcp/"
 

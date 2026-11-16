@@ -12,17 +12,17 @@ From the repository root (see also **Cloud Agent VM setup** in `AGENTS.md`):
 bash scripts/cloud-agent-setup.sh stack
 ```
 
-Uses `docker-compose.yml` plus `docker-compose.override.yml` with `COMPOSE_PROFILES=hermes` so
-containers reach Postgres, Weaviate, and runtimes via `host.docker.internal`, and
-so the host OpenRouter proxy on `:12345` serves `LLM_API_URL` (keys come from
-agent secrets, never committed or logged).
+Uses `docker-compose.yml` plus `docker-compose.cloud-agent.override.yml` with
+`COMPOSE_PROFILES=hermes` so containers reach Postgres, Weaviate, and runtimes
+via `host.docker.internal`, and so the host OpenRouter proxy on `:12345` serves
+`LLM_API_URL` on cloud VMs (keys come from agent secrets, never committed or logged).
 
 **Known pitfalls**
 
 | Issue | What to do |
 | --- | --- |
-| Compose bridge DNS timeouts | Always use the VM host-gateway override file above. |
-| Hugging Face blocked | Rely on warmed `.askpdf-hf-cache/` (`install` subcommand); `HF_HUB_OFFLINE=1` in override. |
+| Compose bridge DNS timeouts | Use `docker-compose.cloud-agent.override.yml` via `cloud-agent-setup.sh stack`. |
+| Hugging Face blocked | Rely on warmed `.askpdf-hf-cache/` (`install` subcommand); HF offline flags in the cloud-agent override. |
 | LLM 401 | Set `OPENROUTER_API_KEY` or `OPENAI_API_KEY` in the environment dashboard. |
 | LLM 429 (rate limits) | Stay under **20 RPM** for free models (e.g. `inclusionai/ling-3.2-flash:free`); exponential backoff (≥4s, 8s, 16s…) between chat turns; do not spam parallel chats. |
 | Headless Chrome / computer-use **cannot decode h264** browser streams | Use Playwright screenshots from the helper (or PNG artifacts), not raw screen-share video, as UI proof. |

@@ -10,7 +10,7 @@ export COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-1}"
 export COMPOSE_PROFILES="${ASKPDF_CI_COMPOSE_PROFILES:-}"
 export ASKPDF_BUILDKIT_CACHE_REF="${ASKPDF_BUILDKIT_CACHE_REF:-}"
 
-COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.integration.yml)
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.integration.yml)
 HERMES_UPSTREAM_IMAGE="askpdf-hermes-upstream:${HERMES_UPSTREAM_REVISION:-2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19}"
 
 # Images that downstream jobs must load (local tags).

@@ -172,7 +172,8 @@ services:
     - LOCAL_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
     - EMBEDDING_DEVICE=cpu
     - RERANKER_DEVICE=cpu
-    - LLM_API_URL=http://host.docker.internal:1234/v1
+    - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
+    - OPENAI_BASE_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
     - DEFAULT_TOKEN_BUDGET=8192
     - REPLANS_LIMIT=10
     - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
@@ -560,7 +561,7 @@ services:
     - LOCAL_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
     - EMBEDDING_DEVICE=cpu
     - RERANKER_DEVICE=cpu
-    - LLM_API_URL=http://host.docker.internal:1234/v1
+    - LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}
     - DEFAULT_TOKEN_BUDGET=8192
     - REPLANS_LIMIT=10
     - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
@@ -646,7 +647,7 @@ services:
     - ./frontend/package-lock.json:/workspace/frontend/package-lock.json:ro
     - ./frontend/src:/workspace/frontend/src:ro
     - ./frontend/tests:/workspace/frontend/tests:ro
-    - ./docker-compose.override.yml:/workspace/docker-compose.override.yml:ro
+    - ./docker-compose.development.override.yml:/workspace/docker-compose.development.override.yml:ro
     - ./rag_service/app/workflow_catalog/builtins:/workspace/rag_service/app/workflow_catalog/builtins:ro
     - frontend_test_node_modules:/workspace/frontend/node_modules
     profiles:
@@ -692,8 +693,6 @@ services:
     - LOCAL_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
     - EMBEDDING_DEVICE=cpu
     - RERANKER_DEVICE=cpu
-    - LLM_API_URL=http://host.docker.internal:1234/v1
-    - OPENAI_API_KEY=
     - LANGGRAPH_RUNTIME_TOKEN=test-langgraph-runtime-token-32-characters
     - MCP_TRANSPORT=in_process
     - MCP_LOOPBACK_URL=http://127.0.0.1:8000/internal/mcp/
@@ -720,6 +719,8 @@ services:
       test-postgresql:
         condition: service_healthy
       test-weaviate:
+        condition: service_healthy
+      fake-llm:
         condition: service_healthy
     volumes:
     - .:/workspace:ro

@@ -83,10 +83,10 @@ Persistent database and content volumes are retained unless explicitly removed.
 
 ## Development frontend
 
-For frontend hot reload, use `docker-compose.override.yml` (dev bind mounts and
-`npm run dev` on the frontend). Ports stay in the Compose YAML, not `.env`.
+For frontend hot reload, pass `docker-compose.development.override.yml` (dev bind
+mounts and `npm run dev`). Ports stay in the Compose YAML, not `.env`.
 
-    docker compose -f docker-compose.yml -f docker-compose.override.yml up --build
+    docker compose -f docker-compose.yml -f docker-compose.development.override.yml up --build
 
 A second parallel product stack on alternate host ports is not implemented in
 Compose today; use a distinct Compose project name (`-p …`) only for
