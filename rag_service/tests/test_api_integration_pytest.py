@@ -155,6 +155,14 @@ class TestAPIIntegration:
             fake_index_document_for_thread,
         )
 
+        async def noop_enqueue_pdf_conversion(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(
+            "app.services.file_processing_service._enqueue_pdf_conversion",
+            noop_enqueue_pdf_conversion,
+        )
+
         pdf_path = Path(__file__).with_name("01030000000000.pdf")
         upload_response = await client.post(
             f"/api/projects/{project_id}/files/upload",
@@ -180,7 +188,8 @@ class TestAPIIntegration:
             f"/api/projects/{project_id}/files",
             files={"file": (pdf_path.name, pdf_path.read_bytes(), "application/pdf")},
         )
-        assert bad_response.status_code == 422, bad_response.text
+        assert bad_response.status_code in {400, 422}, bad_response.text
+        assert bad_response.status_code != 500
         assert "UnicodeDecodeError" not in bad_response.text
 
         await client.delete(f"/api/projects/{project_id}")

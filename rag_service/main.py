@@ -37,6 +37,7 @@ from runtime_protocol.configuration import validate_runtime_environment
 validate_runtime_environment(service="control_plane")
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -349,6 +350,70 @@ app = FastAPI(
 )
 
 
+def _sanitize_validation_errors(errors):
+  sanitized = []
+  for item in errors:
+    entry = dict(item)
+    if isinstance(entry.get("input"), (bytes, bytearray)):
+      entry["input"] = "<binary body omitted>"
+    sanitized.append(entry)
+  return sanitized
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request, exc: RequestValidationError):
+    """Avoid 500s when validation errors include binary multipart bodies."""
+    try:
+        errors = _sanitize_validation_errors(exc.errors())
+    except UnicodeDecodeError:
+        errors = [
+            {
+                "type": "value_error",
+                "loc": ("body",),
+                "msg": "Request body must be JSON for this endpoint",
+                "input": "<binary body omitted>",
+            }
+        ]
+    return JSONResponse(status_code=422, content={"detail": errors})
+
+
+@app.exception_handler(UnicodeDecodeError)
+async def unicode_decode_error_handler(request, exc: UnicodeDecodeError):
+    """Multipart or binary bodies on JSON endpoints must not become opaque 500s."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": [
+                {
+                    "type": "value_error",
+                    "loc": ("body",),
+                    "msg": "Request body is not valid UTF-8 text for this endpoint",
+                    "input": "<binary body omitted>",
+                }
+            ]
+        },
+    )
+
+
+@app.middleware("http")
+async def reject_multipart_json_file_routes(request, call_next):
+    """POST .../files (not /upload) expects JSON; reject multipart before body parsing."""
+    path = request.url.path
+    if (
+        request.method == "POST"
+        and path.endswith("/files")
+        and not path.endswith("/files/upload")
+        and (request.headers.get("content-type") or "").lower().startswith("multipart/")
+    ):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": "Use the /files/upload endpoint for PDF uploads; this route expects JSON (file_hash, file_name)."
+            },
+        )
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def control_plane_authentication(request, call_next):
     """Protect product APIs while leaving health and internal MCP boundaries independent."""
@@ -365,7 +430,22 @@ async def control_plane_authentication(request, call_next):
     token = set_principal(principal)
     request.state.principal = principal
     try:
-        return await call_next(request)
+        try:
+            return await call_next(request)
+        except UnicodeDecodeError:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": [
+                        {
+                            "type": "value_error",
+                            "loc": ("body",),
+                            "msg": "Request body is not valid UTF-8 text for this endpoint",
+                            "input": "<binary body omitted>",
+                        }
+                    ]
+                },
+            )
     finally:
         reset_principal(token)
 
