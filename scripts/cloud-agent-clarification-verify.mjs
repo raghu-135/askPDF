@@ -84,15 +84,30 @@ async function main() {
   await guard.capture(page, 'clarification-05-custom-box.png', { requireChatWorkspace: true });
   await page.getByRole('button', { name: 'Cancel custom response' }).click();
 
-  const optionField = page.locator('textarea.MuiInputBase-inputMultiline').first();
-  const optionText = (await optionField.inputValue()).trim();
-  if (!optionText) {
-    throw new Error('Clarification option field had no seed text');
+  const decisionPanel = page
+    .locator('div')
+    .filter({ has: page.getByText('I need a bit more clarification') })
+    .filter({ has: page.getByRole('button', { name: /Something else/i }) })
+    .last();
+  const optionFields = decisionPanel.locator('textarea.MuiInputBase-inputMultiline');
+  const optionCount = await optionFields.count();
+  let optionText = '';
+  let optionIndex = 0;
+  for (let index = 0; index < optionCount; index += 1) {
+    const candidate = (await optionFields.nth(index).inputValue()).trim();
+    if (/compare|MORAN|DINER|them/i.test(candidate)) {
+      optionText = candidate;
+      optionIndex = index;
+      break;
+    }
   }
-  await optionField.click();
+  if (!optionText) {
+    throw new Error('No clarification option matching the uploaded PDF was found');
+  }
+  await optionFields.nth(optionIndex).click();
   await guard.capture(page, 'clarification-06-option-field.png', { requireChatWorkspace: true });
 
-  await page.locator('button[aria-label^="Send "]').first().click();
+  await decisionPanel.locator('button[aria-label^="Send "]').nth(optionIndex).click();
   const composer = page.getByTestId('chat-composer-input');
   await composer.waitFor({ state: 'visible', timeout: 30_000 });
   const seeded = (await composer.inputValue()).trim();
