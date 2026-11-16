@@ -49,6 +49,7 @@ Route this askPDF question to exactly one route.
 - Do not choose `web` when both live web search and browser workbench access are disabled; choose another enabled route or clarify instead.
 - When browser access is enabled and the user needs a specific page or URL, choose `web`, set `tool_name` to `browser_navigate`, and set `query` to the target URL.
 - Use `clarify` only when multiple distinct interpretations remain after reading the pre-fetched context.
+- Prior thread messages may inform follow-ups, but if the current user message is not self-contained (for example it depends on unstated referents or pronouns), still use `clarify` unless document evidence supports exactly one substantive interpretation.
 - Do not use `clarify` when the question is outside uploaded document scope and pre-fetched context has no supporting evidence; choose `direct` instead so the workflow can decline cleanly.
 - Clarification options must contain 2-4 complete, self-contained questions.
 - Infer the most likely distinct meanings of the user's message.

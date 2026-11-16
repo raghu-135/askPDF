@@ -30,7 +30,7 @@ def test_auto_builtin_validates_and_compiles():
     WorkflowCompiler().compile(spec, checkpointer=None)
 
 
-def test_auto_scope_decline_for_router_without_prefetch_evidence():
+def test_auto_scope_decline_defers_to_router_without_prefetch_evidence():
     state = {
         "question": "What is the kinetic energy of a satellite in low Earth orbit?",
         "pre_fetch_bundle": {
@@ -38,7 +38,7 @@ def test_auto_scope_decline_for_router_without_prefetch_evidence():
             "document_evidence_text": "",
         },
     }
-    assert auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID) == DOCUMENT_SCOPE_DECLINE_ANSWER
+    assert auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID) is None
 
 
 def test_auto_scope_decline_allows_router_when_prefetch_has_evidence():
@@ -52,7 +52,7 @@ def test_auto_scope_decline_allows_router_when_prefetch_has_evidence():
     assert auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID) is None
 
 
-def test_auto_scope_decline_for_router_when_prefetch_scores_are_low():
+def test_auto_scope_decline_defers_low_score_router_to_child():
     state = {
         "question": "What regulatory capital ratio applies under Basel IV in 2030?",
         "pre_fetch_bundle": {
@@ -61,7 +61,7 @@ def test_auto_scope_decline_for_router_when_prefetch_scores_are_low():
             "document_evidence_text": "Table 2 training cost for the base model.",
         },
     }
-    assert auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID) == DOCUMENT_SCOPE_DECLINE_ANSWER
+    assert auto_scope_decline(state, workflow_id=ROUTER_WORKFLOW_ID) is None
 
 
 def test_auto_scope_decline_skips_deep_research_delegate():

@@ -17,6 +17,7 @@ export interface ChatComposerStateInput {
   indexingStatus: ChatComposerIndexingStatusValue;
   hasInput: boolean;
   humanReviewPending?: boolean;
+  clarificationPending?: boolean;
 }
 
 export interface ChatComposerState {
@@ -42,6 +43,15 @@ function locked(
 export function getChatComposerState(input: ChatComposerStateInput): ChatComposerState {
   if (input.humanReviewPending) {
     return locked(ChatComposerStatus.HumanReviewPending, 'Approve or skip to continue');
+  }
+
+  if (input.clarificationPending) {
+    return {
+      status: ChatComposerStatus.Ready,
+      disabled: false,
+      busy: false,
+      placeholder: 'Pick an option above or type your own question, then send.',
+    };
   }
 
   if (input.loading) {

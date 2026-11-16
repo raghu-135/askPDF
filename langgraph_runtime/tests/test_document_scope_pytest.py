@@ -37,7 +37,8 @@ def test_attachment_scope_declines_on_low_prefetch_scores_despite_evidence_text(
         "question": "What is the population of Tokyo?",
     }
     assert attachment_retrieval_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
-    assert router_attachment_scope_decline(state, RouterRoute.CLARIFY.value) == DOCUMENT_SCOPE_DECLINE_ANSWER
+    assert router_attachment_scope_decline(state, RouterRoute.CLARIFY.value) is None
+    assert router_attachment_scope_decline(state, RouterRoute.DIRECT.value) is None
 
 
 def test_attachment_scope_keeps_in_scope_high_scoring_prefetch():
@@ -109,12 +110,43 @@ def test_router_post_retrieval_decline_not_blocked_by_document_route():
                 "raw_retriever_score": 0.21,
             }
         ],
-        "document_sources": [{"file_hash": "a" * 32, "score": 0.21}],
         "question": "What is the population of Tokyo?",
         "workflow_id": "router_rag_agent",
         "route": "document",
     }
     assert workflow_post_retrieval_scope_decline(state) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def test_attachment_scope_suppressed_on_follow_up_with_recent_dialogue():
+    state = {
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_evidence_text": "Unrelated prefetch excerpt.",
+            "document_sources": [{"file_hash": "a" * 32, "score": 0.12}],
+            "recent_history_text": (
+                "User: Compare them.\n"
+                "Assistant: MORAN compares against CRNN on ICDAR benchmarks."
+            ),
+        },
+        "question": "Compare them.",
+        "workflow_id": "router_rag_agent",
+        "route": "document",
+    }
+    assert attachment_retrieval_scope_decline(state) is None
+    assert workflow_post_retrieval_scope_decline(state) is None
+    assert router_attachment_scope_decline(state, RouterRoute.DIRECT.value) is None
+
+
+def test_attachment_scope_skips_decline_after_worker_document_sources():
+    state = {
+        "pre_fetch_bundle": {"documents": [{"file_hash": "a" * 32}]},
+        "document_sources": [
+            {"file_hash": "a" * 32, "score": 0.19, "snippet": "MORAN uses multi-object rectification."},
+        ],
+        "question": "How does MORAN compare with attention baselines?",
+        "workflow_id": "router_rag_agent",
+    }
+    assert attachment_retrieval_scope_decline(state) is None
 
 
 def test_router_post_retrieval_keeps_in_scope_when_doc_packets_lack_scores():

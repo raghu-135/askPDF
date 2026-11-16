@@ -433,3 +433,70 @@ export async function setBrowserAskMode(page) {
   if (await askBtn.isVisible({ timeout: 2000 }).catch(() => false)) return;
   throw new Error('Could not set browser access mode to Ask');
 }
+
+/** @param {import('playwright').Page} page */
+export function clarificationPanel(page) {
+  return page
+    .locator('div')
+    .filter({ has: page.getByText('I need a bit more clarification') })
+    .filter({ has: page.getByRole('button', { name: /Something else/i }) })
+    .last();
+}
+
+/** @param {import('playwright').Page} page */
+export async function waitClarificationCard(page) {
+  await page.getByText('I need a bit more clarification').waitFor({ timeout: 600_000 });
+  await page.getByRole('button', { name: /Something else/i }).waitFor({ timeout: 60_000 });
+}
+
+/** @param {import('playwright').Page} page */
+export async function waitOutOfSending(page) {
+  const sending = page.getByPlaceholder(/Sending/i);
+  if (await sending.isVisible({ timeout: 120_000 }).catch(() => false)) {
+    await sending.waitFor({ state: 'hidden', timeout: 900_000 });
+  }
+}
+
+/** @param {import('playwright').Page} page */
+export async function chatTranscriptText(page) {
+  return (await page.getByTestId('chat-message-list').innerText()).trim();
+}
+
+/** @param {string} text */
+export function assertNotScopeDecline(text) {
+  if (/attached documents do not address/i.test(text)) {
+    throw new Error(`Got scope-decline answer: ${text.slice(0, 320)}`);
+  }
+}
+
+/** @param {string} text */
+export function assertGroundedPdfAnswer(text, { extraPattern } = {}) {
+  assertNotScopeDecline(text);
+  const pattern = extraPattern || /(MORAN|DINER|encoder|architecture|layer|attention|rectification)/i;
+  if (!pattern.test(text)) {
+    throw new Error(`Answer does not look PDF-grounded: ${text.slice(-420)}`);
+  }
+}
+
+/**
+ * After a repeat ambiguous send, accept either a new clarification card or a grounded answer.
+ * @param {import('playwright').Page} page
+ */
+export async function waitRepeatClarifyOrGrounded(page, timeoutMs = 600_000) {
+  const card = page.getByText('I need a bit more clarification');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await card.isVisible().catch(() => false)) {
+      return 'clarification';
+    }
+    const text = await chatTranscriptText(page);
+    if (!/Sending/i.test(text)) {
+      assertNotScopeDecline(text);
+      if (/(MORAN|encoder|architecture|layer|attention|compare)/i.test(text)) {
+        return 'answered';
+      }
+    }
+    await sleep(2000);
+  }
+  throw new Error('Timed out waiting for clarification card or grounded repeat answer');
+}

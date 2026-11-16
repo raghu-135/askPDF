@@ -84,6 +84,7 @@ UNIT_TEST_FILES = [
     "test_control_plane_auth_pytest.py",
     "test_hermes_mcp_url_pytest.py",
     "test_runtime_events_pytest.py",
+    "test_clarification_product_pytest.py",
     "test_runtime_capability_gate_pytest.py",
     "test_runtime_capability_resolver_pytest.py",
     "test_runtime_contracts_neutral_pytest.py",

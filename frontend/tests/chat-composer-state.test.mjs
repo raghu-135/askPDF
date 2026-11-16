@@ -55,3 +55,21 @@ test('human review placeholder guides the user to resolve pending approval', () 
   const state = getChatComposerState({ ...readyInput, humanReviewPending: true });
   assert.equal(state.placeholder, 'Approve or skip to continue');
 });
+
+test('clarification pending keeps the composer enabled with a clarification placeholder', () => {
+  const state = getChatComposerState({ ...readyInput, clarificationPending: true });
+  assert.equal(state.status, 'ready');
+  assert.equal(state.disabled, false);
+  assert.equal(state.busy, false);
+  assert.match(state.placeholder, /Pick an option above/);
+});
+
+test('human review wins over clarification pending', () => {
+  const state = getChatComposerState({
+    ...readyInput,
+    humanReviewPending: true,
+    clarificationPending: true,
+  });
+  assert.equal(state.status, 'human_review_pending');
+  assert.equal(state.disabled, true);
+});
