@@ -172,16 +172,15 @@ async function reloadThreadChatWorkspace(page, deepLinkUrl, lineageHeadCanvasId)
 }
 
 async function openCanvasFromReloadedThread(page, canvasTitle) {
-  const overviewTab = page.getByRole('tab', { name: /Overview/i }).first();
-  if (await overviewTab.isVisible({ timeout: 10_000 }).catch(() => false)) {
-    await overviewTab.click();
-  }
-  const card = page.getByRole('button', { name: new RegExp(canvasTitle, 'i') }).last();
-  if (await card.isVisible({ timeout: 15_000 }).catch(() => false)) {
-    await card.click();
+  const canvasHeading = page.getByRole('heading', { name: new RegExp(`^${canvasTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i') }).first();
+  if (await canvasHeading.isVisible({ timeout: 8_000 }).catch(() => false)) {
     return;
   }
-  await page.getByText(canvasTitle, { exact: false }).last().click();
+  const card = page
+    .locator('.MuiPaper-root')
+    .filter({ hasText: 'Research canvas' })
+    .filter({ hasText: canvasTitle });
+  await card.last().getByRole('button', { name: /^Open$/ }).click({ timeout: 60_000 });
 }
 
 async function copyCanvasLinkFromTab(page) {
