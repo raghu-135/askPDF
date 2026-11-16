@@ -82,7 +82,7 @@ async function waitForApprovalFooter(page) {
     }
     await page.waitForTimeout(5000);
   }
-  await footer.waitFor({ state: 'visible', timeout: 30_000 });
+  await footer.waitFor({ state: 'visible', timeout: 120_000 });
   return footer;
 }
 

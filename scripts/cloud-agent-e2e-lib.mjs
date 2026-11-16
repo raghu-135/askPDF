@@ -412,12 +412,24 @@ export async function setBrowserAskMode(page) {
     })
     .first();
   await browserToggle.waitFor({ state: 'visible', timeout: 60_000 });
-  for (let i = 0; i < 6; i += 1) {
-    await browserToggle.click();
-    await page.waitForTimeout(350);
+  for (let i = 0; i < 8; i += 1) {
     if (await askBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
       return;
     }
+    const label = ((await browserToggle.textContent()) || '').trim();
+    if (/browser agent off/i.test(label)) {
+      await browserToggle.click();
+      await page.waitForTimeout(500);
+      continue;
+    }
+    if (/browser agent on/i.test(label)) {
+      await browserToggle.click();
+      await page.waitForTimeout(500);
+      continue;
+    }
+    await browserToggle.click();
+    await page.waitForTimeout(500);
   }
+  if (await askBtn.isVisible({ timeout: 2000 }).catch(() => false)) return;
   throw new Error('Could not set browser access mode to Ask');
 }
