@@ -1466,11 +1466,15 @@ async def resume_agent_run(
                 # execution result, but the final resume result must expose
                 # the product-level `agent_run` object so clients do not read
                 # `response.agent_run.status` from an incompatible payload.
+                from app.services.agent_runtime_projection import read_terminal_chat_answer_for_run
+
+                resume_answer = await read_terminal_chat_answer_for_run(result.run)
                 resume_response = {
                     "agent_run": compact_run,
                     "interrupt": result.interrupt,
                     "outcome": result.outcome,
                     "duplicate": result.duplicate,
+                    **({"answer": resume_answer} if resume_answer else {}),
                 }
                 await sink.queue.put({
                     "event": "__result__",
@@ -1480,6 +1484,7 @@ async def resume_agent_run(
                         "interrupt": result.interrupt,
                         "outcome": result.outcome,
                         "duplicate": result.duplicate,
+                        **({"answer": resume_answer} if resume_answer else {}),
                     },
                 })
             except AgentRunInterruptError as exc:
@@ -1559,11 +1564,17 @@ async def resume_agent_run(
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
+    from app.services.agent_runtime_projection import read_terminal_chat_answer_for_run
+
     repo = AgentWorkflowRepository()
     turns = await repo.list_chat_turns_for_run(result.run.id)
-    return {
+    resume_answer = await read_terminal_chat_answer_for_run(result.run)
+    payload = {
         "agent_run": await _run_payload_for_read(result.run, turns),
         "interrupt": result.interrupt,
         "outcome": result.outcome,
         "duplicate": result.duplicate,
     }
+    if resume_answer:
+        payload["answer"] = resume_answer
+    return payload

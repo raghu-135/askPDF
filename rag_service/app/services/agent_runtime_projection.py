@@ -14,6 +14,45 @@ from app.services.embedding_model_service import (
 
 logger = logging.getLogger(__name__)
 
+_DELEGATE_PLACEHOLDER_MARKERS = (
+    "waiting for your approval to continue the delegated workflow",
+)
+
+
+async def read_terminal_chat_answer_for_run(run: Any) -> str:
+    """Return the best persisted assistant answer for a chat or delegated child run."""
+
+    from app.product_orchestration.repository import AgentWorkflowRepository
+
+    repository = AgentWorkflowRepository()
+    candidate_run_ids: list[str] = []
+    parent_run_id = str(getattr(run, "parent_run_id", "") or "").strip()
+    if parent_run_id:
+        candidate_run_ids.append(parent_run_id)
+    run_id = str(getattr(run, "id", "") or "").strip()
+    if run_id:
+        candidate_run_ids.append(run_id)
+    for candidate_id in candidate_run_ids:
+        turns = await repository.list_chat_turns_for_run(candidate_id)
+        turn = next(
+            (
+                item for item in turns
+                if item.agent_run_turn_kind == "assistant_final" and item.agent_run_sequence == 0
+            ),
+            None,
+        )
+        if turn is None:
+            continue
+        payload = turn.payload if isinstance(turn.payload, dict) else {}
+        answer = str(payload.get("answer") or "").strip()
+        if not answer:
+            continue
+        lowered = answer.casefold()
+        if any(marker in lowered for marker in _DELEGATE_PLACEHOLDER_MARKERS):
+            continue
+        return answer
+    return ""
+
 
 class AgentRuntimeProjection:
     """Persist canonical product records after runtime execution completes."""

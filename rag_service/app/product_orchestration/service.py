@@ -981,12 +981,21 @@ class AgentRunService:
                     error=error_json,
                     result=result,
                 )
+                # Stop the delegate event writer before stamping resume guards so
+                # no late binding persistence invalidates the child's interrupt.
+                await close_agent_execution_sink(
+                    execution_event_sink,
+                    boundary_only=True,
+                )
                 paused_run = await self.repository.mark_run_awaiting_human(
                     run.id,
                     result.get("pending_interrupt") or {},
                     metrics_json=metrics,
                     debug_trace_json=debug_payload,
                 )
+                if paused_run is not None:
+                    result["pending_interrupt"] = paused_run.pending_interrupt_json
+                paused_run = await self.repository.stamp_pending_interrupt_resume_guard(run.id)
                 if paused_run is not None:
                     result["pending_interrupt"] = paused_run.pending_interrupt_json
             else:
@@ -998,6 +1007,15 @@ class AgentRunService:
                 )
                 debug_payload = trace_recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, result=result)
                 await self.repository.set_run_debug_trace(run.id, debug_payload)
+                await close_agent_execution_sink(
+                    execution_event_sink,
+                    terminal_event=(
+                        "run.failed"
+                        if status == AgentRunStatus.FAILED.value
+                        else "run.completed"
+                    ),
+                    terminal_data={"run_id": run.id, "status": status},
+                )
             return {
                 "child_workflow_id": child_workflow_id,
                 "child_run_id": run.id,

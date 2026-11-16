@@ -149,11 +149,32 @@ async function main() {
     }
     await guard.capture(page, 'auto-browser-06-tools-capability-answer-1440x900.png', { requireChatWorkspace: true });
 
+    await chatRateLimitPause();
+    await typeAndSendChat(
+      page,
+      'From the uploaded PDF only: what is the main topic of the document in one short sentence?',
+    );
+    const pdfAnswer = await waitForAssistantAnswer(page);
+    if (/do not address this question/i.test(pdfAnswer)) {
+      throw new Error(`PDF follow-up was scope-declined: ${pdfAnswer.slice(0, 240)}`);
+    }
+    await guard.capture(page, 'auto-browser-07-pdf-followup-answer-1440x900.png', { requireChatWorkspace: true });
+
+    const threadUrl = page.url();
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
+    await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 300_000 });
+    await waitForComposerReady(page);
+    await guard.capture(page, 'auto-browser-08-after-reload-thread-1440x900.png', { requireChatWorkspace: true });
+    if (!page.url().includes(threadUrl.split('?')[0])) {
+      console.warn('[auto-browser-proof] thread URL changed after reload:', threadUrl, '->', page.url());
+    }
+
     const metadata = {
       tested_sha: testedSha,
       model,
       assistant_preview: answer.slice(0, 280),
       tools_answer_preview: toolsAnswer.slice(0, 280),
+      pdf_followup_preview: pdfAnswer.slice(0, 280),
       screenshots: guard.paths.map((p) => ({
         path: p,
         basename: path.basename(p),

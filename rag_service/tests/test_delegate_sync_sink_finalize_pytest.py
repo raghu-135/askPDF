@@ -35,6 +35,12 @@ async def test_run_delegate_sync_closes_event_sink_when_child_awaits_human(monke
             pending_interrupt_json=interrupt,
         )
     )
+    service.repository.stamp_pending_interrupt_resume_guard = AsyncMock(
+        side_effect=lambda run_id: SimpleNamespace(
+            id=run_id,
+            pending_interrupt_json={"interrupt_id": "int-1", "status": "pending"},
+        )
+    )
 
     monkeypatch.setattr(
         "app.product_orchestration.service.get_thread_settings",
