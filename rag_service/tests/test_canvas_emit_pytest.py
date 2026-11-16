@@ -268,6 +268,7 @@ async def test_publish_canvas_supersedes_merges_shrunk_draft(monkeypatch):
     table = next(block for block in matrix.blocks if block.type == "table")
     assert len(table.rows) == 5
     assert spec.summary == "Summary added"
+    assert len(spec.sections) >= 4
 
 
 @pytest.mark.asyncio

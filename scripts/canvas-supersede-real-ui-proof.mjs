@@ -129,8 +129,40 @@ function parseCanvasDeepLink(url) {
   const u = new URL(url);
   const threadId = u.searchParams.get('thread');
   const canvasId = u.searchParams.get('canvas');
+  const projectId = u.searchParams.get('project');
   if (!threadId || !canvasId) throw new Error(`Clipboard is not a canvas deep link: ${url}`);
-  return { threadId, canvasId, url: u.toString() };
+  return { threadId, canvasId, projectId, url: u.toString() };
+}
+
+function sectionTitles(spec) {
+  const safe = spec && typeof spec === 'object' ? spec : {};
+  return (safe.sections || []).map((section) => String(section.title || '').trim()).filter(Boolean);
+}
+
+async function reloadThreadChatWorkspace(page, deepLinkUrl) {
+  const reloadTarget = new URL(deepLinkUrl);
+  reloadTarget.searchParams.delete('canvas');
+  await page.goto(reloadTarget.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await waitForNoLoadingShell(page);
+  await waitForThreadWorkspaceReady(page);
+  await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 180_000 });
+  await page.getByText('Research canvas', { exact: true }).nth(1).waitFor({
+    state: 'visible',
+    timeout: 120_000,
+  });
+}
+
+async function openCanvasFromReloadedThread(page, canvasTitle) {
+  const overviewTab = page.getByRole('tab', { name: /Overview/i }).first();
+  if (await overviewTab.isVisible({ timeout: 10_000 }).catch(() => false)) {
+    await overviewTab.click();
+  }
+  const card = page.getByRole('button', { name: new RegExp(canvasTitle, 'i') }).last();
+  if (await card.isVisible({ timeout: 15_000 }).catch(() => false)) {
+    await card.click();
+    return;
+  }
+  await page.getByText(canvasTitle, { exact: false }).last().click();
 }
 
 async function copyCanvasLinkFromTab(page) {
@@ -209,6 +241,7 @@ async function main() {
     assistant: 'chat-assistant-reply-1440x900.png',
     after: 'canvas-after-same-id-1440x900.png',
     reload: 'chat-after-reload-1440x900.png',
+    reloadCanvas: 'canvas-after-reload-1440x900.png',
   };
 
   try {
@@ -282,22 +315,9 @@ async function main() {
       throw new Error(`Expected at least 4 persisted messages after update, got ${messageCount}`);
     }
 
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
-    await waitForNoLoadingShell(page);
-    const overviewTab = page.getByRole('tab', { name: /Overview/i }).first();
-    if (await overviewTab.isVisible({ timeout: 60_000 }).catch(() => false)) {
-      await overviewTab.click();
-      await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
-        .waitFor({ state: 'visible', timeout: 120_000 })
-        .catch(() => undefined);
-    }
-    const messageList = page.getByTestId('chat-message-list');
-    if (await messageList.isVisible({ timeout: 60_000 }).catch(() => false)) {
-      await messageList.waitFor({ state: 'visible', timeout: 60_000 });
-    }
-    await guard.capture(page, shots.reload, { requireChatWorkspace: false, allowLoadingShell: true });
-
+    const beforeTitles = new Set(sectionTitles(beforeRecord.spec));
     const afterMetrics = canvasSpecMetrics(afterRecord.spec);
+    const afterTitles = sectionTitles(afterRecord.spec);
     if (
       afterMetrics.claimCount < beforeMetrics.claimCount
       || afterMetrics.sourceCount < beforeMetrics.sourceCount
@@ -307,6 +327,21 @@ async function main() {
         + `sources ${beforeMetrics.sourceCount} -> ${afterMetrics.sourceCount})`,
       );
     }
+    const addedSection = afterTitles.some((title) => !beforeTitles.has(title));
+    if (!addedSection && afterTitles.length <= beforeTitles.size) {
+      throw new Error(
+        `Supersede did not add a section (before=${afterTitles.length} titles=${afterTitles.join('|')})`,
+      );
+    }
+
+    await reloadThreadChatWorkspace(page, deepLink);
+    await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
+      .waitFor({ state: 'visible', timeout: 120_000 });
+    await guard.capture(page, shots.reload, { requireChatWorkspace: true });
+
+    await openCanvasFromReloadedThread(page, afterRecord.title);
+    await page.getByRole('heading', { name: afterRecord.title }).first().waitFor({ timeout: 120_000 });
+    await guard.capture(page, shots.reloadCanvas, { requireChatWorkspace: true });
 
     const resolvedHeadId = afterRecord.id;
     const screenshotMeta = guard.paths.map((p) => ({

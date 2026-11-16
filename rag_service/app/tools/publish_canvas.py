@@ -36,7 +36,11 @@ from app.services.canvas_service import (
     resolve_quoted_canvas_supersedes_id,
 )
 from app.tools.context import ToolInvocationContext
-from runtime_protocol.canvas_revision_context import build_revision_snapshot, merge_publish_canvas_draft
+from runtime_protocol.canvas_revision_context import (
+    build_revision_snapshot,
+    merge_canvas_supersede_spec,
+    merge_publish_canvas_draft,
+)
 
 
 class PublishCanvasRequest(BaseModel):
@@ -162,9 +166,23 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
             user_message=str(exc),
         )
 
+    baseline_spec: dict[str, Any] | None = None
+    if resolved_supersedes_id:
+        try:
+            previous = await service.get(context.thread_id, resolved_supersedes_id, resolve_current=True)
+            raw_spec = previous.get("spec")
+            if isinstance(raw_spec, dict):
+                baseline_spec = raw_spec
+        except CanvasNotFoundError:
+            baseline_spec = None
+
     if request.spec is not None:
         try:
             spec = request.spec if isinstance(request.spec, CanvasSpec) else parse_canvas_spec(request.spec)
+            if baseline_spec is not None:
+                merged = merge_canvas_supersede_spec(baseline_spec, spec.model_dump(mode="json"))
+                spec = parse_canvas_spec(merged)
+                supersedes_warnings.append("supersedes_spec_merged_with_baseline")
         except (ValidationError, ValueError) as exc:
             return make_tool_error_result(
                 tool_name="publish_canvas",
@@ -182,22 +200,18 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
                 "summary": request.summary,
                 "claims": request.claims,
             }
-            if resolved_supersedes_id:
-                try:
-                    previous = await service.get(context.thread_id, resolved_supersedes_id, resolve_current=True)
-                    baseline = build_revision_snapshot(
-                        canvas_id=str(previous.get("requested_id") or previous.get("id") or resolved_supersedes_id),
-                        lineage_head_id=str(previous.get("id") or resolved_supersedes_id),
-                        title=str(previous.get("title") or ""),
-                        spec=previous.get("spec") if isinstance(previous.get("spec"), dict) else {},
-                    )
-                    draft_payload = merge_publish_canvas_draft(
-                        baseline["publish_canvas_draft"],
-                        draft_payload,
-                    )
-                    supersedes_warnings.append("supersedes_draft_merged_with_baseline")
-                except CanvasNotFoundError:
-                    pass
+            if baseline_spec is not None:
+                baseline = build_revision_snapshot(
+                    canvas_id=str(resolved_supersedes_id or ""),
+                    lineage_head_id=str(resolved_supersedes_id or ""),
+                    title=str(draft_payload.get("title") or ""),
+                    spec=baseline_spec,
+                )
+                draft_payload = merge_publish_canvas_draft(
+                    baseline["publish_canvas_draft"],
+                    draft_payload,
+                )
+                supersedes_warnings.append("supersedes_draft_merged_with_baseline")
             draft = CanvasPublishDraft.model_validate(draft_payload)
         except ValidationError as exc:
             return make_tool_error_result(
@@ -214,6 +228,10 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
                 thread_file_hashes=thread_file_hashes,
                 embedding_model=embedding_model,
             )
+            if baseline_spec is not None:
+                merged = merge_canvas_supersede_spec(baseline_spec, spec.model_dump(mode="json"))
+                spec = parse_canvas_spec(merged)
+                supersedes_warnings.append("supersedes_spec_merged_with_baseline")
         except CanvasCompileError as exc:
             return make_tool_error_result(
                 tool_name="publish_canvas",

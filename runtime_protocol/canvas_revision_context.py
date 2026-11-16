@@ -2,8 +2,235 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, Mapping
+
+_CANONICAL_META_SECTIONS = frozenset({"overview", "sources"})
+_BODY_SECTION_MARKERS = ("matrix", "comparison", "timeline", "compare")
+
+
+def _section_key(title: Any) -> str:
+    return str(title or "").strip().lower()
+
+
+def _is_core_body_section(title: str) -> bool:
+    key = _section_key(title)
+    if key in _CANONICAL_META_SECTIONS:
+        return True
+    return any(marker in key for marker in _BODY_SECTION_MARKERS)
+
+
+def _spec_sections(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    for section in spec.get("sections") or []:
+        if isinstance(section, Mapping):
+            sections.append(copy.deepcopy(dict(section)))
+    return sections
+
+
+def _normalize_md(text: Any) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _markdown_blocks(section: Mapping[str, Any]) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    for block in section.get("blocks") or []:
+        if isinstance(block, Mapping) and block.get("type") == "markdown":
+            text = str(block.get("text") or "").strip()
+            if text:
+                blocks.append(dict(block))
+    return blocks
+
+
+def _title_from_markdown(text: str) -> str:
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip()
+            if heading:
+                return heading[:120]
+    first = str(text or "").splitlines()[0].strip() if str(text or "").strip() else ""
+    return (first[:120] if first else "Opening")
+
+
+def _extra_overview_markdown(
+    baseline: Mapping[str, Any],
+    incoming: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    baseline_texts = {_normalize_md(block.get("text")) for block in _markdown_blocks(baseline)}
+    extras: list[dict[str, Any]] = []
+    for block in _markdown_blocks(incoming):
+        text = _normalize_md(block.get("text"))
+        if text and text not in baseline_texts:
+            extras.append(dict(block))
+    return extras
+
+
+def _non_markdown_blocks(section: Mapping[str, Any]) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    for block in section.get("blocks") or []:
+        if isinstance(block, Mapping) and block.get("type") != "markdown":
+            kept.append(copy.deepcopy(dict(block)))
+    return kept
+
+
+def _merge_table_block(baseline: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
+    base_rows = list(baseline.get("rows") or [])
+    incoming_rows = list(incoming.get("rows") or [])
+    rows = incoming_rows if len(incoming_rows) >= len(base_rows) else base_rows
+    merged = {**dict(baseline), **dict(incoming), "rows": rows}
+    return merged
+
+
+def _merge_table_section(baseline: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
+    base_blocks = [dict(b) for b in baseline.get("blocks") or [] if isinstance(b, Mapping)]
+    incoming_blocks = [dict(b) for b in incoming.get("blocks") or [] if isinstance(b, Mapping)]
+    merged_blocks: list[dict[str, Any]] = []
+    used_incoming: set[int] = set()
+    for base_block in base_blocks:
+        if base_block.get("type") != "table":
+            merged_blocks.append(copy.deepcopy(base_block))
+            continue
+        partner = None
+        partner_index = None
+        for index, inc_block in enumerate(incoming_blocks):
+            if index in used_incoming or inc_block.get("type") != "table":
+                continue
+            partner = inc_block
+            partner_index = index
+            break
+        if partner is None:
+            merged_blocks.append(copy.deepcopy(base_block))
+        else:
+            used_incoming.add(partner_index)
+            merged_blocks.append(_merge_table_block(base_block, partner))
+    for index, inc_block in enumerate(incoming_blocks):
+        if index not in used_incoming:
+            merged_blocks.append(copy.deepcopy(inc_block))
+    return {**dict(baseline), **dict(incoming), "blocks": merged_blocks}
+
+
+def _merge_sources_section(baseline: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
+    citations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_citation(item: Mapping[str, Any]) -> None:
+        key = json.dumps(item, sort_keys=True, separators=(",", ":"))
+        if key in seen:
+            return
+        seen.add(key)
+        citations.append(dict(item))
+
+    for section in (baseline, incoming):
+        for block in section.get("blocks") or []:
+            if not isinstance(block, Mapping):
+                continue
+            if block.get("type") not in ("source_list", "sources"):
+                continue
+            for citation in block.get("citations") or []:
+                if isinstance(citation, Mapping):
+                    add_citation(citation)
+    return {
+        **dict(baseline),
+        **dict(incoming),
+        "blocks": [{"type": "sources", "citations": citations}],
+    }
+
+
+def merge_canvas_supersede_spec(
+    baseline: Mapping[str, Any],
+    incoming: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Preserve baseline evidence while applying additive section and overview edits."""
+
+    baseline_sections = _spec_sections(baseline)
+    incoming_sections = _spec_sections(incoming)
+    baseline_by_key = {_section_key(section.get("title")): section for section in baseline_sections}
+    incoming_by_key = {_section_key(section.get("title")): section for section in incoming_sections}
+
+    preface_sections: list[dict[str, Any]] = []
+    for section in incoming_sections:
+        title = str(section.get("title") or "")
+        key = _section_key(title)
+        if key in baseline_by_key or _is_core_body_section(title):
+            continue
+        if key in _CANONICAL_META_SECTIONS:
+            continue
+        preface_sections.append(copy.deepcopy(section))
+
+    overview_baseline = baseline_by_key.get("overview")
+    overview_incoming = incoming_by_key.get("overview")
+    if overview_baseline and overview_incoming:
+        extras = _extra_overview_markdown(overview_baseline, overview_incoming)
+        if extras:
+            preface_sections.insert(
+                0,
+                {"title": _title_from_markdown(str(extras[0].get("text") or "")), "blocks": extras},
+            )
+            kept_md = [
+                block
+                for block in _markdown_blocks(overview_incoming)
+                if _normalize_md(block.get("text")) in {
+                    _normalize_md(item.get("text")) for item in _markdown_blocks(overview_baseline)
+                }
+            ]
+            overview_incoming = {
+                **dict(overview_incoming),
+                "blocks": [*_non_markdown_blocks(overview_baseline), *kept_md],
+            }
+            incoming_by_key["overview"] = overview_incoming
+
+    merged_sections: list[dict[str, Any]] = [*preface_sections]
+    for baseline_section in baseline_sections:
+        key = _section_key(baseline_section.get("title"))
+        incoming_section = incoming_by_key.get(key)
+        if incoming_section is None:
+            merged_sections.append(copy.deepcopy(baseline_section))
+            continue
+        if key == "overview":
+            merged_sections.append({
+                **copy.deepcopy(baseline_section),
+                **copy.deepcopy(incoming_section),
+                "blocks": [
+                    *_non_markdown_blocks(baseline_section),
+                    *_markdown_blocks(overview_incoming or incoming_section),
+                ],
+            })
+        elif any(
+            isinstance(block, Mapping) and block.get("type") == "table"
+            for block in [
+                *(baseline_section.get("blocks") or []),
+                *(incoming_section.get("blocks") or []),
+            ]
+        ):
+            merged_sections.append(_merge_table_section(baseline_section, incoming_section))
+        elif key == "sources":
+            merged_sections.append(_merge_sources_section(baseline_section, incoming_section))
+        else:
+            merged_sections.append(copy.deepcopy(incoming_section))
+
+    for section in incoming_sections:
+        key = _section_key(section.get("title"))
+        if key in baseline_by_key:
+            continue
+        if any(_section_key(existing.get("title")) == key for existing in merged_sections):
+            continue
+        if _is_core_body_section(str(section.get("title") or "")):
+            merged_sections.append(copy.deepcopy(section))
+
+    title = str(incoming.get("title") or baseline.get("title") or "").strip()
+    summary = incoming.get("summary")
+    if summary is None:
+        summary = baseline.get("summary")
+    return {
+        **copy.deepcopy(dict(baseline)),
+        **copy.deepcopy(dict(incoming)),
+        "schema_version": incoming.get("schema_version") or baseline.get("schema_version") or 1,
+        "title": title,
+        "summary": summary,
+        "sections": merged_sections,
+    }
 
 
 def _cell_text(cell: Any) -> str:
@@ -294,7 +521,8 @@ def format_quoted_canvas_revisions_for_prompt(revisions: list[Mapping[str, Any]]
         "When the user asks to change this canvas (summary, wording, sections, etc.), you **must** call "
         "`publish_canvas` with `supersedes_id` set to the quoted canvas id. Start from the draft below, "
         "keep every existing claim and `source_id` unless the user explicitly asks to remove one, and apply "
-        "only the requested edit (for example set `summary` or extend the overview). "
+        "only the requested edit. When the user asks for a new section, publish it as an "
+        "extra section (do not fold it into the overview only). "
         "Do not shrink the claim or source lists.",
         "",
     ]

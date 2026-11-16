@@ -1,6 +1,7 @@
 from runtime_protocol.canvas_revision_context import (
     build_revision_snapshot,
     format_quoted_canvas_revisions_for_prompt,
+    merge_canvas_supersede_spec,
     merge_publish_canvas_draft,
 )
 
@@ -82,6 +83,33 @@ def test_merge_publish_canvas_draft_restores_dropped_claims_on_supersede():
     merged = merge_publish_canvas_draft(baseline, incoming)
     assert merged["summary"] == "New summary at top"
     assert len(merged["claims"]) == 5
+
+
+def test_merge_canvas_supersede_spec_adds_new_section_and_preserves_claims():
+    baseline = _matrix_spec_with_five_claims()
+    incoming = {
+        "schema_version": 1,
+        "title": "Updated",
+        "summary": "Top summary",
+        "sections": [
+            {
+                "title": "Overview",
+                "blocks": [
+                    {"type": "stat", "value": "5", "label": "Claims reviewed", "tone": "info"},
+                    {"type": "markdown", "text": "Original summary"},
+                    {"type": "markdown", "text": "Top summary"},
+                ],
+            },
+            *baseline["sections"][1:],
+        ],
+    }
+    merged = merge_canvas_supersede_spec(baseline, incoming)
+    titles = [section["title"] for section in merged["sections"]]
+    assert len(titles) >= 4
+    assert titles[0] != "Overview"
+    matrix = next(section for section in merged["sections"] if section["title"] == "Evidence matrix")
+    table = next(block for block in matrix["blocks"] if block["type"] == "table")
+    assert len(table["rows"]) == 5
 
 
 def test_canvas_prompt_includes_revision_baseline():
