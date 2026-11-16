@@ -12,7 +12,7 @@ From the repository root (see also **Cloud Agent VM setup** in `AGENTS.md`):
 bash scripts/cloud-agent-setup.sh stack
 ```
 
-Uses `docker-compose.yml` plus `docker-compose.vm-hostgateway.override.yml` so
+Uses `docker-compose.yml` plus `docker-compose.override.yml` with `COMPOSE_PROFILES=hermes` so
 containers reach Postgres, Weaviate, and runtimes via `host.docker.internal`, and
 so the host OpenRouter proxy on `:12345` serves `LLM_API_URL` (keys come from
 agent secrets, never committed or logged).

@@ -27,12 +27,12 @@ Set up the environment and start the stack:
 
     cp .env.example .env
     # Edit .env: LLM_API_URL, and OPENAI_API_KEY when the server requires it.
-    docker compose up --build
+    docker compose -f docker-compose.yml -f docker-compose.override.yml up --build
 
 Open http://localhost:3000.
 
-`.env.example` sets `COMPOSE_PROFILES=hermes`, so Hermes starts with the
-default stack. Clear that variable to run without Hermes.
+`.env.example` sets `COMPOSE_PROFILES=hermes`, so the product stack and
+Hermes start together. Drop `hermes` from that list to omit Hermes services.
 
 ### LLM provider authentication
 

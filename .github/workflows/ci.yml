@@ -19,7 +19,10 @@ permissions:
   packages: write
 
 env:
-  COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
+  COMPOSE_FILE: docker-compose.yml:docker-compose.override.yml
+  ASKPDF_CI_MAIN_PROFILES: ""
+  ASKPDF_CI_TEST_PROFILES: test
+  ASKPDF_CI_RUNTIME_PROFILES: integration
   WEAVIATE_HYBRID_ALPHA: "0.7"
   QUERY_DEFAULTS_LIMIT: "20"
   LOCAL_EMBEDDING_MODEL: BAAI/bge-m3
@@ -158,7 +161,7 @@ jobs:
 
       - name: Stop test services
         if: always()
-        run: docker compose --env-file .env.ci -p askpdf-test -f docker-compose.test.yml -f docker-compose.test.ci.yml down --volumes --remove-orphans
+        run: COMPOSE_PROFILES=test docker compose --env-file .env.ci -p askpdf-test -f docker-compose.yml -f docker-compose.override.yml down --volumes --remove-orphans
 
   hermes-runtime-proof:
     name: Hermes runtime proof
@@ -200,7 +203,6 @@ jobs:
       - name: Stop Hermes proof services
         if: always()
         run: |
-          docker compose --env-file .env.ci -p askpdf-hermes-ci \
-            -f docker-compose.runtime-integration.yml \
-            -f docker-compose.runtime-integration.ci.yml \
+          COMPOSE_PROFILES=integration docker compose --env-file .env.ci -p askpdf-hermes-ci \
+            -f docker-compose.yml -f docker-compose.override.yml \
             down --volumes --remove-orphans
