@@ -214,7 +214,12 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
     await createProject.waitFor({ timeout: 60_000 });
     await createProject.click();
     await page.getByRole('textbox').first().fill(projectLabel);
-    await page.getByRole('button', { name: /^Create Project$/i }).click();
+    const confirmCreateProject = page.getByRole('button', { name: /^Create Project$/i });
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      if (await confirmCreateProject.isEnabled().catch(() => false)) break;
+      await page.waitForTimeout(1000);
+    }
+    await confirmCreateProject.click({ timeout: 120_000 });
     await page.waitForTimeout(1200);
   } else {
     const match = await createInExisting.innerText();
@@ -332,8 +337,10 @@ export async function waitForAssistantAnswer(page, options = {}) {
   const composer = page.getByTestId('chat-composer-input');
   await composer.waitFor({ timeout: 180_000 });
   const sending = page.getByPlaceholder(/Sending/i);
+  const sendingTimeout = Number(options.sendingTimeoutMs)
+    || (mustMatch ? 1_200_000 : 300_000);
   if (await sending.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await sending.waitFor({ state: 'hidden', timeout: mustMatch ? 600_000 : 300_000 });
+    await sending.waitFor({ state: 'hidden', timeout: sendingTimeout });
   }
   await page.waitForFunction(
     () => {

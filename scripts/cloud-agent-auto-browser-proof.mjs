@@ -35,6 +35,24 @@ function gitSha() {
   return r.status === 0 ? r.stdout.trim() : 'unknown';
 }
 
+async function waitForServiceReady() {
+  const apiBase = process.env.ASKPDF_API_URL || 'http://127.0.0.1:8000';
+  const appBase = process.env.ASKPDF_E2E_BASE_URL || DEFAULT_BASE_URL;
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    try {
+      const [apiOk, appOk] = await Promise.all([
+        fetch(`${apiBase}/health`).then((r) => r.ok).catch(() => false),
+        fetch(appBase).then((r) => r.ok).catch(() => false),
+      ]);
+      if (apiOk && appOk) return;
+    } catch {
+      // retry
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error(`Services not ready (api=${apiBase}, app=${appBase})`);
+}
+
 async function ensureAutoWorkflow(page) {
   const workflow = page.getByRole('combobox', { name: /^Agent workflow/i }).first();
   if (!(await workflow.isVisible({ timeout: 8000 }).catch(() => false))) {
@@ -100,6 +118,7 @@ async function main() {
   const testedSha = gitSha();
 
   try {
+    await waitForServiceReady();
     await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
     await ensureProjectAndThread(page);
     const model = await selectModel(page);
