@@ -111,13 +111,11 @@ async function waitForCanvasSupersede(page, admin, threadId, canvasId, beforeRec
     if (afterRecord.id !== beforeRecord.id) {
       return afterRecord;
     }
-    const beforeSections = (beforeRecord.spec?.sections || []).map((s) => s.title).join('|');
-    const afterSections = (afterRecord.spec?.sections || []).map((s) => s.title).join('|');
-    const addedSummarySection = /summary/i.test(afterSections) && !/summary/i.test(beforeSections);
-    const beforeSummary = String(beforeRecord.summary || beforeRecord.spec?.summary || '');
-    const afterSummary = String(afterRecord.summary || afterRecord.spec?.summary || '');
-    const summaryChanged = afterSummary.length > beforeSummary.length + 12;
-    if (addedSummarySection || summaryChanged) {
+    const beforeTitles = new Set(sectionTitles(beforeRecord.spec));
+    const afterTitles = sectionTitles(afterRecord.spec);
+    const addedSection = afterTitles.some((title) => !beforeTitles.has(title))
+      || afterTitles.length > beforeTitles.size;
+    if (addedSection) {
       return afterRecord;
     }
     await page.waitForTimeout(8000);

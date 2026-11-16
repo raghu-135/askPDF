@@ -54,6 +54,40 @@ def _title_from_markdown(text: str) -> str:
     return (first[:120] if first else "Opening")
 
 
+def _summary_promoted_as_preface(
+    baseline: Mapping[str, Any],
+    incoming: Mapping[str, Any],
+    sections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """When supersede updates the spec summary, surface it as its own section."""
+
+    incoming_summary = str(incoming.get("summary") or "").strip()
+    if not incoming_summary:
+        return sections
+    baseline_summary = str(baseline.get("summary") or "").strip()
+    if _normalize_md(incoming_summary) == _normalize_md(baseline_summary):
+        return sections
+
+    incoming_norm = _normalize_md(incoming_summary)
+    for section in sections:
+        key = _section_key(section.get("title"))
+        if key in _CANONICAL_META_SECTIONS:
+            continue
+        for block in _markdown_blocks(section):
+            block_norm = _normalize_md(block.get("text"))
+            if block_norm == incoming_norm or incoming_norm in block_norm:
+                return sections
+
+    preface_title = _title_from_markdown(incoming_summary)
+    if any(_section_key(section.get("title")) == _section_key(preface_title) for section in sections):
+        return sections
+    preface = {
+        "title": preface_title,
+        "blocks": [{"type": "markdown", "text": incoming_summary}],
+    }
+    return [preface, *sections]
+
+
 def _extra_overview_markdown(
     baseline: Mapping[str, Any],
     incoming: Mapping[str, Any],
@@ -223,6 +257,7 @@ def merge_canvas_supersede_spec(
     summary = incoming.get("summary")
     if summary is None:
         summary = baseline.get("summary")
+    merged_sections = _summary_promoted_as_preface(baseline, incoming, merged_sections)
     return {
         **copy.deepcopy(dict(baseline)),
         **copy.deepcopy(dict(incoming)),
