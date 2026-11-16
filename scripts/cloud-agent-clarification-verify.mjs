@@ -29,7 +29,7 @@ import {
   typeAndSendChat,
   uploadPdfThroughUi,
   waitClarificationCard,
-  waitComposerReady,
+  waitForComposerReady,
   waitOutOfSending,
   waitRepeatClarifyOrGrounded,
   waitForThreadWorkspaceReady,
@@ -62,7 +62,9 @@ async function seedComposerFromOption(page, composer) {
   if (!optionText) {
     throw new Error('No clarification option matching the uploaded PDF was found');
   }
-  await decisionPanel.locator('button[aria-label^="Send "]').nth(optionIndex).click();
+  const sendOption = decisionPanel.locator('button[aria-label^="Send "]').nth(optionIndex);
+  await sendOption.scrollIntoViewIfNeeded();
+  await sendOption.evaluate((node) => node.click());
   await composer.waitFor({ state: 'visible', timeout: 30_000 });
   const seeded = (await composer.inputValue()).trim();
   if (!seeded.includes(optionText.slice(0, Math.min(24, optionText.length)))) {
