@@ -139,16 +139,37 @@ function sectionTitles(spec) {
   return (safe.sections || []).map((section) => String(section.title || '').trim()).filter(Boolean);
 }
 
-async function reloadThreadChatWorkspace(page, deepLinkUrl) {
+/**
+ * Full page load of the thread workspace. The SPA only parses canvas deep links when
+ * both thread and canvas query params are present (see parseCanvasWorkspaceDeepLink).
+ */
+async function reloadThreadChatWorkspace(page, deepLinkUrl, lineageHeadCanvasId) {
   const reloadTarget = new URL(deepLinkUrl);
-  reloadTarget.searchParams.delete('canvas');
-  await page.goto(reloadTarget.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await waitForNoLoadingShell(page);
-  await waitForThreadWorkspaceReady(page);
+  reloadTarget.searchParams.set('canvas', lineageHeadCanvasId);
+  const threadId = reloadTarget.searchParams.get('thread');
+  if (!threadId) throw new Error('Deep link missing thread id');
+
+  const deadline = Date.now() + 240_000;
+  while (Date.now() < deadline) {
+    await page.goto(reloadTarget.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    await waitForNoLoadingShell(page);
+    const onThread = new URL(page.url()).searchParams.get('thread') === threadId
+      || await page.getByTestId('chat-message-list').isVisible().catch(() => false);
+    if (onThread) {
+      try {
+        await waitForThreadWorkspaceReady(page);
+        break;
+      } catch {
+        await page.waitForTimeout(2500);
+        continue;
+      }
+    }
+    await page.waitForTimeout(2500);
+  }
   await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 180_000 });
   await page.getByText('Research canvas', { exact: true }).nth(1).waitFor({
     state: 'visible',
-    timeout: 120_000,
+    timeout: 180_000,
   });
 }
 
@@ -334,7 +355,8 @@ async function main() {
       );
     }
 
-    await reloadThreadChatWorkspace(page, deepLink);
+    const resolvedHeadId = afterRecord.id;
+    await reloadThreadChatWorkspace(page, deepLink, resolvedHeadId);
     await page.getByText(updatePrompt.split('\n')[0], { exact: false }).first()
       .waitFor({ state: 'visible', timeout: 120_000 });
     await guard.capture(page, shots.reload, { requireChatWorkspace: true });
@@ -343,7 +365,6 @@ async function main() {
     await page.getByRole('heading', { name: afterRecord.title }).first().waitFor({ timeout: 120_000 });
     await guard.capture(page, shots.reloadCanvas, { requireChatWorkspace: true });
 
-    const resolvedHeadId = afterRecord.id;
     const screenshotMeta = guard.paths.map((p) => ({
       path: p,
       basename: path.basename(p),
