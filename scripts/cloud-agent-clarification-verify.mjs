@@ -139,8 +139,15 @@ async function main() {
   await waitForComposerReady(page);
   await typeAndSendChat(page, QUESTION);
   await waitClarificationCard(page);
+  const cancelPanel = page
+    .locator('div')
+    .filter({ has: page.getByText('I need a bit more clarification') })
+    .filter({ has: page.getByRole('button', { name: /Something else/i }) })
+    .last();
   await guard.capture(page, 'clarification-10-card-before-cancel.png', { requireChatWorkspace: true });
-  await page.getByLabel('Close decision panel').click({ force: true });
+  const closeBtn = cancelPanel.getByRole('button', { name: /Close decision panel/i });
+  await closeBtn.scrollIntoViewIfNeeded();
+  await closeBtn.click();
   await waitForComposerReady(page);
   const reseed = await composer.inputValue();
   if (!reseed.includes(QUESTION)) {

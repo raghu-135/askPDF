@@ -64,6 +64,7 @@ from langgraph_runtime.workflows.corrective_nodes import (
     normalize_retrieval_quality_report,
     retrieval_quality_contract_errors,
 )
+from langgraph_runtime.workflows.document_scope import thread_has_attached_documents
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.corrective_contracts import (
     CORRECTIVE_BUDGET_REASONS,
@@ -894,8 +895,9 @@ class NodeRegistry:
         if attachment_scope_decline:
             if route == RouterRoute.CLARIFY.value and len(clarification_options or []) >= 2:
                 attachment_scope_decline = None
-            elif route == RouterRoute.DOCUMENT.value:
+            elif route in {RouterRoute.DOCUMENT.value, RouterRoute.DIRECT.value} and thread_has_attached_documents(state):
                 # Let the document worker retrieve before any attachment scope decline.
+                route = RouterRoute.DOCUMENT.value
                 attachment_scope_decline = None
             else:
                 route = RouterRoute.DIRECT.value
