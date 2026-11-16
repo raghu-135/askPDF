@@ -141,7 +141,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: askpdf-ci-image-manifest
-          path: /tmp
+          path: /tmp/askpdf-ci-artifact
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -152,7 +152,7 @@ jobs:
 
       - name: Load pre-built CI images
         run: |
-          mv /tmp/askpdf-ci-images.txt "${ASKPDF_CI_IMAGE_MANIFEST}"
+          cp /tmp/askpdf-ci-artifact/askpdf-ci-images.txt "${ASKPDF_CI_IMAGE_MANIFEST}"
           bash scripts/ci_docker_load.sh
 
       - name: Create clean CI environment
@@ -170,7 +170,7 @@ jobs:
 
       - name: Stop test services
         if: always()
-        run: docker compose -p askpdf-test -f docker-compose.test.yml -f docker-compose.test.ci.yml down --volumes --remove-orphans
+        run: docker compose --env-file .env.ci -p askpdf-test -f docker-compose.test.yml -f docker-compose.test.ci.yml down --volumes --remove-orphans
 
   hermes-runtime-proof:
     name: Hermes runtime proof
@@ -189,7 +189,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: askpdf-ci-image-manifest
-          path: /tmp
+          path: /tmp/askpdf-ci-artifact
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -200,7 +200,7 @@ jobs:
 
       - name: Load pre-built CI images
         run: |
-          mv /tmp/askpdf-ci-images.txt "${ASKPDF_CI_IMAGE_MANIFEST}"
+          cp /tmp/askpdf-ci-artifact/askpdf-ci-images.txt "${ASKPDF_CI_IMAGE_MANIFEST}"
           bash scripts/ci_docker_load.sh
 
       - name: Create clean CI environment
@@ -212,7 +212,7 @@ jobs:
       - name: Stop Hermes proof services
         if: always()
         run: |
-          docker compose -p askpdf-hermes-ci \
+          docker compose --env-file .env.ci -p askpdf-hermes-ci \
             -f docker-compose.runtime-integration.yml \
             -f docker-compose.runtime-integration.ci.yml \
             down --volumes --remove-orphans
