@@ -933,6 +933,10 @@ services:
     profiles:
     - integration
     build:
+      context: .
+      dockerfile: rag_service/Dockerfile
+      args:
+        DOWNLOAD_LOCAL_MODELS: 'false'
   integration-runtime-db-bootstrap:
     image: askpdf-langgraph-runtime
     build:
