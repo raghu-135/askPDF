@@ -137,7 +137,9 @@ async function main() {
   await chatRateLimitPause();
   await page.waitForTimeout(4000);
   const cancelThreadName = `clarify-cancel-${Date.now()}`;
-  await page.getByRole('button', { name: /Create Thread/i }).first().click();
+  const createInProject = page.getByRole('button', { name: /Create thread in /i }).first();
+  await createInProject.waitFor({ timeout: 60_000 });
+  await createInProject.click();
   await page.getByRole('textbox').first().fill(cancelThreadName);
   await page.getByRole('button', { name: /^Create$/i }).click();
   await waitForThreadWorkspaceReady(page);
