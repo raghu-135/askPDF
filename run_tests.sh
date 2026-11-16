@@ -95,8 +95,8 @@ external_runtime_diagnostics() {
     echo "External runtime failed; collecting bounded service diagnostics..." >&2
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" ps || true
     "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" logs --tail=200 \
-        rag-service langgraph-runtime db-migrate runtime-db-migrate \
-        postgresql runtime-checkpoint-db-init fake-llm weaviate \
+        rag-service langgraph-runtime db-migrate runtime-db-bootstrap \
+        postgresql fake-llm weaviate \
         hermes hermes-runtime hermes-config-init || true
 }
 
@@ -181,10 +181,9 @@ if [ "${RUN_LANGGRAPH_RUNTIME:-0}" = "1" ]; then
     fi
     echo "Starting isolated LangGraph runtime Compose environment '$EXTERNAL_RUNTIME_PROJECT_NAME'..."
     ensure_runtime_compose_images
-    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql db-migrate runtime-checkpoint-db-init runtime-db-migrate weaviate fake-llm rag-service langgraph-runtime
+    "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql db-migrate runtime-db-bootstrap weaviate fake-llm rag-service langgraph-runtime
     wait_for_external_job db-migrate "Product database migration"
-    wait_for_external_job runtime-checkpoint-db-init "Runtime checkpoint database initialization"
-    wait_for_external_job runtime-db-migrate "Runtime database migration"
+    wait_for_external_job runtime-db-bootstrap "Runtime database bootstrap"
     control_plane_ready=0
     for attempt in $(seq 1 120); do
         if "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" exec -T rag-service python -c \
@@ -336,7 +335,7 @@ if [ "${RUN_HERMES_RUNTIME:-0}" = "1" ]; then
         && ! docker image inspect askpdf-runtime-control-plane >/dev/null 2>&1; then
         "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" build rag-service
     fi
-    if ! "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-checkpoint-db-init weaviate db-migrate fake-llm rag-service hermes hermes-runtime; then
+    if ! "${DOCKER_COMPOSE[@]}" "${EXTERNAL_RUNTIME_COMPOSE_ARGS[@]}" up -d postgresql runtime-db-bootstrap weaviate db-migrate fake-llm rag-service hermes hermes-runtime; then
         echo "Hermes runtime Compose environment failed to start" >&2
         exit 1
     fi

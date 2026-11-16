@@ -6,7 +6,7 @@ services:
     image: askpdf-runtime-control-plane
   langgraph-runtime:
     image: askpdf-langgraph-runtime
-  runtime-db-migrate:
+  runtime-db-bootstrap:
     image: askpdf-langgraph-runtime
   fake-llm:
     image: askpdf-fake-llm:ci
