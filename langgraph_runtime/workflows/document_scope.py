@@ -237,6 +237,10 @@ def workflow_post_retrieval_scope_decline(state: Mapping[str, Any]) -> str | Non
         return None
     if not thread_has_attached_documents(state):
         return None
+    if document_evidence_packets(state) and any(
+        str(packet.get("content") or "").strip() for packet in document_evidence_packets(state)
+    ):
+        return None
     return attachment_retrieval_scope_decline(state)
 
 
