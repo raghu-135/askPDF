@@ -15,7 +15,7 @@ from app.product_orchestration.clarification import (
 )
 from app.product_orchestration.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.product_orchestration.enums import AgentRunResumeAction, InterruptStatus
-from app.product_orchestration.execution_stream import AgentExecutionEventSink
+from app.product_orchestration.execution_stream import AgentExecutionEventSink, close_agent_execution_sink
 from app.product_orchestration.metrics import build_run_metrics
 from app.product_orchestration.parallel_observability import project_parallel_events
 from app.product_orchestration.repository import AgentWorkflowRepository, InterruptResolutionResult
@@ -766,6 +766,8 @@ class AgentRunService:
         embedding_model: str,
         llm_model: Optional[str] = None,
         use_web_search: bool = False,
+        use_browser_access: Optional[bool] = None,
+        browser_access_mode: Optional[str] = None,
         use_reranker: Optional[bool] = True,
         system_role: str = "",
         custom_instructions: str = "",
@@ -822,11 +824,31 @@ class AgentRunService:
             raise RuntimeError(f"Child workflow is not chat eligible: {child_workflow_id}")
 
         thread_settings = await get_thread_settings(thread_id)
+        thread_settings = thread_settings if isinstance(thread_settings, dict) else {}
+        resolved_browser_mode = (
+            browser_access_mode
+            if browser_access_mode in {"off", "ask", "on"}
+            else str(thread_settings.get("browser_access_mode") or "off")
+        )
+        resolved_use_browser = (
+            use_browser_access
+            if use_browser_access is not None
+            else resolved_browser_mode != "off"
+        )
+        if resolved_browser_mode in {"off", "ask", "on"}:
+            thread_settings = {
+                **thread_settings,
+                "browser_access_mode": resolved_browser_mode,
+                "use_browser_access": resolved_use_browser,
+                "hitl_browser_approval": resolved_browser_mode == "ask",
+            }
         definition = definition_from_workflow(workflow)
         provider = builder_for_definition(definition)
         request_overrides = {
             "llm_model": llm_model,
             "use_web_search": use_web_search,
+            "browser_access_mode": resolved_browser_mode,
+            "use_browser_access": resolved_use_browser,
             "use_reranker": use_reranker,
             "system_role": system_role or None,
             "tool_instructions": tool_instructions,
@@ -866,6 +888,16 @@ class AgentRunService:
         )
 
         trace_recorder = AgentTraceRecorder(run)
+        execution_event_sink = AgentExecutionEventSink(include_details=False)
+        execution_event_sink.detach_delivery()
+        execution_event_sink.bind_trace_recorder(trace_recorder)
+        execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
+        execution_event_sink.bind_runtime_fact_persister(self.repository.update_run_metadata_fields)
+        execution_event_sink.bind_runtime_event_persister(
+            run.id,
+            self.repository.append_run_event,
+            initial_sequence=0,
+        )
         context = {
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
@@ -877,6 +909,7 @@ class AgentRunService:
             question=question,
             llm_model=llm_model,
             use_web_search=use_web_search,
+            browser_access_mode=resolved_browser_mode,
             use_reranker=use_reranker,
             system_role_override=system_role,
             custom_instructions_override=custom_instructions,
@@ -895,6 +928,8 @@ class AgentRunService:
                 "embedding_model": embedding_model,
                 "llm_model": llm_model,
                 "use_web_search": use_web_search,
+                "browser_access_mode": resolved_browser_mode,
+                "use_browser_access": resolved_use_browser,
                 "use_reranker": use_reranker,
                 "system_role_override": system_role,
                 "custom_instructions_override": custom_instructions,
@@ -907,58 +942,133 @@ class AgentRunService:
                 "pre_fetch_bundle": pre_fetch_bundle,
                 "llm_model": llm_model,
                 "use_web_search": use_web_search,
+                "browser_access_mode": resolved_browser_mode,
+                "use_browser_access": resolved_use_browser,
                 "use_reranker": use_reranker,
             },
             embedding_model=embedding_model,
             resolved_spec=stored_resolved_spec,
             agent_run_context=context,
         )
-        runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
-        runtime_result = await adapter.start(runtime_request, context=runtime_context)
-        result = result_to_product_payload(runtime_result)
-        status = normalize_clarification_terminal_status(
-            result.get("status") if isinstance(result.get("status"), str) else None,
-            result,
-        )
-        metrics = build_run_metrics(result, duration_ms=0)
-        if status == CLARIFICATION_REQUIRED_STATUS:
-            await self.repository.complete_run(
-                run.id,
-                status=AgentRunStatus.CLARIFICATION.value,
-                metrics_json=metrics,
-                error_json=result.get("agent_error"),
+        status = AgentRunStatus.COMPLETED.value
+        try:
+            runtime_request = await adapter.prepare_request(runtime_request, context=runtime_context)
+            runtime_result = await adapter.start(
+                runtime_request,
+                context=runtime_context,
+                event_sink=execution_event_sink,
             )
-            await self._cleanup_run(adapter, run.id)
-            deleted = await self.repository.delete_run(run.id)
-            if not deleted:
-                raise RuntimeError(f"Clarification child run {run.id} was not found during cleanup")
-            result["status"] = status
+            await execution_event_sink.flush()
+            if runtime_result.continuation is not None:
+                await self.repository.update_runtime_binding(run.id, runtime_result.continuation)
+            if runtime_result.checkpoint_boundary_available is not None:
+                await self.repository.update_run_metadata_fields(run.id, {
+                    "checkpoint_boundary_available": runtime_result.checkpoint_boundary_available,
+                })
+            result = result_to_product_payload(runtime_result)
+            status = normalize_clarification_terminal_status(
+                result.get("status") if isinstance(result.get("status"), str) else None,
+                result,
+            )
+            answer = str(result.get("answer") or result.get("final_answer") or "").strip()
+            metrics = build_run_metrics(result, duration_ms=0)
+            error_json = result.get("agent_error") if isinstance(result, dict) else None
+            if status == CLARIFICATION_REQUIRED_STATUS:
+                await self.repository.complete_run(
+                    run.id,
+                    status=AgentRunStatus.CLARIFICATION.value,
+                    metrics_json=metrics,
+                    error_json=error_json,
+                )
+                await self._cleanup_run(adapter, run.id)
+                deleted = await self.repository.delete_run(run.id)
+                if not deleted:
+                    raise RuntimeError(f"Clarification child run {run.id} was not found during cleanup")
+                result["status"] = status
+                return {
+                    "child_workflow_id": child_workflow_id,
+                    "child_run_id": None,
+                    "final_answer": "",
+                    "status": status,
+                    "clarification_options": result.get("clarification_options"),
+                    "result": result,
+                }
+            if status == AgentRunStatus.AWAITING_HUMAN.value:
+                if hasattr(trace_recorder, "record_interrupted_snapshot"):
+                    trace_recorder.record_interrupted_snapshot(
+                        interrupt=result.get("pending_interrupt") or {},
+                        state=result,
+                    )
+                debug_payload = trace_recorder.finalize(
+                    run=run,
+                    chat_turn_id=None,
+                    metrics=metrics,
+                    route=result.get("route"),
+                    route_reason=result.get("route_reason"),
+                    error=error_json,
+                    result=result,
+                )
+                # Stop the delegate event writer before stamping resume guards so
+                # no late binding persistence invalidates the child's interrupt.
+                await close_agent_execution_sink(
+                    execution_event_sink,
+                    boundary_only=True,
+                )
+                paused_run = await self.repository.mark_run_awaiting_human(
+                    run.id,
+                    result.get("pending_interrupt") or {},
+                    metrics_json=metrics,
+                    debug_trace_json=debug_payload,
+                )
+                if paused_run is not None:
+                    result["pending_interrupt"] = paused_run.pending_interrupt_json
+                paused_run = await self.repository.stamp_pending_interrupt_resume_guard(run.id)
+                if paused_run is not None:
+                    result["pending_interrupt"] = paused_run.pending_interrupt_json
+            else:
+                await self.repository.complete_run(
+                    run.id,
+                    status=status if status in {
+                        AgentRunStatus.COMPLETED.value,
+                        AgentRunStatus.FAILED.value,
+                        AgentRunStatus.AWAITING_HUMAN.value,
+                    } else AgentRunStatus.COMPLETED.value,
+                    metrics_json=metrics,
+                    error_json=error_json,
+                )
+                debug_payload = trace_recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, result=result)
+                await self.repository.set_run_debug_trace(run.id, debug_payload)
+                await close_agent_execution_sink(
+                    execution_event_sink,
+                    terminal_event=(
+                        "run.failed"
+                        if status == AgentRunStatus.FAILED.value
+                        else "run.completed"
+                    ),
+                    terminal_data={"run_id": run.id, "status": status},
+                )
             return {
                 "child_workflow_id": child_workflow_id,
-                "child_run_id": None,
-                "final_answer": "",
+                "child_run_id": run.id,
+                "final_answer": answer,
                 "status": status,
+                "pending_interrupt": result.get("pending_interrupt"),
                 "clarification_options": result.get("clarification_options"),
                 "result": result,
             }
-
-        answer = str(result.get("answer") or result.get("final_answer") or "").strip()
-        await self.repository.complete_run(
-            run.id,
-            status=status if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value, AgentRunStatus.AWAITING_HUMAN.value} else AgentRunStatus.COMPLETED.value,
-            metrics_json=metrics,
-            error_json=result.get("agent_error"),
-        )
-        debug_payload = trace_recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, result=result)
-        await self.repository.set_run_debug_trace(run.id, debug_payload)
-        return {
-            "child_workflow_id": child_workflow_id,
-            "child_run_id": run.id,
-            "final_answer": answer,
-            "status": status,
-            "clarification_options": result.get("clarification_options"),
-            "result": result,
-        }
+        finally:
+            await close_agent_execution_sink(
+                execution_event_sink,
+                terminal_event=(
+                    "run.failed"
+                    if status == AgentRunStatus.FAILED.value
+                    else "run.completed"
+                    if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}
+                    else None
+                ),
+                terminal_data={"run_id": run.id, "status": status},
+                boundary_only=status == AgentRunStatus.AWAITING_HUMAN.value,
+            )
 
     async def resume_agent_run(
         self,

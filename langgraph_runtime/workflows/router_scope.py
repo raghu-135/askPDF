@@ -8,6 +8,7 @@ from langgraph_runtime.workflows.document_scope import (
     _finalize_attachment_scope_decline,
     thread_has_attached_documents,
 )
+from langgraph_runtime.workflows.external_research import attachment_document_scope_bypass
 from langgraph_runtime.workflows.enums import RouterRoute
 
 
@@ -22,7 +23,9 @@ def _prefetch_has_non_document_evidence(state: Mapping[str, Any]) -> bool:
 def router_attachment_scope_decline(state: Mapping[str, Any], route: str | None) -> str | None:
     """Decline when uploaded documents exist but pre-fetch has no supporting evidence."""
 
-    if route not in {RouterRoute.CLARIFY.value, RouterRoute.DIRECT.value}:
+    if attachment_document_scope_bypass(state):
+        return None
+    if route not in {RouterRoute.CLARIFY.value, RouterRoute.DIRECT.value, RouterRoute.WEB.value}:
         return None
     if not thread_has_attached_documents(state):
         return None

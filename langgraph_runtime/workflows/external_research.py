@@ -25,3 +25,9 @@ def web_worker_enabled(state_or_settings: Mapping[str, object] | None) -> bool:
 
 def web_worker_enabled_flags(*, use_web_search: bool = False, use_browser_access: bool = False) -> bool:
     return bool(use_web_search) or bool(use_browser_access)
+
+
+def attachment_document_scope_bypass(state: Mapping[str, object] | None) -> bool:
+    """Skip attachment-only scope gates when live web or browser tools are enabled for the run."""
+
+    return web_worker_enabled(state)

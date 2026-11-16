@@ -515,6 +515,11 @@ async def update_message_context_compact(message_id: str, context_compact: str):
     return await get_message_repo().update_context_compact(message_id, context_compact)
 
 
+async def update_chat_turn_result(turn_id: str, **kwargs):
+    """Update one persisted chat turn with a terminal assistant payload."""
+    return await get_message_repo().update_turn_chat_result(turn_id, **kwargs)
+
+
 async def delete_message(message_id: str):
     """Delete a message by ID."""
     return await get_message_repo().delete(message_id)

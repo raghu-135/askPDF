@@ -214,7 +214,12 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
     await createProject.waitFor({ timeout: 60_000 });
     await createProject.click();
     await page.getByRole('textbox').first().fill(projectLabel);
-    await page.getByRole('button', { name: /^Create Project$/i }).click();
+    const confirmCreateProject = page.getByRole('button', { name: /^Create Project$/i });
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      if (await confirmCreateProject.isEnabled().catch(() => false)) break;
+      await page.waitForTimeout(1000);
+    }
+    await confirmCreateProject.click({ timeout: 120_000 });
     await page.waitForTimeout(1200);
   } else {
     const match = await createInExisting.innerText();
@@ -327,12 +332,15 @@ export async function typeAndSendChat(page, text) {
 /**
  * @param {import('playwright').Page} page
  */
-export async function waitForAssistantAnswer(page) {
+export async function waitForAssistantAnswer(page, options = {}) {
+  const mustMatch = options.mustMatch;
   const composer = page.getByTestId('chat-composer-input');
   await composer.waitFor({ timeout: 180_000 });
   const sending = page.getByPlaceholder(/Sending/i);
+  const sendingTimeout = Number(options.sendingTimeoutMs)
+    || (mustMatch ? 1_200_000 : 300_000);
   if (await sending.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await sending.waitFor({ state: 'hidden', timeout: 300_000 });
+    await sending.waitFor({ state: 'hidden', timeout: sendingTimeout });
   }
   await page.waitForFunction(
     () => {
@@ -352,6 +360,9 @@ export async function waitForAssistantAnswer(page) {
   const body = await answer.innerText();
   if (body.length < 20) {
     throw new Error('Assistant answer too short for UI proof');
+  }
+  if (mustMatch instanceof RegExp && !mustMatch.test(body)) {
+    throw new Error(`Assistant answer did not match required pattern: ${body.slice(0, 280)}`);
   }
   return body;
 }
@@ -383,6 +394,44 @@ export async function sleep(ms) {
 /** Backoff between chat turns to stay under provider RPM limits. */
 export async function chatRateLimitPause() {
   await sleep(MIN_CHAT_BACKOFF_MS);
+}
+
+/** Cycle the chat-header browser workbench control until Ask mode is active. */
+export async function setBrowserAskMode(page) {
+  await page.evaluate(() => {
+    localStorage.setItem('last_browser_access_mode', 'ask');
+    window.dispatchEvent(new CustomEvent('askpdf:browser-access-mode', { detail: 'ask' }));
+  });
+  const askBtn = page.getByRole('button', { name: /^Ask before the agent uses the workbench browser$/i });
+  if (await askBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    return;
+  }
+  const browserToggle = page
+    .getByRole('button', {
+      name: /Browser agent off|Browser agent on|Ask before the agent uses the workbench browser/i,
+    })
+    .first();
+  await browserToggle.waitFor({ state: 'visible', timeout: 60_000 });
+  for (let i = 0; i < 8; i += 1) {
+    if (await askBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      return;
+    }
+    const label = ((await browserToggle.textContent()) || '').trim();
+    if (/browser agent off/i.test(label)) {
+      await browserToggle.click();
+      await page.waitForTimeout(500);
+      continue;
+    }
+    if (/browser agent on/i.test(label)) {
+      await browserToggle.click();
+      await page.waitForTimeout(500);
+      continue;
+    }
+    await browserToggle.click();
+    await page.waitForTimeout(500);
+  }
+  if (await askBtn.isVisible({ timeout: 2000 }).catch(() => false)) return;
+  throw new Error('Could not set browser access mode to Ask');
 }
 
 /** @param {import('playwright').Page} page */

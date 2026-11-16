@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Mapping
 
 from langgraph_runtime.workflows.evidence import evidence_packets
+from langgraph_runtime.workflows.external_research import attachment_document_scope_bypass
 from langgraph_runtime.workflows.parallel_contracts import (
     PARALLEL_REFERENCE_WORKFLOW_ID,
 )
@@ -224,6 +225,8 @@ def decline_when_all_document_packets_irrelevant(state: Mapping[str, Any]) -> st
 def attachment_retrieval_scope_decline(state: Mapping[str, Any]) -> str | None:
     """Decline when attached PDFs were searched but nothing scores as plausibly relevant."""
 
+    if attachment_document_scope_bypass(state):
+        return None
     if not thread_has_attached_documents(state):
         return None
     if live_worker_sources_imply_retrieval(state):

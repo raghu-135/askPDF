@@ -354,6 +354,32 @@ class AgentExecutionEventSink:
             await self.queue.put({"event": canonical.kind, "data": delivery_payload})
 
 
+async def close_agent_execution_sink(
+    sink: AgentExecutionEventSink | None,
+    *,
+    terminal_event: str | None = None,
+    terminal_data: Dict[str, Any] | None = None,
+    boundary_only: bool = False,
+) -> None:
+    """Stop the per-run event writer so delegate/resume paths cannot leak background tasks."""
+
+    if sink is None or sink._finished:
+        return
+    try:
+        if boundary_only:
+            await sink.finish_boundary()
+            return
+        if terminal_event and hasattr(sink, "finish"):
+            await sink.finish(terminal_event, dict(terminal_data or {}))
+            return
+        await sink.finish_boundary()
+    except Exception:
+        logger.exception(
+            "Failed to close agent execution event sink | run_id=%s",
+            getattr(sink, "_run_id", None),
+        )
+
+
 def retain_background_task(task: asyncio.Task[Any]) -> None:
     """Retain a disconnected execution and observe its terminal exception."""
 

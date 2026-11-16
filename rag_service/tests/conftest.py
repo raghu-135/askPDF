@@ -278,6 +278,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         canvas_repo_sqlmodel,
     )
     from app.services import (
+        agent_task_canvas_chat,
         agent_task_chat_publish,
         agent_task_repository,
         agent_task_research_canvases,
@@ -326,6 +327,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         agent_task_research_canvases,
         agent_task_runtime_projection,
         agent_task_chat_publish,
+        agent_task_canvas_chat,
         tool_approval,
     ):
         monkeypatch.setattr(module, "async_session_maker", session_maker)
