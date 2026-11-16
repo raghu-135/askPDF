@@ -20,7 +20,13 @@ def _compose(name: str) -> dict:
         return loader.construct_mapping(node)
 
     ComposeLoader.add_constructor("!override", _compose_override)
-    return yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
+    doc = yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
+    if name == "docker-compose.yml":
+        integration = REPOSITORY_ROOT / "docker-compose.integration.yml"
+        if integration.exists():
+            integration_doc = yaml.load(integration.read_text(), Loader=ComposeLoader)
+            doc.setdefault("services", {}).update(integration_doc.get("services", {}))
+    return doc
 
 
 def test_example_environment_enables_hermes_with_distinct_placeholder_tokens():

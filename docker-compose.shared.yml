@@ -93,6 +93,17 @@ x-healthcheck-langgraph-startupz: &healthcheck-langgraph-startupz
   retries: 12
   start_period: 30s
 
+x-healthcheck-rag-product: &healthcheck-rag-product
+  test:
+    - CMD
+    - sh
+    - -c
+    - curl -f http://localhost:8000/health && curl -f http://weaviate:8080/v1/.well-known/ready
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 60s
+
 x-healthcheck-rag-integration: &healthcheck-rag-integration
   test:
     - CMD
