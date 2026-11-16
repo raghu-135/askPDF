@@ -882,6 +882,12 @@ class NodeRegistry:
             route = fallback_route
         else:
             route = requested_route
+        if (
+            thread_has_attached_documents(state)
+            and route == RouterRoute.DIRECT.value
+            and RouterRoute.DOCUMENT.value in allowed_routes
+        ):
+            route = RouterRoute.DOCUMENT.value
         clarification_options = parsed.get("clarification_options")
         if route == RouterRoute.CLARIFY.value:
             clarification_options = _normalize_clarification_options(clarification_options)
