@@ -1,0 +1,8 @@
+# CI-only overlay: fast test image builds (no HF model bake at build time).
+services:
+  test-runner:
+    image: askpdf-test-runner:ci
+    build:
+      args:
+        DOWNLOAD_LOCAL_MODELS: "false"
+        WARM_DOCLING_MODELS: "false"
