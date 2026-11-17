@@ -24,7 +24,8 @@ def normalized_auto_policy(config: Mapping[str, Any] | None) -> Dict[str, Any]:
     }
     exclude.add(AUTO_WORKFLOW_ID)
     return {
-        "require_plan_approval_on_complex": bool(policy.get("require_plan_approval_on_complex", True)),
+        "require_plan_approval_on_complex": bool(policy.get("require_plan_approval_on_complex", False)),
+        "require_plan_approval_all": bool(policy.get("require_plan_approval_all", False)),
         "max_delegates_per_turn": max(1, int(policy.get("max_delegates_per_turn", 1) or 1)),
         "pass_prompt_overrides": policy.get("pass_prompt_overrides", True) is not False,
         "delegate_policy": {

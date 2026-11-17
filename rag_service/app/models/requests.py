@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from runtime_protocol.context_budget import resolve_context_budget
 
+from app.models.auto_limits import AutoLimitsSettings, default_auto_limits
 from app.product_orchestration.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
     DEFAULT_TOKEN_BUDGET,
@@ -404,6 +405,9 @@ class ThreadSettingsResponse(BaseModel):
     agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
     agent_workflow_validation: Optional[Dict[str, Any]] = None
     memory: ThreadMemorySettings = Field(default_factory=ThreadMemorySettings)
+    auto_limits: AutoLimitsSettings = Field(
+        default_factory=lambda: AutoLimitsSettings(**default_auto_limits())
+    )
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -418,6 +422,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     use_reranker: Optional[bool] = None
     agent_workflow: Optional[Dict[str, str]] = None
     memory: Optional[ThreadMemorySettings] = None
+    auto_limits: Optional[AutoLimitsSettings] = None
 
 
 class ToolCatalogEntry(BaseModel):
@@ -429,6 +434,7 @@ class ToolCatalogEntry(BaseModel):
 
 class PromptDefaults(BaseModel):
     replans_limit: int
+    auto_limits: AutoLimitsSettings
     context_window: int
     context_budget: Dict[str, float]
     system_role: str
