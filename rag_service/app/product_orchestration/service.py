@@ -67,6 +67,24 @@ from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 logger = logging.getLogger(__name__)
 
 
+async def _restore_tool_approval_after_runtime_failure(
+    repository: Any,
+    resolution: Any,
+    *,
+    interrupt_id: str,
+    action: str,
+) -> bool:
+    if resolution.interrupt.get("type") != "tool_approval":
+        return False
+    return bool(
+        await repository.restore_pending_approval_after_runtime_failure(
+            resolution.run.id,
+            interrupt_id=interrupt_id,
+            action=action,
+        )
+    )
+
+
 async def _finish_human_review_boundary(
     execution_event_sink: Any,
     *,
@@ -1365,6 +1383,39 @@ class AgentRunService:
                         timeout=resume_deadline,
                     )
             except asyncio.TimeoutError as exc:
+                prior_metrics = dict(resolution.run.metrics_json or {})
+                prior_metrics["error_count"] = max(int(prior_metrics.get("error_count") or 0), 1)
+                timed_out_run = await lifecycle_repository.complete_run(
+                    resolution.run.id,
+                    status=AgentRunStatus.FAILED.value,
+                    metrics_json=prior_metrics,
+                    error_json={
+                        "code": "agent_run_resume_timeout",
+                        "raw_message": (
+                            "The agent run resumed after approval but did not finish in time. "
+                            "Try again or choose a different model."
+                        ),
+                        "retryable": True,
+                    },
+                )
+                if timed_out_run is not None:
+                    await release_delegated_parent_if_stalled(lifecycle_repository, timed_out_run)
+                if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
+                    await execution_event_sink.finish(
+                        "run.failed",
+                        {
+                            "run_id": resolution.run.id,
+                            "status": AgentRunStatus.FAILED.value,
+                            "error": {
+                                "code": "agent_run_resume_timeout",
+                                "raw_message": (
+                                    "The agent run resumed after approval but did not finish in time. "
+                                    "Try again or choose a different model."
+                                ),
+                                "retryable": True,
+                            },
+                        },
+                    )
                 raise RuntimeContractError(
                     "agent_run_resume_timeout",
                     "The agent run resumed after approval but did not finish in time. Try again or choose a different model.",
@@ -1539,17 +1590,23 @@ class AgentRunService:
                 interrupt=resolution.interrupt,
                 duplicate=False,
             )
-        except RuntimeContractError:
+        except RuntimeContractError as exc:
+            if await _restore_tool_approval_after_runtime_failure(
+                repository,
+                resolution,
+                interrupt_id=interrupt_id,
+                action=action,
+            ):
+                raise exc
             raise
         except Exception as exc:
-            if resolution.interrupt.get("type") == "tool_approval":
-                restored = await repository.restore_pending_approval_after_runtime_failure(
-                    resolution.run.id,
-                    interrupt_id=interrupt_id,
-                    action=action,
-                )
-                if restored:
-                    raise
+            if await _restore_tool_approval_after_runtime_failure(
+                repository,
+                resolution,
+                interrupt_id=interrupt_id,
+                action=action,
+            ):
+                raise exc
             prior_metrics = dict(resolution.run.metrics_json or {})
             prior_metrics["error_count"] = max(int(prior_metrics.get("error_count") or 0), 1)
             failed_run = await lifecycle_repository.complete_run(

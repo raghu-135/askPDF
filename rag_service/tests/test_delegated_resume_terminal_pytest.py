@@ -54,14 +54,15 @@ async def test_resume_agent_run_times_out_continue_run_and_fails_run(monkeypatch
         "checkpoint_resume": True,
     }
 
-    class Resolution:
-        duplicate = False
-        outcome = "resumed"
-        interrupt = interrupt
-        run = resolution_run
+    resolution = SimpleNamespace(
+        duplicate=False,
+        outcome="resumed",
+        interrupt=interrupt,
+        run=resolution_run,
+    )
 
     service.repository.get_run = AsyncMock(return_value=resolution_run)
-    service.repository.resolve_pending_interrupt = AsyncMock(return_value=Resolution())
+    service.repository.resolve_pending_interrupt = AsyncMock(return_value=resolution)
     service.repository_factory = MagicMock(return_value=service.repository)
     service.repository.update_runtime_binding = AsyncMock()
     service.repository.update_run_metadata_fields = AsyncMock()
@@ -91,7 +92,9 @@ async def test_resume_agent_run_times_out_continue_run_and_fails_run(monkeypatch
         status=AgentRunStatus.FAILED.value,
         metrics_json={},
     )
-    service.repository.complete_run = AsyncMock(return_value=failed_run)
+    lifecycle = MagicMock()
+    lifecycle.complete_run = AsyncMock(return_value=failed_run)
+    service.repository_factory = MagicMock(return_value=lifecycle)
 
     with pytest.raises(RuntimeContractError) as excinfo:
         await service.resume_agent_run(
@@ -101,4 +104,4 @@ async def test_resume_agent_run_times_out_continue_run_and_fails_run(monkeypatch
             expected_thread_id="thread-1",
         )
     assert excinfo.value.code == "agent_run_resume_timeout"
-    service.repository.complete_run.assert_awaited()
+    lifecycle.complete_run.assert_awaited()
