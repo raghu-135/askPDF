@@ -17,6 +17,7 @@ import {
   uploadPdfThroughUi,
   waitForAssistantAnswer,
   waitForComposerReady,
+  waitForThreadWorkspaceReady,
 } from './cloud-agent-e2e-lib.mjs';
 
 const requireFromFrontend = createRequire(path.join(process.cwd(), 'frontend/package.json'));
@@ -28,6 +29,22 @@ async function threadIdFromName(admin, threadName) {
   const threads = await apiJson(`${DEFAULT_API_URL}/api/threads`, { admin });
   const row = (threads.threads || []).find((t) => t.name === threadName);
   return row?.id;
+}
+
+async function resolveThreadId(page, admin, ensured) {
+  const fromUrl = page.url().match(/\/threads\/([^/?]+)/)?.[1];
+  if (fromUrl) return fromUrl;
+  if (ensured.threadName) return threadIdFromName(admin, ensured.threadName);
+  return null;
+}
+
+async function openDeepLink(page, threadId) {
+  await page.goto(`${DEFAULT_BASE_URL}/threads/${threadId}`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 120_000,
+  });
+  await waitForThreadWorkspaceReady(page);
+  await selectLlmModel(page, MODEL);
 }
 
 async function openTraceOnLatestMessage(page) {
@@ -63,12 +80,15 @@ async function main() {
   const page = await browser.newPage({ viewport: REAL_UI_VIEWPORT });
 
   try {
-    await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-    const { threadName } = await ensureProjectAndThread(page);
-    const threadId = await threadIdFromName(admin, threadName);
+    const ensured = await ensureProjectAndThread(page);
+    const threadId = await resolveThreadId(page, admin, ensured);
+    if (!threadId) throw new Error('Could not resolve thread id');
+
     await selectLlmModel(page, MODEL);
     await uploadPdfThroughUi(page, PDF);
     await waitForComposerReady(page);
+
+    await openDeepLink(page, threadId);
 
     await page
       .getByRole('button', { name: /tune|context \d/i })
@@ -77,7 +97,9 @@ async function main() {
       .catch(async () => {
         await page.getByLabel(/Initial retrieval budget|Context packing/i).first().click();
       });
-    await guard.capture(page, `proof-01-initial-retrieval-budget-thread-${String(threadId).slice(0, 8)}.png`, { requireChatWorkspace: true });
+    await guard.capture(page, `proof-01-initial-retrieval-budget-thread-${String(threadId).slice(0, 8)}.png`, {
+      requireChatWorkspace: true,
+    });
     await page.keyboard.press('Escape');
 
     await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/settings`, {
@@ -98,13 +120,14 @@ async function main() {
     await chatRateLimitPause();
     await typeAndSendChat(
       page,
-      'Compare the method in this PDF to standard attention. Use a delegated workflow if needed and be thorough.',
+      'Summarize this PDF in two sentences, then delegate a focused follow-up to the standard RAG workflow for one extra detail.',
     );
-    await waitForAssistantAnswer(page, 240_000);
+    await waitForAssistantAnswer(page, 300_000);
+    await openDeepLink(page, threadId);
     await guard.capture(page, `proof-02-chat-after-auto-thread-${String(threadId).slice(0, 8)}.png`);
 
     const limitBanner = page.getByText(/hit the thread limit/i);
-    if (await limitBanner.isVisible({ timeout: 3000 }).catch(() => false)) {
+    if (await limitBanner.isVisible({ timeout: 5000 }).catch(() => false)) {
       await guard.capture(page, `proof-03-auto-limit-message-thread-${String(threadId).slice(0, 8)}.png`);
     }
 
@@ -112,6 +135,9 @@ async function main() {
       await expandTimelineNode(page, 'Context loader');
       await expandDisclosure(page, 'Prefetch context');
       await guard.capture(page, `proof-04-context-loader-expanded-thread-${String(threadId).slice(0, 8)}.png`);
+      await expandTimelineNode(page, 'Prompt');
+      await expandDisclosure(page, 'Prompt');
+      await guard.capture(page, `proof-04b-prompts-expanded-thread-${String(threadId).slice(0, 8)}.png`);
       await expandTimelineNode(page, 'Workflow delegate');
       await expandDisclosure(page, 'Delegated child');
       await guard.capture(page, `proof-05-workflow-delegate-expanded-thread-${String(threadId).slice(0, 8)}.png`);
@@ -119,9 +145,34 @@ async function main() {
       if (await openChild.isVisible({ timeout: 5000 }).catch(() => false)) {
         await openChild.click();
         await page.waitForTimeout(1500);
-        await expandTimelineNode(page, 'Planner');
-        await expandDisclosure(page, 'Prompt');
+        await expandTimelineNode(page, 'Context loader');
+        await expandDisclosure(page, 'Prefetch');
         await guard.capture(page, `proof-06-child-trace-opened-thread-${String(threadId).slice(0, 8)}.png`);
+      }
+    }
+
+    if (!(await limitBanner.isVisible({ timeout: 1000 }).catch(() => false))) {
+      await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/settings`, {
+        method: 'PATCH',
+        admin,
+        body: {
+          auto_limits: {
+            max_total_visits: 4,
+            max_interrupts_per_run: 1,
+            max_delegates_per_turn: 1,
+          },
+        },
+      });
+      await chatRateLimitPause();
+      await typeAndSendChat(
+        page,
+        'Ask three detailed follow-up questions about every section of this PDF and keep delegating until you are done.',
+      );
+      await waitForAssistantAnswer(page, 300_000).catch(() => null);
+      const limitText = page.getByText(/hit the thread limit/i);
+      if (await limitText.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await openDeepLink(page, threadId);
+        await guard.capture(page, `proof-03-auto-limit-message-thread-${String(threadId).slice(0, 8)}.png`);
       }
     }
 
