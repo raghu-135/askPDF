@@ -113,6 +113,12 @@ class AgentRuntimeProjection:
         projected = dict(result)
         run_context = run_context or agent_run_context or {}
         status = str(projected.get("status") or "completed")
+        agent_error = projected.get("agent_error")
+        if status == "failed" and isinstance(agent_error, dict):
+            safe = str(agent_error.get("safe_message") or "").strip()
+            if safe and not str(projected.get("answer") or projected.get("final_answer") or "").strip():
+                projected["answer"] = safe
+                projected["final_answer"] = safe
         if status not in {ChatTurnStatus.COMPLETED.value, "failed"}:
             return projected
         from app.services.agent_runtime_reconciliation import result_hash

@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tool_registry import tool_contracts_by_id
+from app.product_orchestration.delegation_context import inherited_context_from_run_metadata
 from app.product_orchestration.repository import (
     AgentWorkflowRepository,
     AgentRunInterruptError,
@@ -379,6 +380,9 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "debug_trace_failure": _debug_trace_failure_for_response(run),
         "run_kind": (run.run_metadata_json or {}).get("run_kind"),
         "builder_session_id": (run.run_metadata_json or {}).get("builder_session_id"),
+        "inherited_context": inherited_context_from_run_metadata(
+            run.run_metadata_json if isinstance(run.run_metadata_json, dict) else None
+        ),
         "final_output": (run.debug_trace_json or {}).get("final_output") if isinstance(run.debug_trace_json, dict) else None,
         "observability": {
             "event_projection_version": 2,
@@ -466,6 +470,9 @@ def _run_summary_payload(run) -> Dict[str, Any]:
         "workflow_id": run.workflow_id,
         "task_id": run.task_id,
         "parent_run_id": run.parent_run_id,
+        "inherited_context": inherited_context_from_run_metadata(
+            run.run_metadata_json if isinstance(run.run_metadata_json, dict) else None
+        ),
         "task_attempt": run.task_attempt,
         "status": run.status,
         "pending_interrupt": _pending_interrupt_payload(run),
