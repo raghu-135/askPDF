@@ -18,7 +18,9 @@ from langgraph_runtime.workflows.document_scope import (
 )
 from langgraph_runtime.workflows.external_research import attachment_document_scope_bypass
 from langgraph_runtime.workflows.enums import AutoOrchestratorRoute, NodeEventStatus
+from langgraph_runtime.workflows.auto_limit_errors import AutoLimitExceeded
 from langgraph_runtime.workflows.runtime_invocation import append_event, log_node_end
+from runtime_protocol.auto_limits import AUTO_LIMIT_MAX_DELEGATES_PER_TURN
 from langgraph_runtime.workflows.state import RouterRagState
 from langgraph_runtime.workflows.trace import compact_preview
 from langgraph_runtime.workflows.clarification_terminal import (
@@ -227,7 +229,11 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         delegate_cap = 1
     invocation_count = int(state.get("delegate_invocation_count") or 0)
     if invocation_count >= delegate_cap:
-        raise ValueError(f"Auto delegate limit reached ({delegate_cap} per turn)")
+        raise AutoLimitExceeded(
+            AUTO_LIMIT_MAX_DELEGATES_PER_TURN,
+            limit=delegate_cap,
+            state=state,
+        )
     if not child_workflow_id or not parent_run_id or not thread_id:
         raise ValueError("workflow_delegate requires delegate_workflow_id, agent_run_id, and thread_id")
 
@@ -348,7 +354,10 @@ async def delegate_synthesizer_node(state: RouterRagState, config: RunnableConfi
             "node_events": append_event(state, "delegate_synthesizer", data, started=started, config=config),
         }
     child_output = state.get("delegate_child_output") if isinstance(state.get("delegate_child_output"), dict) else {}
+    notice = str(state.get("auto_limit_notice") or "").strip()
     answer = str(state.get("child_final_answer") or state.get("final_answer") or "").strip()
+    if notice:
+        answer = notice if not answer else f"{notice}\n\n{answer}"
     if (
         not answer
         and str(child_output.get("status") or "") == "awaiting_human"

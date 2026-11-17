@@ -37,6 +37,8 @@ UNIT_TEST_FILES = [
     "test_agent_course_correction_reconciliation_pytest.py",
     "test_agent_grounding_evaluator_pytest.py",
     "test_agent_prompt_behavior.py",
+    "test_auto_limit_messages_pytest.py",
+    "test_agent_run_inherited_context_pytest.py",
     "test_auto_limits_settings_pytest.py",
     "test_agent_run_cancellation_pytest.py",
     "test_agent_runtime_reconciliation_pytest.py",

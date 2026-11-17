@@ -1395,6 +1395,10 @@ export interface AgentRunDetails {
   workflow_id: string;
   task_id?: string | null;
   parent_run_id?: string | null;
+  inherited_context?: {
+    context_window?: number;
+    context_budget?: Record<string, number>;
+  } | null;
   task_attempt?: number;
   resolved_spec_json?: Record<string, any>;
   runtime_binding_status?: string;

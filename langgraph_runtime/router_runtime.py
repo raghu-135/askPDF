@@ -16,6 +16,7 @@ from langgraph_runtime.workflows.planning import worker_nodes_from_spec
 from langgraph_runtime.workflows.parallel_runtime import cancelled_parallel_dispatch, normalized_parallel_policy
 from langgraph_runtime.workflows.parallel_contracts import ParallelEventName
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, normalized_corrective_policy
+from langgraph_runtime.workflows.auto_limit_errors import AutoLimitExceeded, workflow_budget_as_auto_limit
 from langgraph_runtime.workflows.state import merge_parallel_deltas, merge_task_result_packets, WorkflowBudgetExceeded
 from langgraph_runtime.workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
 from langgraph_runtime.models.llm import current_execution_model_client, runtime_limits
@@ -48,6 +49,35 @@ def _public_agent_context(context: Dict[str, Any]) -> Dict[str, Any]:
         key: context[key]
         for key in ("agent_run_id", "agent_workflow_id")
         if context.get(key) is not None
+    }
+
+
+def _auto_limit_runtime_result(
+    partial_state: Mapping[str, Any],
+    exc: AutoLimitExceeded,
+    *,
+    duration_ms: float,
+    agent_run_context: Mapping[str, Any],
+) -> Dict[str, Any]:
+    message = exc.user_message
+    error = exc.as_agent_error()
+    base = _without_runtime_keys(dict(partial_state))
+    return {
+        **base,
+        "answer": message,
+        "final_answer": message,
+        "status": AgentRunStatus.FAILED.value,
+        "duration_ms": duration_ms,
+        "agent_error": error,
+        "errors": [error],
+        "reasoning": "",
+        "reasoning_available": False,
+        "reasoning_format": ReasoningFormat.NONE.value,
+        "used_chat_ids": [],
+        "document_sources": [],
+        "web_sources": [],
+        "clarification_options": None,
+        **_public_agent_context(agent_run_context),
     }
 
 
@@ -886,11 +916,20 @@ async def _handle_compiled_rag_chat(
             agent_run_context=agent_run_context,
             answer="",
         )
+    except AutoLimitExceeded as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial = getattr(exc, "agent_workflow_state", None) or state
+        return _auto_limit_runtime_result(partial, exc, duration_ms=duration_ms, agent_run_context=agent_run_context)
     except WorkflowBudgetExceeded as exc:
-        partial = _without_runtime_keys(getattr(exc, "agent_workflow_state", None) or snapshot_values)
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial = getattr(exc, "agent_workflow_state", None) or state
+        auto_exc = workflow_budget_as_auto_limit(exc, partial)
+        if auto_exc is not None:
+            return _auto_limit_runtime_result(partial, auto_exc, duration_ms=duration_ms, agent_run_context=agent_run_context)
+        partial = _without_runtime_keys(partial)
         partial["workflow_budget"] = exc.as_dict()
         partial["agent_error"] = {"code": "workflow_budget_exhausted", "retryable": False, "partial": True, "workflow_budget": exc.as_dict()}
-        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": round((time.perf_counter() - started) * 1000, 2), **_public_agent_context(agent_run_context)}
+        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": duration_ms, **_public_agent_context(agent_run_context)}
     except Exception as exc:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         exception_state = getattr(exc, "agent_workflow_state", None)
@@ -902,7 +941,20 @@ async def _handle_compiled_rag_chat(
             else state
         )
         budget_exhausted = isinstance(exc, WorkflowBudgetExceeded)
-        if budget_exhausted:
+        auto_limit_exc = exc if isinstance(exc, AutoLimitExceeded) else (
+            workflow_budget_as_auto_limit(exc, partial_result) if budget_exhausted else None
+        )
+        if auto_limit_exc is not None:
+            logger.warning(
+                "%s run hit Auto limit | run_id=%s thread_id=%s kind=%s limit=%s elapsed_ms=%.1f",
+                runtime_label,
+                agent_run_id,
+                thread_id,
+                auto_limit_exc.kind,
+                auto_limit_exc.limit,
+                duration_ms,
+            )
+        elif budget_exhausted:
             logger.warning(
                 "%s run bounded by workflow visit budget | run_id=%s thread_id=%s limit=%s node=%s elapsed_ms=%.1f",
                 runtime_label, agent_run_id, thread_id, exc.limit, exc.node_id, duration_ms,
@@ -914,7 +966,9 @@ async def _handle_compiled_rag_chat(
             )
         parallel_unauthorized = str(exc) == "parallel runtime is not authorized for this workflow"
         classified = classify_model_error_message(str(exc))
-        if budget_exhausted:
+        if auto_limit_exc is not None:
+            error_payload = auto_limit_exc.as_agent_error()
+        elif budget_exhausted:
             error_payload = {
                 "code": "workflow_budget_exhausted",
                 "safe_message": "The workflow exceeded its visit budget.",
@@ -963,6 +1017,7 @@ async def _handle_compiled_rag_chat(
             *(partial_result.get("errors") or partial_result.get("parallel_error_deltas") or []),
             error_payload,
         ]
+        limit_answer = auto_limit_exc.user_message if auto_limit_exc is not None else None
         failure_result = {
             **partial_result,
             "node_events": node_events,
@@ -971,11 +1026,12 @@ async def _handle_compiled_rag_chat(
             "route_reason": route_reason,
             "errors": errors,
             "agent_error": error_payload,
-            **({"workflow_budget": exc.as_dict()} if budget_exhausted else {}),
+            **({"workflow_budget": exc.as_dict()} if budget_exhausted and auto_limit_exc is None else {}),
         }
         return {
             **failure_result,
-            "answer": None,
+            "answer": limit_answer,
+            "final_answer": limit_answer,
             "used_chat_ids": [],
             "document_sources": [],
             "web_sources": [],
@@ -1089,11 +1145,20 @@ async def continue_compiled_rag_chat(
             agent_run_context=agent_run_context,
             answer="",
         )
+    except AutoLimitExceeded as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial = getattr(exc, "agent_workflow_state", None) or snapshot_values
+        return _auto_limit_runtime_result(partial, exc, duration_ms=duration_ms, agent_run_context=agent_run_context)
     except WorkflowBudgetExceeded as exc:
-        partial = _without_runtime_keys(getattr(exc, "agent_workflow_state", None) or snapshot_values)
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial = getattr(exc, "agent_workflow_state", None) or snapshot_values
+        auto_exc = workflow_budget_as_auto_limit(exc, partial)
+        if auto_exc is not None:
+            return _auto_limit_runtime_result(partial, auto_exc, duration_ms=duration_ms, agent_run_context=agent_run_context)
+        partial = _without_runtime_keys(partial)
         partial["workflow_budget"] = exc.as_dict()
         partial["agent_error"] = {"code": "workflow_budget_exhausted", "retryable": False, "partial": True, "workflow_budget": exc.as_dict()}
-        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": round((time.perf_counter() - started) * 1000, 2), **_public_agent_context(agent_run_context)}
+        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": duration_ms, **_public_agent_context(agent_run_context)}
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
     pending_interrupt = _pending_interrupt_from_result(result, checkpoint_thread_id=checkpoint_thread_id)
     if pending_interrupt:

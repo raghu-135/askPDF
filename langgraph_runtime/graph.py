@@ -147,6 +147,7 @@ from langgraph_runtime.workflows.trace import (
     refs_from_artifacts,
     selected_and_skipped_workers,
 )
+from langgraph_runtime.workflows.auto_limit_errors import AutoLimitExceeded
 from langgraph_runtime.workflows.state import (
     RouterRagState,
     check_visit_budget as _check_visit_budget,
@@ -367,6 +368,36 @@ class NodeRegistry:
                 # checkpointed runs. It must reach the graph executor so the
                 # interrupt is returned as __interrupt__, not recorded as a
                 # failed node.
+                raise
+            except AutoLimitExceeded as exc:
+                exc.agent_workflow_state = {
+                    **state,
+                    **(exc.agent_workflow_state or {}),
+                    "node_events": [
+                        *(state.get("node_events") or []),
+                        {
+                            "node": node_id,
+                            "node_type": node_type,
+                            "status": "failed",
+                            "event": "auto_limit_exceeded",
+                            "auto_limit_kind": exc.kind,
+                            "limit": exc.limit,
+                        },
+                    ],
+                }
+                failure_data = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "visit_index": visit_index,
+                    "event": "auto_limit_exceeded",
+                    "auto_limit_kind": exc.kind,
+                    "limit": exc.limit,
+                    "error": exc.as_agent_error(),
+                }
+                if execution_event_sink is not None:
+                    await execution_event_sink.emit("node.failed", failure_data)
+                elif queue is not None:
+                    await queue.put({"event": "node.failed", "data": failure_data})
                 raise
             except WorkflowBudgetExceeded as exc:
                 exc.agent_workflow_state = {
