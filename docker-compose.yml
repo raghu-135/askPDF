@@ -577,12 +577,16 @@ services:
     - sh
     - -c
     command:
-    - npm ci --ignore-scripts && npm test
+    - npm ci --ignore-scripts && npm run test:contracts && npm test
     volumes:
     - ./frontend/package.json:/workspace/frontend/package.json:ro
     - ./frontend/package-lock.json:/workspace/frontend/package-lock.json:ro
+    - ./frontend/tsconfig.json:/workspace/frontend/tsconfig.json:ro
+    - ./frontend/next.config.mjs:/workspace/frontend/next.config.mjs:ro
+    - ./frontend/next-env.d.ts:/workspace/frontend/next-env.d.ts:ro
     - ./frontend/src:/workspace/frontend/src:ro
     - ./frontend/tests:/workspace/frontend/tests:ro
+    - ./frontend/scripts:/workspace/frontend/scripts:ro
     - ./docker-compose.development.override.yml:/workspace/docker-compose.development.override.yml:ro
     - ./rag_service/app/workflow_catalog/builtins:/workspace/rag_service/app/workflow_catalog/builtins:ro
     - frontend_test_node_modules:/workspace/frontend/node_modules

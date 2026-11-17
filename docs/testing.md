@@ -21,7 +21,8 @@ running because test services do not publish the same host ports.
 - API tests (`--api`)
 - model-aware integration tests (`--integration`)
 - schema and migration guardrails (`--schema`)
-- frontend Node tests (`--frontend`), including canvas-spec and document-tab coverage
+- frontend Node tests (`--frontend`), including TypeScript (`tsc --noEmit`), production
+  `next build`, canvas-spec and document-tab coverage
 - LangGraph runtime integration and recovery (`--langgraph-runtime`;
   `--external-runtime` is an alias)
 - LangGraph against a configured real provider (`--langgraph-runtime-real`)

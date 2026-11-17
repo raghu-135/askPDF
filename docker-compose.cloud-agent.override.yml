@@ -254,7 +254,7 @@ services:
       retries: 12
   frontend-test-runner:
     command:
-    - npm test
+    - npm ci --ignore-scripts && npm run test:contracts && npm test
     volumes:
     - ./frontend/node_modules:/workspace/frontend/node_modules:ro
   test-runner:
