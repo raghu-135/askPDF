@@ -208,11 +208,14 @@ async def test_openrouter_model_list_includes_registered_embedding_catalog(monke
     monkeypatch.setattr("app.http_clients.get_http_client", lambda _name: client)
     result = await fetch_available_models()
     assert result["embedding_models"] == [
+        "openai/text-embedding-3-small",
         "qwen/qwen3-embedding-8b",
         "sentence-transformers/all-minilm-l6-v2",
     ]
-    assert "openai/text-embedding-3-small" not in result["embedding_models"]
     assert result["local_embedding_models"] == LOCAL_EMBEDDING_MODELS
+    configs = result["embedding_model_configs"]
+    assert configs["openai/text-embedding-3-small"]["tier"] == "generic"
+    assert configs["qwen/qwen3-embedding-8b"]["tier"] == "exact"
     assert "openai/gpt-4o-mini" in result["llm_models"]
 
 

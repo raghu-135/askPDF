@@ -71,7 +71,12 @@ import {
   getProjectLifecycleSummary,
   type ProjectLifecycleSummary,
 } from '../lib/api';
-import { fetchAvailableEmbeddingModels, checkEmbeddingModelReady } from '../lib/models-api';
+import {
+  checkEmbeddingModelReady,
+  fetchAvailableEmbeddingModels,
+  formatEmbeddingTierLabel,
+  type EmbeddingModelConfig,
+} from '../lib/models-api';
 import { formatDate } from '../lib/date-utils';
 import {
   defaultProjectCloneName,
@@ -181,7 +186,13 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     local_embedding_models: string[];
     embedding_models: string[];
     not_embedding_models: string[];
-  }>({ local_embedding_models: [], embedding_models: [], not_embedding_models: [] });
+    embedding_model_configs: Record<string, EmbeddingModelConfig>;
+  }>({
+    local_embedding_models: [],
+    embedding_models: [],
+    not_embedding_models: [],
+    embedding_model_configs: {},
+  });
   const [creating, setCreating] = useState(false);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -1780,6 +1791,49 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               ))}
             </Select>
           </FormControl>
+          {newProjectEmbeddingModel && availableEmbeddingModels.embedding_model_configs[newProjectEmbeddingModel] && (
+            <Box
+              sx={{
+                mt: 1.5,
+                p: 1.5,
+                borderRadius: 1,
+                bgcolor: 'action.hover',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 0.5,
+              }}
+            >
+              {(() => {
+                const cfg = availableEmbeddingModels.embedding_model_configs[newProjectEmbeddingModel];
+                const tokenizerLabel = cfg.tier === 'generic'
+                  ? `tiktoken (${cfg.encoding || 'cl100k_base'})`
+                  : (cfg.tokenizer || '—');
+                const marginNote = cfg.pack_margin_ratio != null && cfg.tier === 'generic'
+                  ? ` (includes ${Math.round(cfg.pack_margin_ratio * 100)}% safety margin)`
+                  : '';
+                return (
+                  <>
+                    <Typography variant="caption" color="text.secondary">
+                      Chunking tier: {formatEmbeddingTierLabel(cfg.tier)}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Tokenizer: {tokenizerLabel}
+                      {cfg.tier === 'exact' && cfg.hf_prefetched ? ' · cached in image' : ''}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Input limit: {cfg.effective_input_limit} tokens{marginNote}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
+                      Document prefix: {cfg.prefix?.trim() ? `"${cfg.prefix.trim()}"` : '—'}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
+                      Query prefix: {cfg.query_prefix?.trim() ? `"${cfg.query_prefix.trim().slice(0, 120)}${cfg.query_prefix.length > 120 ? '…' : ''}"` : '—'}
+                    </Typography>
+                  </>
+                );
+              })()}
+            </Box>
+          )}
           <FormControlLabel
             sx={{ mt: 1 }}
             control={

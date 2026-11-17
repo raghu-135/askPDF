@@ -211,9 +211,10 @@ class TestModelRegistryEdgeCases:
     @pytest.mark.asyncio
     async def test_model_failure_handling(self, registry):
         """Test handling of model loading failures."""
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
-            mock_get_model.side_effect = Exception("Model not available")
-            
+        with (
+            patch('app.db.vector.model_registry.should_use_local_embeddings', return_value=False),
+            patch('app.db.vector.model_registry.embed_query', side_effect=Exception("Model not available")),
+        ):
             # Should raise exception for model info
             with pytest.raises(Exception, match=r"Could not determine dimensions"):
                 await registry.get_model_info("unavailable-model")

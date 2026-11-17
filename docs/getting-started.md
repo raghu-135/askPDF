@@ -59,10 +59,11 @@ image prefetches those tokenizers at build time.
     LLM_API_URL=https://openrouter.ai/api/v1
     OPENAI_API_KEY=sk-or-replace-with-your-key
 
-The control plane lists OpenRouter embedding models that have a registered
-tokenizer (Qwen3, GTE, E5, BGE, MiniLM, LFM, and Nomic aliases). Models without
-a Hugging Face tokenizer, such as OpenAI text-embedding-3-*, stay hidden until
-you add them via EMBEDDING_TOKENIZER_CONFIG_JSON and cache that tokenizer.
+The control plane lists OpenRouter embedding models from the provider catalog.
+Models defined in `rag_service/config/embedding_models.json` use exact Hugging
+Face tokenizers (Qwen3, GTE, E5, BGE, MiniLM, LFM, Nomic, and aliases). Other
+ids use generic tiktoken chunking; add a catalog entry when you need exact
+prefixes or tokenizers, and remove entries you do not want prefetched in the image.
 
 ## Start askPDF
 

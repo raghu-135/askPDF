@@ -28,8 +28,13 @@ COPY runtime_protocol /tmp/runtime_protocol
 RUN pip install --no-deps /tmp/runtime_protocol
 
 ARG DOWNLOAD_LOCAL_MODELS=true
-COPY rag_service/app/services/embedding_tokenizer_registry.py /tmp/embedding_tokenizer_registry.py
+COPY rag_service/config/embedding_models.json /tmp/rag_config/embedding_models.json
+COPY rag_service/app/__init__.py /tmp/app/__init__.py
+COPY rag_service/app/services/__init__.py /tmp/app/services/__init__.py
+COPY rag_service/app/services/embedding_model_catalog.py /tmp/app/services/embedding_model_catalog.py
 COPY rag_service/scripts/download_embedding_tokenizers.py /tmp/download_embedding_tokenizers.py
+ENV EMBEDDING_MODELS_CONFIG=/tmp/rag_config/embedding_models.json \
+    PYTHONPATH=/tmp
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
       python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); print('Downloaded local embedding + reranker models')"; \
       python /tmp/download_embedding_tokenizers.py; \
@@ -37,6 +42,7 @@ RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
 
 RUN mkdir -p /models/hf /static
 
+COPY rag_service/config config
 COPY rag_service/alembic alembic
 COPY rag_service/scripts scripts
 COPY rag_service/app app

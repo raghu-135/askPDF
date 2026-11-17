@@ -8,7 +8,7 @@ from functools import lru_cache
 from typing import Any, Sequence
 
 from app.services.document_pipeline import TokenCounter
-from app.services.embedding_tokenizer_registry import lookup_embedding_tokenizer_settings
+from app.services.embedding_model_catalog import resolve_settings_for_provider
 
 
 class EmbeddingTokenizerUnavailableError(RuntimeError):
@@ -43,11 +43,61 @@ def _split_oversized_fragment(text: str, limit: int, count) -> list[str]:
     return pieces
 
 
+def _pack_limit(limit: int, margin: float | None) -> int:
+    if margin is None or margin <= 0 or margin > 1:
+        return limit
+    return max(1, int(limit * margin))
+
+
+def _build_token_counter(
+    config: "EmbeddingTokenizerConfig",
+    count_fn,
+) -> TokenCounter:
+    def count(text: str) -> int:
+        formatted = config.format_document_input(text)
+        return count_fn(formatted)
+
+    def split(text: str, limit: int) -> Sequence[str]:
+        words = text.split()
+        output: list[str] = []
+        current: list[str] = []
+        for word in words:
+            if count(word) > limit:
+                if current:
+                    output.append(" ".join(current))
+                    current = []
+                output.extend(_split_oversized_fragment(word, limit, count))
+                continue
+            candidate = " ".join([*current, word])
+            if current and count(candidate) > limit:
+                output.append(" ".join(current))
+                current = [word]
+            else:
+                current.append(word)
+        if current:
+            output.append(" ".join(current))
+        return output
+
+    return TokenCounter(count=count, split=split)
+
+
+def _tiktoken_counter(encoding_name: str):
+    import tiktoken
+
+    encoding = tiktoken.get_encoding(encoding_name)
+
+    def count_ids(formatted: str) -> int:
+        return len(encoding.encode(formatted, disallowed_special=()))
+
+    return count_ids
+
+
 @dataclass(frozen=True)
 class EmbeddingTokenizerConfig:
     identity: str
     revision: str | None
     effective_input_limit: int
+    tier: str = "exact"
     required_prefix: str = ""
     required_suffix: str = ""
     query_prefix: str | None = None
@@ -64,52 +114,66 @@ class EmbeddingTokenizerConfig:
     @property
     def fingerprint(self) -> str:
         return (
-            f"{self.identity}@{self.revision or 'default'}:{self.effective_input_limit}:"
+            f"{self.tier}:{self.identity}@{self.revision or 'default'}:{self.effective_input_limit}:"
             f"{self.required_prefix}:{self.required_suffix}:"
             f"{self.query_prefix}:{self.query_suffix}"
         )
 
 
-@lru_cache(maxsize=32)
+def _local_embedding_settings(model: str) -> dict[str, Any]:
+    return {
+        "tier": "local",
+        "tokenizer": os.environ.get("LOCAL_EMBEDDING_TOKENIZER", model),
+        "revision": os.environ.get("LOCAL_EMBEDDING_TOKENIZER_REVISION") or None,
+        "effective_input_limit": int(os.environ.get("LOCAL_EMBEDDING_INPUT_LIMIT", "512") or "512"),
+        "prefix": os.environ.get("LOCAL_EMBEDDING_FORMAT_PREFIX", ""),
+        "suffix": os.environ.get("LOCAL_EMBEDDING_FORMAT_SUFFIX", ""),
+    }
+
+
+@lru_cache(maxsize=64)
 def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, TokenCounter]:
-    """Resolve the actual local tokenizer or reject an unknown external model."""
+    """Resolve local, exact HF, or generic tiktoken token accounting for a model id."""
     model = str(model or "").strip()
     if not model:
         raise ValueError("embedding model is required")
 
     local_model = os.environ.get("LOCAL_EMBEDDING_MODEL", "").strip()
     try:
-        settings: dict[str, Any]
         if model == local_model:
-            settings = {
-                "tokenizer": os.environ.get("LOCAL_EMBEDDING_TOKENIZER", model),
-                "revision": os.environ.get("LOCAL_EMBEDDING_TOKENIZER_REVISION") or None,
-                "effective_input_limit": int(os.environ.get("LOCAL_EMBEDDING_INPUT_LIMIT", "512")),
-                "prefix": os.environ.get("LOCAL_EMBEDDING_FORMAT_PREFIX", ""),
-                "suffix": os.environ.get("LOCAL_EMBEDDING_FORMAT_SUFFIX", ""),
-            }
+            settings = _local_embedding_settings(model)
+            tier = "local"
+            identity = str(settings["tokenizer"])
+            limit = int(settings["effective_input_limit"])
+            revision = settings["revision"]
+            query_prefix = None
+            query_suffix = None
         else:
-            settings = lookup_embedding_tokenizer_settings(model) or {}
-            if not settings:
-                raise ValueError(
-                    f"No tokenizer configuration is registered for external embedding model '{model}'. "
-                    "Add it to the built-in registry or set EMBEDDING_TOKENIZER_CONFIG_JSON."
-                )
+            resolved = resolve_settings_for_provider(model)
+            tier = resolved.tier
+            identity = resolved.tokenizer or f"generic:{resolved.encoding or 'cl100k_base'}"
+            revision = resolved.revision
+            limit = _pack_limit(resolved.effective_input_limit, resolved.pack_margin_ratio)
+            settings = {
+                "prefix": resolved.prefix,
+                "suffix": resolved.suffix,
+                "query_prefix": resolved.query_prefix,
+                "query_suffix": resolved.query_suffix,
+            }
+            query_prefix = resolved.query_prefix
+            query_suffix = resolved.query_suffix
 
-        identity = str(settings.get("tokenizer") or settings.get("identity") or "").strip()
-        limit = int(settings.get("effective_input_limit") or settings.get("input_limit") or 0)
-        if not identity or limit <= 0:
-            raise ValueError(
-                f"Tokenizer configuration for '{model}' must include tokenizer and positive effective_input_limit"
-            )
+        if limit <= 0:
+            raise ValueError(f"Tokenizer configuration for '{model}' must include positive effective_input_limit")
         config = EmbeddingTokenizerConfig(
             identity=identity,
-            revision=str(settings.get("revision") or "").strip() or None,
+            revision=revision,
             effective_input_limit=limit,
+            tier=tier,
             required_prefix=str(settings.get("prefix") or ""),
             required_suffix=str(settings.get("suffix") or ""),
-            query_prefix=(str(settings["query_prefix"]) if "query_prefix" in settings else None),
-            query_suffix=(str(settings["query_suffix"]) if "query_suffix" in settings else None),
+            query_prefix=query_prefix,
+            query_suffix=query_suffix,
         )
     except EmbeddingTokenizerUnavailableError:
         raise
@@ -119,7 +183,7 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
         ) from exc
 
     try:
-        if model == local_model:
+        if tier == "local":
             from app.models.llm_server_client import get_local_embedding_model
 
             tokenizer = getattr(get_local_embedding_model(model).model, "tokenizer", None)
@@ -127,39 +191,25 @@ def resolve_embedding_tokenizer(model: str) -> tuple[EmbeddingTokenizerConfig, T
                 raise EmbeddingTokenizerUnavailableError(
                     f"Tokenizer is missing on the loaded local embedding model '{model}'"
                 )
-        else:
+
+            def count_fn(formatted: str) -> int:
+                return len(tokenizer(formatted, add_special_tokens=True, truncation=False)["input_ids"])
+
+        elif tier == "exact":
             from transformers import AutoTokenizer
 
             tokenizer = AutoTokenizer.from_pretrained(
                 config.identity, revision=config.revision, local_files_only=True
             )
 
-        def count(text: str) -> int:
-            formatted = config.format_document_input(text)
-            return len(tokenizer(formatted, add_special_tokens=True, truncation=False)["input_ids"])
+            def count_fn(formatted: str) -> int:
+                return len(tokenizer(formatted, add_special_tokens=True, truncation=False)["input_ids"])
 
-        def split(text: str, limit: int) -> Sequence[str]:
-            words = text.split()
-            output: list[str] = []
-            current: list[str] = []
-            for word in words:
-                if count(word) > limit:
-                    if current:
-                        output.append(" ".join(current))
-                        current = []
-                    output.extend(_split_oversized_fragment(word, limit, count))
-                    continue
-                candidate = " ".join([*current, word])
-                if current and count(candidate) > limit:
-                    output.append(" ".join(current))
-                    current = [word]
-                else:
-                    current.append(word)
-            if current:
-                output.append(" ".join(current))
-            return output
+        else:
+            encoding_name = identity.split(":", 1)[-1] if identity.startswith("generic:") else "cl100k_base"
+            count_fn = _tiktoken_counter(encoding_name)
 
-        return config, TokenCounter(count=count, split=split)
+        return config, _build_token_counter(config, count_fn)
     except EmbeddingTokenizerUnavailableError:
         raise
     except Exception as exc:

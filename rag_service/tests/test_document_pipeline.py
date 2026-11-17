@@ -496,11 +496,10 @@ def test_tokenizer_failure_never_uses_whitespace_fallback(monkeypatch):
             raise OSError("fixture tokenizer unavailable")
 
     monkeypatch.setenv("LOCAL_EMBEDDING_MODEL", "model-a")
-    monkeypatch.setenv("EMBEDDING_TOKENIZER_CONFIG_JSON", "")
     monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(AutoTokenizer=BrokenAutoTokenizer))
     resolve_embedding_tokenizer.cache_clear()
     with pytest.raises(EmbeddingTokenizerUnavailableError):
-        resolve_embedding_tokenizer("external-embed")
+        resolve_embedding_tokenizer("intfloat/e5-base-v2")
 
 
 def test_local_embedding_tokenizer_uses_loaded_sentence_transformer(monkeypatch):
