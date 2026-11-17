@@ -12,6 +12,8 @@ from app.services.embedding_model_catalog import (
     unique_hf_tokenizer_identities,
 )
 
+unique_tokenizer_identities = unique_hf_tokenizer_identities
+
 
 def lookup_embedding_tokenizer_settings(model: str) -> dict[str, Any] | None:
     """Return tokenizer settings for exact-tier catalog entries only (legacy helper)."""
