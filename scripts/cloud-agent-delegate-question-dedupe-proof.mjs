@@ -14,7 +14,7 @@ import {
   REAL_UI_VIEWPORT,
   ScreenshotGuard,
   chatRateLimitPause,
-  ensureProjectAndThread,
+  bootstrapProjectThreadViaApi,
   loadEnvAdmin,
   apiJson,
   selectLlmModel,
@@ -116,15 +116,6 @@ function assertSingleQuestion(count, phase) {
   }
 }
 
-async function resolveThreadId(threadName) {
-  const admin = loadEnvAdmin();
-  const api = process.env.ASKPDF_API_URL || 'http://127.0.0.1:8000';
-  const payload = await apiJson(`${api}/api/threads`, { admin });
-  const threads = Array.isArray(payload) ? payload : payload.threads || [];
-  const match = threads.find((row) => row.name === threadName);
-  return match?.id ? String(match.id) : 'unknown-thread';
-}
-
 async function stampThreadId(page, threadId) {
   await page.evaluate((id) => {
     const prior = document.getElementById('e2e-thread-stamp');
@@ -180,9 +171,7 @@ async function main() {
 
   try {
     await waitForServiceReady();
-    await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-    const { threadName } = await ensureProjectAndThread(page);
-    const threadId = await resolveThreadId(threadName);
+    const { threadId } = await bootstrapProjectThreadViaApi(page, `delegate-proof-${Date.now()}`);
     await selectLlmModel(page, MODEL);
     await ensureAutoWorkflow(page);
     await setBrowserAskMode(page);

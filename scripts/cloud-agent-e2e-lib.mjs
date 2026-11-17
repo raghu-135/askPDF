@@ -198,6 +198,36 @@ export async function assertChatWorkspaceVisible(page) {
  * @param {import('playwright').Page} page
  * @param {string} [projectLabel]
  */
+export async function bootstrapProjectThreadViaApi(page, projectLabel = `ui-proof-${Date.now()}`) {
+  const admin = loadEnvAdmin();
+  const project = await apiJson(`${DEFAULT_API_URL}/api/projects`, {
+    method: 'POST',
+    admin,
+    body: {
+      name: projectLabel,
+      description: 'cloud-agent delegate UI proof',
+      embedding_model: 'BAAI/bge-m3',
+    },
+  });
+  const threadName = `thread-${Date.now()}`;
+  const thread = await apiJson(`${DEFAULT_API_URL}/api/projects/${project.id}/threads`, {
+    method: 'POST',
+    admin,
+    body: { name: threadName },
+  });
+  const deepLink = new URL(DEFAULT_BASE_URL);
+  deepLink.searchParams.set('project', String(project.id));
+  deepLink.searchParams.set('thread', String(thread.id));
+  await page.goto(deepLink.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await waitForThreadWorkspaceReady(page);
+  return {
+    projectId: String(project.id),
+    threadId: String(thread.id),
+    threadName,
+    projectLabel,
+  };
+}
+
 export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Date.now()}`) {
   await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForTimeout(1200);
