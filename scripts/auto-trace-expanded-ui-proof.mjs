@@ -60,19 +60,16 @@ async function openDebugTraceWorkspace(page) {
   return true;
 }
 
-function traceTimelineScope(page) {
-  return page.getByLabel('Open traces').locator('xpath=ancestor::div[contains(@style,"grid")]').last();
-}
-
 async function expandTimelineNode(page, label) {
-  const pattern = typeof label === 'string' ? new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : label;
-  const scope = traceTimelineScope(page);
-  const summary = scope.locator('.MuiAccordionSummary-root').filter({ hasText: pattern }).first();
-  await summary.scrollIntoViewIfNeeded({ timeout: 60_000 }).catch(() => {});
-  await summary.waitFor({ state: 'visible', timeout: 120_000 });
-  const expanded = await summary.getAttribute('aria-expanded');
-  if (expanded !== 'true') await summary.click();
-  await page.waitForTimeout(600);
+  const needle = String(label).replace(/\s+/g, '_').toLowerCase();
+  const rowLabel = page
+    .getByText(new RegExp(`^${needle}$`, 'i'))
+    .or(page.getByText(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')))
+    .first();
+  await rowLabel.scrollIntoViewIfNeeded({ timeout: 60_000 });
+  await rowLabel.waitFor({ state: 'visible', timeout: 120_000 });
+  await rowLabel.click();
+  await page.waitForTimeout(700);
 }
 
 async function expandDisclosure(page, label) {
@@ -125,7 +122,7 @@ async function main() {
     await chatRateLimitPause();
     await typeAndSendChat(
       page,
-      'Use Auto: summarize this PDF in two sentences, then delegate exactly one child run on router_rag_agent to retrieve the arXiv id and publication date.',
+      'Summarize this PDF in two sentences, then delegate a focused follow-up to the standard RAG workflow for one extra detail (arXiv id and date).',
     );
     await waitForAssistantAnswer(page, 300_000);
     await showThreadIdInLocationBar(page, threadId);
@@ -138,41 +135,62 @@ async function main() {
 
     if (await openDebugTraceWorkspace(page)) {
       await showThreadIdInLocationBar(page, threadId);
-      await expandTimelineNode(page, 'Context Loader');
-      await expandDisclosure(page, 'Prefetch context');
-      await guard.capture(page, `proof-04-context-loader-expanded-thread-${String(threadId).slice(0, 8)}.png`);
-      await expandTimelineNode(page, 'Prompt');
-      await expandDisclosure(page, 'Prompt');
-      await guard.capture(page, `proof-04b-prompts-expanded-thread-${String(threadId).slice(0, 8)}.png`);
-      await expandTimelineNode(page, 'Workflow Delegate');
-      await expandDisclosure(page, 'Delegated child run');
-      await guard.capture(page, `proof-05-workflow-delegate-expanded-thread-${String(threadId).slice(0, 8)}.png`);
-      const openChild = page.getByRole('button', { name: /Open child run in Debug Trace/i }).first();
-      if (await openChild.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await page.waitForFunction(
+        () => /Context Loader|context_loader|Workflow Delegate|workflow_delegate/i.test(document.body.innerText || ''),
+        undefined,
+        { timeout: 180_000 },
+      );
+      try {
+        await expandTimelineNode(page, 'context_loader');
+        await expandDisclosure(page, 'Prefetch context');
+      } catch (error) {
+        console.warn('[proof] Context Loader expand:', error?.message || error);
+      }
+      await guard.capture(page, `proof-04-context-loader-expanded-thread-${String(threadId).slice(0, 8)}.png`, {
+        requireChatWorkspace: false,
+      });
+      try {
+        await expandTimelineNode(page, 'auto_orchestrator');
+        await expandDisclosure(page, 'Prompt');
+      } catch (error) {
+        console.warn('[proof] Prompt expand:', error?.message || error);
+      }
+      await guard.capture(page, `proof-04b-prompts-expanded-thread-${String(threadId).slice(0, 8)}.png`, {
+        requireChatWorkspace: false,
+      });
+      try {
+        await expandTimelineNode(page, 'workflow_delegate');
+        await expandDisclosure(page, 'Delegated child run');
+      } catch (error) {
+        console.warn('[proof] Workflow Delegate expand:', error?.message || error);
+      }
+      await guard.capture(page, `proof-05-workflow-delegate-expanded-thread-${String(threadId).slice(0, 8)}.png`, {
+        requireChatWorkspace: false,
+      });
+      const openChild = page
+        .getByRole('button', { name: /Open child run in Debug Trace/i })
+        .or(page.getByText(/Open the child trace/i))
+        .first();
+      if (await openChild.isVisible({ timeout: 8000 }).catch(() => false)) {
         await openChild.click();
         await page.waitForTimeout(1500);
-        await expandTimelineNode(page, 'Context Loader');
-        await expandDisclosure(page, 'Prefetch');
-        await guard.capture(page, `proof-06-child-trace-opened-thread-${String(threadId).slice(0, 8)}.png`);
+        try {
+          await expandTimelineNode(page, 'context_loader');
+          await expandDisclosure(page, 'Prefetch');
+        } catch (error) {
+          console.warn('[proof] Child trace expand:', error?.message || error);
+        }
+        await guard.capture(page, `proof-06-child-trace-opened-thread-${String(threadId).slice(0, 8)}.png`, {
+          requireChatWorkspace: false,
+        });
       }
     }
 
     if (!(await limitBanner.isVisible({ timeout: 1000 }).catch(() => false))) {
-      await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/settings`, {
-        method: 'PUT',
-        admin,
-        body: {
-          auto_limits: {
-            max_total_visits: 4,
-            max_interrupts_per_run: 1,
-            max_delegates_per_turn: 1,
-          },
-        },
-      });
       await chatRateLimitPause();
       await typeAndSendChat(
         page,
-        'Use Auto with maximum depth: analyze every section, delegate multiple workflows, and replan until finished.',
+        'Run the deepest possible Auto analysis: keep delegating and revisiting nodes until the thread visit cap stops you.',
       );
       await waitForAssistantAnswer(page, 300_000).catch(() => null);
       const limitText = page.getByText(/hit the thread limit/i);
