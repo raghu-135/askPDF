@@ -834,6 +834,8 @@ class AgentRunService:
         system_role: str = "",
         custom_instructions: str = "",
         tool_instructions: Optional[Dict[str, str]] = None,
+        context_window: Optional[int] = None,
+        context_budget: Optional[Dict[str, Any]] = None,
         mcp_execution_context_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         import hashlib
@@ -946,6 +948,8 @@ class AgentRunService:
                 "builder_id": definition.builder_id,
                 "question": question,
                 "delegated_from_run_id": parent_run_id,
+                "inherited_context_window": context_window,
+                "inherited_context_budget": context_budget if isinstance(context_budget, dict) else None,
             },
         )
 
@@ -977,6 +981,8 @@ class AgentRunService:
             custom_instructions_override=custom_instructions,
             tool_instructions_override=tool_instructions or {},
             pre_fetch_bundle=pre_fetch_bundle,
+            context_window=context_window,
+            context_budget=context_budget,
         )
         adapter = adapter_for_definition(definition)
         runtime_request = AgentRuntimeRequest(
@@ -996,6 +1002,8 @@ class AgentRunService:
                 "system_role_override": system_role,
                 "custom_instructions_override": custom_instructions,
                 "tool_instructions_override": tool_instructions or {},
+                "context_window": context_window,
+                "context_budget": context_budget,
             },
         )
         runtime_context = RuntimeInvocationContext(

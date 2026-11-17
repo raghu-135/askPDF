@@ -23,6 +23,11 @@ from langgraph_runtime.workflows.enums import (
     NodeEventStatus,
 )
 from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER, available_worker_node_ids
+from runtime_protocol.auto_limits import (
+    AUTO_LIMIT_MAX_INTERRUPTS_PER_RUN,
+    AUTO_WORKFLOW_ID,
+    auto_limit_chat_message,
+)
 from langgraph_runtime.workflows.runtime_invocation import (
     append_event,
     log_node_end,
@@ -181,6 +186,14 @@ async def hitl_gate_node(
             "hitl_gate_routes": gate_routes,
             "hitl_interrupt_counts": interrupt_counts,
         }
+        if (
+            str(state.get("workflow_id") or "") == AUTO_WORKFLOW_ID
+            and interrupt_limit is not None
+        ):
+            update["auto_limit_notice"] = auto_limit_chat_message(
+                AUTO_LIMIT_MAX_INTERRUPTS_PER_RUN,
+                limit=interrupt_limit,
+            )
         if route == AgentRunResumeAction.CONTINUE_WITHOUT.value:
             update["evidence"] = combine_evidence(
                 state.get("evidence"),

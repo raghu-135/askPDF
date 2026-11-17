@@ -265,10 +265,31 @@ class AgentTraceRecorder:
         before_safe, _ = sanitize_trace_detail(dict(state))
         after_safe, _ = sanitize_trace_detail(after) if after is not None else (None, {})
         changes = state_changes(before_safe, after_safe) if isinstance(after_safe, dict) else {}
+        event_dict = dict(event or {})
+        trace_extras: Dict[str, Any] = {}
+        if isinstance(event_dict.get("prefetch_summary"), dict):
+            trace_extras["prefetch_summary"] = event_dict["prefetch_summary"]
+        delegation = event_dict.get("delegation")
+        if isinstance(delegation, dict) and delegation:
+            trace_extras["delegation"] = delegation
+        elif node_type == "workflow_delegate":
+            built = {
+                key: event_dict.get(key)
+                for key in (
+                    "child_run_id",
+                    "child_workflow_id",
+                    "delegate_child_run_id",
+                    "delegate_child_workflow_id",
+                )
+                if event_dict.get(key) not in (None, "")
+            }
+            if built:
+                trace_extras["delegation"] = built
         detail = self._store_detail(
             key,
             {
                 **existing,
+                **trace_extras,
                 "node_id": node_id,
                 "node_type": node_type,
                 "visit_index": visit_index,
@@ -277,7 +298,7 @@ class AgentTraceRecorder:
                 "changes": changes,
                 "checkpoint_after": after,
                 "output": dict(update),
-                "event": dict(event or {}),
+                "event": event_dict,
                 "error": str(error) if error is not None else None,
             },
         )

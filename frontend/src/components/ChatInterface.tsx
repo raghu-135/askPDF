@@ -69,6 +69,7 @@ import {
     streamAgentWorkflowBuilderTest,
     type Project,
     type ThreadChatResponse,
+    type AutoLimitsSettings,
 } from '../lib/api';
 import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../lib/runtime-capabilities';
 import type { AgentExecutionStreamEnvelope } from '../lib/agent-execution-stream';
@@ -696,6 +697,10 @@ const workflowSupportsReplans = (workflows: AgentWorkflow[], workflowId?: string
     Boolean(workflows.find((workflow) => workflow.id === workflowId)?.supports_replans)
 );
 
+const workflowSupportsAutoLimits = (workflows: AgentWorkflow[], workflowId?: string | null) => (
+    Boolean(workflows.find((workflow) => workflow.id === workflowId)?.supports_auto_limits_override)
+);
+
 export interface ConversationRuntime {
     kind: 'normal-thread' | 'builder-test';
     persistent: boolean;
@@ -805,6 +810,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     } = useContextBudgetState();
     const [replans, setReplans] = useState(1);
     const [replansLimit, setReplansLimit] = useState<number | null>(null);
+    const [autoLimits, setAutoLimits] = useState<AutoLimitsSettings | null>(null);
+    const [defaultAutoLimits, setDefaultAutoLimits] = useState<AutoLimitsSettings | null>(null);
     const [defaultSystemRole, setDefaultSystemRole] = useState('');
     const [defaultCustomInstructions, setDefaultCustomInstructions] = useState('');
     const [systemRole, setSystemRole] = useState('');
@@ -984,6 +991,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseProjectMemory(settings?.memory?.thread_reads_project_memory ?? true);
         setUseGlobalMemory(settings?.memory?.thread_reads_user_memory ?? false);
         setAgentWorkflowId(normalizeAgentWorkflowForUi(settings?.agent_workflow?.workflow_id));
+        if (settings?.auto_limits) {
+            setAutoLimits(settings.auto_limits);
+        }
     }, [
         defaultCustomInstructions,
         defaultHitlCanvasPublish,
@@ -1105,6 +1115,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 setAgentWorkflows(patterns.agent_workflows || []);
                 if (res.defaults) {
                     setReplansLimit(res.defaults.replans_limit);
+                    if (res.defaults.auto_limits) {
+                        setDefaultAutoLimits(res.defaults.auto_limits);
+                        if (!activeThread) {
+                            setAutoLimits(res.defaults.auto_limits);
+                        }
+                    }
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultHitlWebApproval(res.defaults.hitl_web_approval ?? false);
@@ -1372,6 +1388,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseProjectMemory(true);
         setUseGlobalMemory(false);
         setAgentWorkflowId(agentWorkflows.find((workflow) => workflow.is_default)?.id || agentWorkflows[0]?.id || '');
+        if (defaultAutoLimits) {
+            setAutoLimits(defaultAutoLimits);
+        }
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -2699,6 +2718,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             if (workflowSupportsReplans(agentWorkflows, agentWorkflowId) && replansLimit !== null) {
                 nextSettings.replans = Math.max(1, Math.min(replansLimit, replans));
             }
+            if (workflowSupportsAutoLimits(agentWorkflows, agentWorkflowId) && autoLimits) {
+                nextSettings.auto_limits = autoLimits;
+            }
             const saved = await updateThreadSettings(activeThread.id, nextSettings);
             applyThreadSettingsToState(saved);
             setSettingsDialogOpen(false);
@@ -2745,6 +2767,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             saveLabel: isTestRuntime ? 'Apply to test' : undefined,
             replans,
             replansLimit,
+            autoLimits,
+            defaultAutoLimits,
             useReranker,
             hitlCanvasPublish,
             useMemory,
@@ -2763,6 +2787,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             promptPreview,
             saving: savingSettings,
             onReplansChange: (value) => setReplans(value),
+            onAutoLimitsChange: (value) => setAutoLimits(value),
             onRerankerChange: (checked) => setUseReranker(checked),
             onHitlCanvasPublishChange: (checked) => setHitlCanvasPublish(checked),
             onMemoryChange: (checked) => setUseMemory(checked),
@@ -2799,6 +2824,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         projectAllowsGlobalMemory,
         promptPreview,
         registerThreadSettings,
+        autoLimits,
+        defaultAutoLimits,
         replans,
         replansLimit,
         savingSettings,
@@ -3323,6 +3350,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 saveLabel={isTestRuntime ? 'Apply to test' : undefined}
                 replans={replans}
                 replansLimit={replansLimit}
+                autoLimits={autoLimits}
+                defaultAutoLimits={defaultAutoLimits}
                 useReranker={useReranker}
                 hitlCanvasPublish={hitlCanvasPublish}
                 useMemory={useMemory}
@@ -3340,6 +3369,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions={effectiveToolInstructions}
                 promptPreview={promptPreview}
                 onReplansChange={(value) => setReplans(value)}
+                onAutoLimitsChange={(value) => setAutoLimits(value)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
                 onHitlCanvasPublishChange={(checked) => setHitlCanvasPublish(checked)}
                 onMemoryChange={(checked) => setUseMemory(checked)}

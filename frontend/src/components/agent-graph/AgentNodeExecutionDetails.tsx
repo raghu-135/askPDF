@@ -1,7 +1,8 @@
 import React from 'react';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import { Alert, Box, Divider, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, Divider, Stack, Typography } from '@mui/material';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import type { AgentRunOperationDetail } from '../../lib/api';
 import { ConversationDisclosure } from '../conversation/ConversationDisclosure';
 import { JsonPreview } from '../inspector/JsonPreview';
@@ -10,7 +11,13 @@ const hasData = (value: unknown) => value !== undefined && value !== null
   && (!(Array.isArray(value)) || value.length > 0)
   && (!(typeof value === 'object') || Object.keys(value as Record<string, unknown>).length > 0);
 
-function AgentNodeExecutionDetails({ detail }: { detail: AgentRunOperationDetail }) {
+function AgentNodeExecutionDetails({
+  detail,
+  onOpenDelegatedRun,
+}: {
+  detail: AgentRunOperationDetail;
+  onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
+}) {
   const llm = detail.llm || {};
   const safety = detail.safety || {};
   const eventLlm = detail.event?.llm_result_summary?.llm || {};
@@ -35,6 +42,23 @@ function AgentNodeExecutionDetails({ detail }: { detail: AgentRunOperationDetail
     || memoryToolEvent?.artifacts?.memory_applied_overrides;
   const memorySuppressedIds = detail.output?.artifacts?.memory_suppressed_ids
     || memoryToolEvent?.artifacts?.memory_suppressed_ids;
+  const delegation = (detail.delegation || detail.event?.delegation) as Record<string, unknown> | undefined;
+  const childRunId = typeof delegation?.child_run_id === 'string'
+    ? delegation.child_run_id
+  : typeof detail.event?.child_run_id === 'string'
+      ? detail.event.child_run_id
+      : '';
+  const childWorkflowId = typeof delegation?.child_workflow_id === 'string'
+    ? delegation.child_workflow_id
+    : typeof detail.event?.child_workflow_id === 'string'
+      ? detail.event.child_workflow_id
+      : undefined;
+  const prefetchSummary = (detail.prefetch_summary || detail.event?.prefetch_summary) as Record<string, unknown> | undefined;
+  const hasPromptOrContext = Boolean(
+    (Array.isArray(detail.llm?.prompt) && detail.llm.prompt.length > 0)
+    || hasData(prefetchSummary)
+    || hasData(delegation),
+  );
   const errorText = typeof detail.error === 'string'
     ? detail.error
     : detail.error && typeof detail.error === 'object'
@@ -49,7 +73,33 @@ function AgentNodeExecutionDetails({ detail }: { detail: AgentRunOperationDetail
           <Typography variant="caption" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>Some invocation data was truncated by trace safety limits.</Typography>
         </Stack>
       )}
+      {hasPromptOrContext && (
+        <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>
+          Context / prompt available — expand sections below.
+        </Typography>
+      )}
       {errorText && <Alert severity="error" sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{errorText}</Alert>}
+      {hasData(prefetchSummary) && (
+        <ConversationDisclosure label="Prefetch context" defaultExpanded>
+          <JsonPreview value={prefetchSummary} maxHeight={320} />
+        </ConversationDisclosure>
+      )}
+      {hasData(delegation) && (
+        <ConversationDisclosure label="Delegated child run" defaultExpanded>
+          <JsonPreview value={delegation} maxHeight={220} />
+          {childRunId && onOpenDelegatedRun && (
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<OpenInNewIcon />}
+              sx={{ mt: 0.75 }}
+              onClick={() => onOpenDelegatedRun(childRunId, childWorkflowId)}
+            >
+              Open child run in Debug Trace
+            </Button>
+          )}
+        </ConversationDisclosure>
+      )}
       {(safety.redacted_fields?.length || safety.omitted_fields?.length) && (
         <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ color: 'info.main', minWidth: 0 }}>
           <InfoOutlinedIcon sx={{ fontSize: 15, mt: '1px', flexShrink: 0 }} />

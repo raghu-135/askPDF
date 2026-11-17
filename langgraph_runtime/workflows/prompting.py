@@ -18,7 +18,7 @@ from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER
 from langgraph_runtime.agent.canvas_layout_skills import canvas_layout_skills_section
 from langgraph_runtime.workflows.canvas_citation_menu import canvas_prompt_sections
 from langgraph_runtime.prompts.loaders import get_browser_access_mandate, get_web_search_mandate, load_runtime_prompt
-from runtime_protocol.evidence import usable_context_chars
+from runtime_protocol.prompt_assembly import truncate_for_workflow
 
 
 GRAPH_TOOL_NAMES = [
@@ -219,7 +219,7 @@ def _json_preview(value: Any, *, limit: int = 4000) -> str:
 def _evaluator_prompt_context(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         **_prompt_context(state),
-        "EVIDENCE_CONTEXT": str(state.get("evidence") or "")[:usable_context_chars(state.get("context_window"), ratio_key="evidence_ratio", budget=state.get("context_budget"))] or CONTEXT_PLACEHOLDER,
+        "EVIDENCE_CONTEXT": truncate_for_workflow(state.get("evidence") or "", state.get("context_window"), ratio_key="evidence_ratio") or CONTEXT_PLACEHOLDER,
         "EXECUTION_PLAN": _json_preview(state.get("execution_plan") or []),
         "DOCUMENT_SOURCE_COUNT": len(state.get("document_sources") or []),
         "WEB_SOURCE_COUNT": len(state.get("web_sources") or []),
@@ -289,7 +289,7 @@ def build_grounded_answer_verifier_prompt(state: Dict[str, Any]) -> str:
     })
     return _render_prompt("corrective_grounded_verifier.md", {
         **_prompt_context(state),
-        "DRAFT_ANSWER": str(state.get("final_answer") or "")[:usable_context_chars(state.get("context_window"), ratio_key="draft_ratio", budget=state.get("context_budget"))],
+        "DRAFT_ANSWER": truncate_for_workflow(state.get("final_answer") or "", state.get("context_window"), ratio_key="draft_ratio"),
         "SOURCE_IDS": _json_preview(source_ids, limit=8_000),
         "EVIDENCE_CONTEXT": corrective_evidence_context(state),
         "RETRIEVAL_CONTRADICTIONS": _json_preview(

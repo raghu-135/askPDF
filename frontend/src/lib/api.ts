@@ -259,8 +259,17 @@ export interface ThreadMetadata {
   [key: string]: any;
 }
 
+export interface AutoLimitsSettings {
+  max_total_visits: number;
+  max_interrupts_per_run: number;
+  max_delegates_per_turn: number;
+  require_plan_approval_on_complex: boolean;
+  require_plan_approval_all: boolean;
+}
+
 export interface ThreadSettings {
   replans: number;
+  auto_limits?: AutoLimitsSettings;
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
@@ -813,6 +822,7 @@ export interface AgentWorkflow {
   framework?: string;
   builder_id?: string;
   supports_replans?: boolean;
+  supports_auto_limits_override?: boolean;
   supports_long_running_tasks?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
@@ -1385,6 +1395,10 @@ export interface AgentRunDetails {
   workflow_id: string;
   task_id?: string | null;
   parent_run_id?: string | null;
+  inherited_context?: {
+    context_window?: number;
+    context_budget?: Record<string, number>;
+  } | null;
   task_attempt?: number;
   resolved_spec_json?: Record<string, any>;
   runtime_binding_status?: string;
@@ -2304,6 +2318,18 @@ export async function listThreadAgentRuns(
   params.set("limit", String(options.limit ?? 20));
   if (options.status) params.set("status", options.status);
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/agent-runs?${params.toString()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listAgentRunDelegations(
+  runId: string,
+  threadId: string,
+  options: { limit?: number } = {},
+): Promise<{ parent_run_id: string; thread_id: string; delegations: AgentRunSummary[] }> {
+  const params = new URLSearchParams({ thread_id: threadId });
+  if (options.limit) params.set('limit', String(options.limit));
+  const res = await fetch(`${API_BASE}/api/agent-runs/${runId}/delegations?${params.toString()}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

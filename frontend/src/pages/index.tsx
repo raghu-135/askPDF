@@ -1139,6 +1139,15 @@ export default function Home() {
     openTrace(trace);
   }, [openTrace, persistWorkspaceResume, workspaceContextKey]);
 
+  const handleOpenDelegatedRun = useCallback((childRunId: string, childWorkflowId?: string) => {
+    handleOpenTrace({
+      id: childRunId,
+      threadId: activeThread?.id,
+      label: childWorkflowId ? `Delegated: ${childWorkflowId}` : `Run ${childRunId.slice(0, 8)}`,
+      activate: true,
+    });
+  }, [activeThread?.id, handleOpenTrace]);
+
   const handleActiveTraceChange = useCallback((traceId: string | null) => {
     setActiveTraceId(traceId);
     if (activeTabId === 'trace-tab' && traceId) {
@@ -1275,6 +1284,7 @@ export default function Home() {
               activeTraceId={activeTraceId}
               onActiveTraceChange={handleActiveTraceChange}
               onCloseTrace={closeTrace}
+              onOpenDelegatedRun={handleOpenDelegatedRun}
               onCloseDocument={handleDocumentClose}
               onDocumentRemove={handleTabRemove}
               onDocumentPromote={handlePromoteDocument}

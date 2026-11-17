@@ -34,6 +34,7 @@ export default function TraceWorkspace({
   onClose,
   onBackToMessage,
   suspendHeavyContent = false,
+  onOpenDelegatedRun,
 }: {
   tabs: TraceRunTab[];
   activeRunId: string | null;
@@ -41,6 +42,7 @@ export default function TraceWorkspace({
   onClose: (runId: string) => void;
   onBackToMessage?: (messageId: string) => void;
   suspendHeavyContent?: boolean;
+  onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
 }) {
   const activeTab = tabs.find((tab) => tab.id === activeRunId) || tabs[0];
   if (!activeTab) {
@@ -101,6 +103,7 @@ export default function TraceWorkspace({
           suspendHeavyContent={suspendHeavyContent}
           onRunDetailsChange={activeTab.onRunDetailsChange}
           onResumeAction={activeTab.onResumeAction}
+          onOpenDelegatedRun={onOpenDelegatedRun}
         />
       </Box>
     </Box>

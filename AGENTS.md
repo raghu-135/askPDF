@@ -1,5 +1,12 @@
 # Agent notes
 
+## Context window and prefetch
+
+User-facing **initial retrieval budget** sliders apply only at `context_loader`
+(prefetch). Do not bump `EXTRACTION_PIPELINE_VERSION` or
+`RETRIEVAL_CHUNKING_VERSION` for highlight/prefetch/trace-only work. Auto thread
+limits use `AUTO_*` env defaults via `app/models/auto_limits.py`.
+
 ## PDF highlight geometry vs retrieval
 
 Highlight and coordinate alignment (bbox, page dimensions, Docling word-cell overlays) are **display-only** relative to retrieval. They must **not** change canonical sentence text, chunk boundaries, `body_text`, or `contextualized_text` used for embedding.

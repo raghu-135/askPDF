@@ -18,7 +18,9 @@ from langgraph_runtime.workflows.document_scope import (
 )
 from langgraph_runtime.workflows.external_research import attachment_document_scope_bypass
 from langgraph_runtime.workflows.enums import AutoOrchestratorRoute, NodeEventStatus
+from langgraph_runtime.workflows.auto_limit_errors import AutoLimitExceeded
 from langgraph_runtime.workflows.runtime_invocation import append_event, log_node_end
+from runtime_protocol.auto_limits import AUTO_LIMIT_MAX_DELEGATES_PER_TURN
 from langgraph_runtime.workflows.state import RouterRagState
 from langgraph_runtime.workflows.trace import compact_preview
 from langgraph_runtime.workflows.clarification_terminal import (
@@ -114,6 +116,20 @@ def _document_count(state: Mapping[str, Any]) -> int:
     return max(counts) if counts else 0
 
 
+def _require_plan_approval(state: Mapping[str, Any], *, workflow_id: str) -> bool:
+    policy = _auto_policy(state)
+    if policy.get("require_plan_approval_all"):
+        return bool(workflow_id)
+    if policy.get("require_plan_approval_on_complex"):
+        if workflow_id in {
+            DEEP_RESEARCH_WORKFLOW_ID,
+            ORCHESTRATOR_WORKFLOW_ID,
+            PLAN_EXECUTE_WORKFLOW_ID,
+        }:
+            return True
+    return workflow_id == DEEP_RESEARCH_WORKFLOW_ID
+
+
 def _choose_delegate_workflow(state: Mapping[str, Any], *, catalog_ids: set[str]) -> tuple[str, str]:
     question = str(state.get("question") or "")
     if DEEP_RESEARCH_WORKFLOW_ID in catalog_ids and _DEEP_RESEARCH_PATTERN.search(question):
@@ -132,8 +148,27 @@ def _choose_delegate_workflow(state: Mapping[str, Any], *, catalog_ids: set[str]
 
 
 def _auto_policy(state: Mapping[str, Any]) -> Dict[str, Any]:
-    # Resolved spec stores auto_policy on config; execution state may mirror it later.
-    return {}
+    policy = state.get("auto_policy")
+    return dict(policy) if isinstance(policy, dict) else {}
+
+
+def _trace_recorder(config: RunnableConfig) -> Any:
+    return ((config or {}).get("configurable") or {}).get("trace_recorder")
+
+
+def _delegation_detail(
+    *,
+    child_run_id: str,
+    child_workflow_id: str,
+    question: str,
+    bundle: Mapping[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "child_run_id": child_run_id,
+        "child_workflow_id": child_workflow_id,
+        "question_chars": len(question),
+        "prefetch_seeded": bool(bundle),
+    }
 
 
 async def auto_orchestrator_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -159,7 +194,7 @@ async def auto_orchestrator_node(state: RouterRagState, config: RunnableConfig) 
     if not workflow_id:
         route = AutoOrchestratorRoute.DECLINE.value
     else:
-        require_approval = workflow_id == DEEP_RESEARCH_WORKFLOW_ID
+        require_approval = _require_plan_approval(state, workflow_id=workflow_id)
         route = AutoOrchestratorRoute.PLAN_APPROVAL.value if require_approval else AutoOrchestratorRoute.DELEGATE.value
 
     plan_summary = f"Delegate to `{workflow_id}`: {rationale}" if workflow_id else rationale
@@ -187,10 +222,32 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
     parent_run_id = str(state.get("agent_run_id") or "").strip()
     thread_id = str(state.get("thread_id") or "").strip()
     question = str(state.get("question") or "")
+    policy = _auto_policy(state)
+    try:
+        delegate_cap = max(1, int(policy.get("max_delegates_per_turn", 1)))
+    except (TypeError, ValueError):
+        delegate_cap = 1
+    invocation_count = int(state.get("delegate_invocation_count") or 0)
+    if invocation_count >= delegate_cap:
+        raise AutoLimitExceeded(
+            AUTO_LIMIT_MAX_DELEGATES_PER_TURN,
+            limit=delegate_cap,
+            state=state,
+        )
     if not child_workflow_id or not parent_run_id or not thread_id:
         raise ValueError("workflow_delegate requires delegate_workflow_id, agent_run_id, and thread_id")
 
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    trace_recorder = _trace_recorder(config)
+    if trace_recorder is not None and hasattr(trace_recorder, "record_runtime_event"):
+        trace_recorder.record_runtime_event(
+            "delegation.started",
+            attributes={
+                "child_workflow_id": child_workflow_id,
+                "parent_run_id": parent_run_id,
+                "question_chars": len(question),
+            },
+        )
     response = await delegate_sync(
         parent_run_id=parent_run_id,
         thread_id=thread_id,
@@ -206,16 +263,34 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         system_role=str(state.get("system_role") or ""),
         custom_instructions=str(state.get("custom_instructions") or ""),
         tool_instructions=state.get("tool_instructions") if isinstance(state.get("tool_instructions"), dict) else {},
+        context_window=state.get("context_window"),
+        context_budget=state.get("context_budget") if isinstance(state.get("context_budget"), dict) else None,
     )
     child_run_id = str(response.get("child_run_id") or "")
     child_result = response.get("result") if isinstance(response.get("result"), dict) else {}
     child_status = response.get("status") or child_result.get("status")
     child_options = clarification_options_from_mapping({**child_result, "clarification_options": response.get("clarification_options") or child_result.get("clarification_options")})
+    delegation = _delegation_detail(
+        child_run_id=child_run_id,
+        child_workflow_id=child_workflow_id,
+        question=question,
+        bundle=bundle,
+    )
+    if trace_recorder is not None and hasattr(trace_recorder, "record_runtime_event") and child_run_id:
+        trace_recorder.record_runtime_event(
+            "delegation.completed",
+            attributes={
+                **delegation,
+                "parent_run_id": parent_run_id,
+                "child_status": child_status,
+            },
+        )
     if clarification_terminal_active({**child_result, "status": child_status, "clarification_options": child_options}):
         data = {
             "status": NodeEventStatus.COMPLETED.value,
             "child_run_id": child_run_id,
             "child_workflow_id": child_workflow_id,
+            "delegation": delegation,
             "output_preview": {"clarification_options": child_options},
             "llm_result_summary": {"clarification_option_count": len(child_options)},
         }
@@ -241,6 +316,7 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         "child_workflow_id": child_workflow_id,
         "delegate_child_run_id": child_run_id,
         "delegate_child_workflow_id": child_workflow_id,
+        "delegation": delegation,
         "agent_task_id": agent_task_id,
         "output_preview": {"answer": compact_preview(child_final_answer)},
     }
@@ -252,6 +328,7 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         "delegate_child_workflow_id": child_workflow_id,
         "child_final_answer": child_final_answer,
         "delegate_child_output": response,
+        "delegate_invocation_count": invocation_count + 1,
         "node_events": append_event(state, "workflow_delegate", data, started=started, config=config),
     }
     if agent_task_id:
@@ -277,7 +354,10 @@ async def delegate_synthesizer_node(state: RouterRagState, config: RunnableConfi
             "node_events": append_event(state, "delegate_synthesizer", data, started=started, config=config),
         }
     child_output = state.get("delegate_child_output") if isinstance(state.get("delegate_child_output"), dict) else {}
+    notice = str(state.get("auto_limit_notice") or "").strip()
     answer = str(state.get("child_final_answer") or state.get("final_answer") or "").strip()
+    if notice:
+        answer = notice if not answer else f"{notice}\n\n{answer}"
     if (
         not answer
         and str(child_output.get("status") or "") == "awaiting_human"

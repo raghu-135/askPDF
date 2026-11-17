@@ -109,6 +109,18 @@ excluded. Document-scope decline uses the canonical
       → final artifact
       → optional publication as a ChatTurn
 
+## Context engineering (prefetch vs workflow)
+
+Run settings expose a **context window** and an **initial retrieval budget**
+(context budget ratios from `.env` / thread overrides). Only `context_loader`
+consumes that budget to build `pre_fetch_bundle`. Later LLM hops truncate via
+each workflow’s `context_policy` and JIT tools, not per-message ratio sliders.
+
+Auto orchestrator limits (`AUTO_*` in `.env`) default thread `auto_limits` for
+`auto_rag_agent` (visits, interrupts, delegates per turn, plan approval). Child
+delegations inherit the parent run’s context window and prefetch snapshot;
+Debug Trace links parent `workflow_delegate` operations to child runs.
+
 ## Important boundaries
 
 - Product APIs never expose framework checkpoint identifiers.

@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tool_registry import tool_contracts_by_id
+from app.product_orchestration.delegation_context import inherited_context_from_run_metadata
 from app.product_orchestration.repository import (
     AgentWorkflowRepository,
     AgentRunInterruptError,
@@ -23,6 +24,7 @@ from app.product_orchestration.execution_stream import AgentExecutionEventSink, 
 from app.product_orchestration.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
+    workflow_allows_auto_limits_override,
     workflow_is_chat_eligible,
     workflow_supports_replans,
 )
@@ -213,6 +215,9 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
         "is_builtin": workflow.is_builtin,
         "is_default": builtin_key == default_agent_workflow_key(),
         "supports_replans": workflow_supports_replans(spec),
+        "supports_auto_limits_override": workflow_allows_auto_limits_override(
+            {**spec, "workflow_id": spec.get("workflow_id") or workflow.id}
+        ),
         "supports_long_running_tasks": bool(
             ((spec.get("runtime") or {}).get("features") or {}).get("supports_long_running_tasks")
         ),
@@ -375,6 +380,9 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "debug_trace_failure": _debug_trace_failure_for_response(run),
         "run_kind": (run.run_metadata_json or {}).get("run_kind"),
         "builder_session_id": (run.run_metadata_json or {}).get("builder_session_id"),
+        "inherited_context": inherited_context_from_run_metadata(
+            run.run_metadata_json if isinstance(run.run_metadata_json, dict) else None
+        ),
         "final_output": (run.debug_trace_json or {}).get("final_output") if isinstance(run.debug_trace_json, dict) else None,
         "observability": {
             "event_projection_version": 2,
@@ -462,6 +470,9 @@ def _run_summary_payload(run) -> Dict[str, Any]:
         "workflow_id": run.workflow_id,
         "task_id": run.task_id,
         "parent_run_id": run.parent_run_id,
+        "inherited_context": inherited_context_from_run_metadata(
+            run.run_metadata_json if isinstance(run.run_metadata_json, dict) else None
+        ),
         "task_attempt": run.task_attempt,
         "status": run.status,
         "pending_interrupt": _pending_interrupt_payload(run),
@@ -1331,6 +1342,30 @@ async def list_thread_agent_runs(
         "limit": limit,
         "status": status,
         "agent_runs": [_run_summary_payload(run) for run in runs],
+    }
+
+
+@router.get("/agent-runs/{run_id}/delegations")
+async def list_agent_run_delegations(
+    run_id: str,
+    thread_id: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
+    repo = AgentWorkflowRepository()
+    parent = await repo.get_run(run_id)
+    if not parent or parent.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
+    runs = await repo.list_runs_for_thread(thread_id, limit=limit * 4)
+    children = [run for run in runs if str(getattr(run, "parent_run_id", "") or "") == run_id][:limit]
+    return {
+        "parent_run_id": run_id,
+        "thread_id": thread_id,
+        "delegations": [_run_summary_payload(run) for run in children],
     }
 
 

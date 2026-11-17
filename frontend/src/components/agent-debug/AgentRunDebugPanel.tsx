@@ -26,6 +26,7 @@ function AgentRunDebugPanel({
   liveTraceView,
   running = false,
   onResumeAction,
+  onOpenDelegatedRun,
 }: {
   runId?: string;
   threadId?: string;
@@ -39,6 +40,7 @@ function AgentRunDebugPanel({
   liveTraceView?: TraceRunView;
   running?: boolean;
   onResumeAction?: (action: AgentRunResumeAction, selectedOptionIds?: string[]) => Promise<boolean>;
+  onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
 }) {
   const normalizedRunId = isValidTraceId(runId) ? runId.trim() : '';
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -439,6 +441,7 @@ function AgentRunDebugPanel({
             defaultFinalAnswerOpen={false}
             chatMode
             detailsAvailable={executionDetailsAvailable}
+            onOpenDelegatedRun={onOpenDelegatedRun}
           />
         </>
       )}

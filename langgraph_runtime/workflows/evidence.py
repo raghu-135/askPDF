@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from langchain_core.runnables import RunnableConfig
 
@@ -87,6 +87,36 @@ def _runtime_visit_index(config: Optional[RunnableConfig]) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return value if value >= 1 else None
+
+
+def prefetch_trace_summary(
+    bundle: Dict[str, Any],
+    *,
+    context_budget: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Compact prefetch counts for debug traces (no full document text)."""
+
+    text_keys = (
+        "recent_history_text",
+        "semantic_history_text",
+        "document_evidence_text",
+        "web_evidence_text",
+        "durable_memory_text",
+        "thread_shape_text",
+    )
+    slice_char_counts = {
+        key.replace("_text", ""): len(str(bundle.get(key) or ""))
+        for key in text_keys
+    }
+    return {
+        "slice_char_counts": slice_char_counts,
+        "document_source_count": len(bundle.get("document_sources") or []),
+        "web_source_count": len(bundle.get("web_sources") or []),
+        "used_chat_id_count": len(bundle.get("used_chat_ids") or []),
+        "used_memory_id_count": len(bundle.get("durable_memory_refs") or []),
+        "bundle_keys": sorted(str(key) for key in bundle if bundle.get(key) not in (None, "", [], {})),
+        "context_budget": dict(context_budget) if isinstance(context_budget, Mapping) else None,
+    }
 
 
 def format_prefetch_summary(bundle: Dict[str, Any]) -> str:

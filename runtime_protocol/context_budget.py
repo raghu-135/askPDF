@@ -8,7 +8,14 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 CHARS_PER_TOKEN = 4
-_FALLBACK_CONTEXT_WINDOW = 8192
+
+
+def default_context_window_tokens(environ: Mapping[str, str] | None = None) -> int:
+    values = dict(os.environ if environ is None else environ)
+    raw = values.get("DEFAULT_TOKEN_BUDGET")
+    if raw is None or not str(raw).strip():
+        raise ValueError("DEFAULT_TOKEN_BUDGET is required")
+    return int(str(raw).strip())
 
 _PREFETCH_KEYS = (
     "recent_ratio",
@@ -151,7 +158,7 @@ def usable_context_chars(
     except (TypeError, ValueError):
         tokens = 0
     if tokens <= 0:
-        tokens = _FALLBACK_CONTEXT_WINDOW
+        tokens = default_context_window_tokens()
     usable_ratio = slice_ratio(settings, "usable_ratio")
     share = ratio
     if share is None and ratio_key:

@@ -1,7 +1,7 @@
 import type { ContextBudgetRatios } from './context-budget';
 
 export const CONTEXT_PACKING_MENU_HELP =
-  'Controls how much history, memory, and document text AskPDF tries to load before each model call. This is separate from the provider’s real context limit—stay at or below what your model supports.';
+  'Initial retrieval budget: how much history, memory, and document text AskPDF loads during context prefetch (before agent nodes run). Later workflow steps use workflow context_policy and tools—not these sliders.';
 
 export const CONTEXT_SIZE_HELP =
   'Your token target for one run (prompt + answer). If you see context-length errors, lower this number or reduce the retrieval sliders.';

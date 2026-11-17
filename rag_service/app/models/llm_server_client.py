@@ -168,6 +168,7 @@ RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window
 # Chars per token estimate
 CHARS_PER_TOKEN = 4
 
+from app.models.auto_limits import default_auto_limits, merge_auto_limits
 from runtime_protocol.context_budget import (
     compute_prefetch_budget as _compute_prefetch_budget,
     load_context_budget_settings,
@@ -199,6 +200,7 @@ def default_thread_settings():
         "use_reranker": False,
         "agent_workflow": {"workflow_id": default_agent_workflow_key()},
         "memory": dict(DEFAULT_THREAD_MEMORY_SETTINGS),
+        "auto_limits": default_auto_limits(),
     }
 
 
@@ -223,6 +225,9 @@ def merge_thread_settings(overrides=None):
     else:
         merged["agent_workflow"] = {"workflow_id": default_agent_workflow_key()}
     merged["memory"] = normalize_thread_memory_settings(overrides)
+    merged["auto_limits"] = merge_auto_limits(
+        overrides.get("auto_limits") if isinstance(overrides, dict) else None
+    )
     return merged
 
 

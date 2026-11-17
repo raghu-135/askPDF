@@ -48,7 +48,10 @@ const nodeSummary = (node: TraceOperationView) => {
   else if (node.usedMemoryIdCount) summary = `Recalled ${node.usedMemoryIdCount} long-term memor${Number(node.usedMemoryIdCount) === 1 ? 'y' : 'ies'}.`;
   else if (event.document_source_count || event.web_source_count) summary = `Retrieved ${Number(event.document_source_count || 0) + Number(event.web_source_count || 0)} source${Number(event.document_source_count || 0) + Number(event.web_source_count || 0) === 1 ? '' : 's'}.`;
   else if (event.answer_chars) summary = `Generated an answer (${event.answer_chars} characters).`;
-  else summary = node.status === 'active' ? 'Running…' : 'Completed this step.';
+  else if (node.id === 'workflow_delegate' || node.type === 'workflow_delegate' || event.child_run_id || detail.delegation?.child_run_id) {
+    const childWorkflow = event.child_workflow_id || detail.delegation?.child_workflow_id || 'child workflow';
+    summary = `Delegated run to ${childWorkflow}. Open the child trace for planner prompts and retrieval steps.`;
+  } else summary = node.status === 'active' ? 'Running…' : 'Completed this step.';
   return compactExecutionText(summary, 260);
 };
 
@@ -66,6 +69,7 @@ function AgentExecutionView({
   suspended = false,
   chatMode = false,
   detailsAvailable = true,
+  onOpenDelegatedRun,
 }: {
   runId?: string | null;
   threadId?: string | null;
@@ -80,6 +84,7 @@ function AgentExecutionView({
   suspended?: boolean;
   chatMode?: boolean;
   detailsAvailable?: boolean;
+  onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
 }) {
   const initialDetails = useMemo(() => {
     const result: Record<string, AgentRunOperationDetail> = {};
@@ -467,7 +472,12 @@ function AgentExecutionView({
                 </Stack>
                 {loadingKey === key && <Stack direction="row" spacing={1}><CircularProgress size={16} /><Typography variant="caption">Loading full details…</Typography></Stack>}
                 {detailErrors[key] && <Alert severity="info">Older trace—full invocation details are unavailable.</Alert>}
-                {detail && <AgentNodeExecutionDetails detail={detail} />}
+                {detail && (
+                  <AgentNodeExecutionDetails
+                    detail={detail}
+                    onOpenDelegatedRun={onOpenDelegatedRun}
+                  />
+                )}
                 {visitModels.length > 0 && (
                   <Stack spacing={0.35} sx={{ mt: 0.7 }}>
                     <Typography variant="caption" sx={{ fontWeight: 700 }}>Model activity</Typography>
