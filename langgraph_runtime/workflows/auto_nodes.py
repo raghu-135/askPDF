@@ -150,6 +150,25 @@ def _auto_policy(state: Mapping[str, Any]) -> Dict[str, Any]:
     return dict(policy) if isinstance(policy, dict) else {}
 
 
+def _trace_recorder(config: RunnableConfig) -> Any:
+    return ((config or {}).get("configurable") or {}).get("trace_recorder")
+
+
+def _delegation_detail(
+    *,
+    child_run_id: str,
+    child_workflow_id: str,
+    question: str,
+    bundle: Mapping[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "child_run_id": child_run_id,
+        "child_workflow_id": child_workflow_id,
+        "question_chars": len(question),
+        "prefetch_seeded": bool(bundle),
+    }
+
+
 async def auto_orchestrator_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
     started = time.perf_counter()
     catalog_ids = _catalog_ids(state)
@@ -213,6 +232,16 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         raise ValueError("workflow_delegate requires delegate_workflow_id, agent_run_id, and thread_id")
 
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    trace_recorder = _trace_recorder(config)
+    if trace_recorder is not None and hasattr(trace_recorder, "record_runtime_event"):
+        trace_recorder.record_runtime_event(
+            "delegation.started",
+            attributes={
+                "child_workflow_id": child_workflow_id,
+                "parent_run_id": parent_run_id,
+                "question_chars": len(question),
+            },
+        )
     response = await delegate_sync(
         parent_run_id=parent_run_id,
         thread_id=thread_id,
@@ -235,11 +264,27 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
     child_result = response.get("result") if isinstance(response.get("result"), dict) else {}
     child_status = response.get("status") or child_result.get("status")
     child_options = clarification_options_from_mapping({**child_result, "clarification_options": response.get("clarification_options") or child_result.get("clarification_options")})
+    delegation = _delegation_detail(
+        child_run_id=child_run_id,
+        child_workflow_id=child_workflow_id,
+        question=question,
+        bundle=bundle,
+    )
+    if trace_recorder is not None and hasattr(trace_recorder, "record_runtime_event") and child_run_id:
+        trace_recorder.record_runtime_event(
+            "delegation.completed",
+            attributes={
+                **delegation,
+                "parent_run_id": parent_run_id,
+                "child_status": child_status,
+            },
+        )
     if clarification_terminal_active({**child_result, "status": child_status, "clarification_options": child_options}):
         data = {
             "status": NodeEventStatus.COMPLETED.value,
             "child_run_id": child_run_id,
             "child_workflow_id": child_workflow_id,
+            "delegation": delegation,
             "output_preview": {"clarification_options": child_options},
             "llm_result_summary": {"clarification_option_count": len(child_options)},
         }
@@ -265,6 +310,7 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         "child_workflow_id": child_workflow_id,
         "delegate_child_run_id": child_run_id,
         "delegate_child_workflow_id": child_workflow_id,
+        "delegation": delegation,
         "agent_task_id": agent_task_id,
         "output_preview": {"answer": compact_preview(child_final_answer)},
     }

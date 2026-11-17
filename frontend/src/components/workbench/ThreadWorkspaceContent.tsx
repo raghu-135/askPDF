@@ -42,6 +42,7 @@ export default function ThreadWorkspaceContent({
   activeTraceId,
   onActiveTraceChange,
   onCloseTrace,
+  onOpenDelegatedRun,
   onCloseDocument,
   onDocumentRemove,
   onDocumentPromote,
@@ -104,6 +105,7 @@ export default function ThreadWorkspaceContent({
   activeTraceId: string | null;
   onActiveTraceChange: (runId: string) => void;
   onCloseTrace: (runId: string) => void;
+  onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
   onCloseDocument?: (documentId: string) => void;
   onDocumentRemove?: (documentId: string) => void;
   onDocumentPromote?: (documentId: string) => void;
@@ -277,6 +279,7 @@ export default function ThreadWorkspaceContent({
           activeRunId={activeTraceId}
           onActiveRunChange={onActiveTraceChange}
           onClose={onCloseTrace}
+          onOpenDelegatedRun={onOpenDelegatedRun}
           suspendHeavyContent={isResizing}
         />
       ) : activeTabId === 'memory-tab' ? (

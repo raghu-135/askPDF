@@ -1338,6 +1338,30 @@ async def list_thread_agent_runs(
     }
 
 
+@router.get("/agent-runs/{run_id}/delegations")
+async def list_agent_run_delegations(
+    run_id: str,
+    thread_id: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
+    repo = AgentWorkflowRepository()
+    parent = await repo.get_run(run_id)
+    if not parent or parent.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
+    runs = await repo.list_runs_for_thread(thread_id, limit=limit * 4)
+    children = [run for run in runs if str(getattr(run, "parent_run_id", "") or "") == run_id][:limit]
+    return {
+        "parent_run_id": run_id,
+        "thread_id": thread_id,
+        "delegations": [_run_summary_payload(run) for run in children],
+    }
+
+
 @router.get("/agent-runs/{run_id}")
 async def get_agent_run(
     run_id: str,

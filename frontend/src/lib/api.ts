@@ -2318,6 +2318,18 @@ export async function listThreadAgentRuns(
   return res.json();
 }
 
+export async function listAgentRunDelegations(
+  runId: string,
+  threadId: string,
+  options: { limit?: number } = {},
+): Promise<{ parent_run_id: string; thread_id: string; delegations: AgentRunSummary[] }> {
+  const params = new URLSearchParams({ thread_id: threadId });
+  if (options.limit) params.set('limit', String(options.limit));
+  const res = await fetch(`${API_BASE}/api/agent-runs/${runId}/delegations?${params.toString()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function getAgentRun(runId: string, threadId: string): Promise<AgentRunDetails> {
   const params = new URLSearchParams({ thread_id: threadId });
   const res = await fetch(`${API_BASE}/api/agent-runs/${runId}?${params.toString()}`);

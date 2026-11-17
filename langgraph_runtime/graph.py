@@ -46,6 +46,7 @@ from langgraph_runtime.workflows.evidence import (
     evidence_packets,
     evidence_text_limit as _evidence_text_limit,
     format_prefetch_summary as _format_prefetch_summary,
+    prefetch_trace_summary as _prefetch_trace_summary,
     prefetch_refs as _prefetch_refs,
     state_evidence_refs as _state_evidence_refs,
 )
@@ -664,6 +665,10 @@ class NodeRegistry:
             evidence_packets(state) if state.get("evidence_packets") else [],
             bundle,
         )
+        prefetch_summary = _prefetch_trace_summary(
+            bundle,
+            context_budget=state.get("context_budget") if isinstance(state.get("context_budget"), dict) else None,
+        )
         data = {
             "status": NodeEventStatus.COMPLETED.value,
             "document_source_count": len(bundle.get("document_sources", [])),
@@ -672,6 +677,7 @@ class NodeRegistry:
             "used_memory_id_count": len(bundle.get("durable_memory_refs", [])),
             "memory_retrieval": bundle.get("durable_memory_retrieval_debug", {}),
             "evidence_packet_scores": prefetch_packet_scores,
+            "prefetch_summary": prefetch_summary,
             "input_preview": {
                 "question": compact_preview(state.get("question")),
                 "settings": {
