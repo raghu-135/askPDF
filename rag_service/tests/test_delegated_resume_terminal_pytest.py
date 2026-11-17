@@ -33,6 +33,7 @@ async def test_release_delegated_parent_if_stalled_completes_running_parent():
 @pytest.mark.asyncio
 async def test_resume_agent_run_times_out_continue_run_and_fails_run(monkeypatch):
     service = AgentRunService(repository=MagicMock())
+    service.repository._session = None
     monkeypatch.setenv("AGENT_CHAT_RESUME_DEADLINE_SECONDS", "0.05")
 
     resolution_run = SimpleNamespace(
@@ -94,6 +95,7 @@ async def test_resume_agent_run_times_out_continue_run_and_fails_run(monkeypatch
     )
     lifecycle = MagicMock()
     lifecycle.complete_run = AsyncMock(return_value=failed_run)
+    lifecycle.get_run = AsyncMock(return_value=failed_run)
     service.repository_factory = MagicMock(return_value=lifecycle)
 
     with pytest.raises(RuntimeContractError) as excinfo:

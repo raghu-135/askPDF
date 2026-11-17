@@ -118,16 +118,11 @@ function assertSingleQuestion(count, phase) {
 
 async function resolveThreadId(threadName) {
   const admin = loadEnvAdmin();
-  const projects = await apiJson(`${process.env.ASKPDF_API_URL || 'http://127.0.0.1:8000'}/api/projects`, { admin });
-  for (const project of projects.projects || []) {
-    const threads = await apiJson(
-      `${process.env.ASKPDF_API_URL || 'http://127.0.0.1:8000'}/api/projects/${project.id}/threads`,
-      { admin },
-    );
-    const match = (threads.threads || []).find((row) => row.name === threadName);
-    if (match?.id) return String(match.id);
-  }
-  return 'unknown-thread';
+  const api = process.env.ASKPDF_API_URL || 'http://127.0.0.1:8000';
+  const payload = await apiJson(`${api}/api/threads`, { admin });
+  const threads = Array.isArray(payload) ? payload : payload.threads || [];
+  const match = threads.find((row) => row.name === threadName);
+  return match?.id ? String(match.id) : 'unknown-thread';
 }
 
 async function stampThreadId(page, threadId) {
