@@ -143,6 +143,7 @@ async function main() {
       try {
         await expandTimelineNode(page, 'context_loader');
         await expandDisclosure(page, 'Prefetch context');
+        await expandDisclosure(page, 'Raw JSON');
       } catch (error) {
         console.warn('[proof] Context Loader expand:', error?.message || error);
       }
@@ -167,19 +168,20 @@ async function main() {
       await guard.capture(page, `proof-05-workflow-delegate-expanded-thread-${String(threadId).slice(0, 8)}.png`, {
         requireChatWorkspace: false,
       });
-      const openChild = page
-        .getByRole('button', { name: /Open child run in Debug Trace/i })
-        .or(page.getByText(/Open the child trace/i))
-        .first();
+      const openChild = page.getByRole('button', { name: /Open child run in Debug Trace/i }).first();
       if (await openChild.isVisible({ timeout: 8000 }).catch(() => false)) {
+        await openChild.scrollIntoViewIfNeeded();
         await openChild.click();
-        await page.waitForTimeout(1500);
+        await page.waitForTimeout(2000);
+        await page.getByLabel('Open traces').waitFor({ state: 'visible', timeout: 60_000 }).catch(() => {});
         try {
-          await expandTimelineNode(page, 'context_loader');
-          await expandDisclosure(page, 'Prefetch');
+          await expandTimelineNode(page, 'planner');
+          await expandDisclosure(page, 'Prompt');
         } catch (error) {
           console.warn('[proof] Child trace expand:', error?.message || error);
         }
+        await page.mouse.wheel(0, 400);
+        await page.waitForTimeout(400);
         await guard.capture(page, `proof-06-child-trace-opened-thread-${String(threadId).slice(0, 8)}.png`, {
           requireChatWorkspace: false,
         });
@@ -188,16 +190,15 @@ async function main() {
 
     if (!(await limitBanner.isVisible({ timeout: 1000 }).catch(() => false))) {
       await chatRateLimitPause();
-      await typeAndSendChat(
-        page,
-        'Run the deepest possible Auto analysis: keep delegating and revisiting nodes until the thread visit cap stops you.',
-      );
+      await typeAndSendChat(page, 'Keep replanning and delegating on Auto until you cannot take another workflow step.');
       await waitForAssistantAnswer(page, 300_000).catch(() => null);
-      const limitText = page.getByText(/hit the thread limit/i);
-      if (await limitText.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await showThreadIdInLocationBar(page, threadId);
-        await guard.capture(page, `proof-03-auto-limit-message-thread-${String(threadId).slice(0, 8)}.png`);
-      }
+    }
+    const limitText = page.getByText(/hit the thread limit/i);
+    if (await limitText.isVisible({ timeout: 8000 }).catch(() => false)) {
+      await showThreadIdInLocationBar(page, threadId);
+      await guard.capture(page, `proof-03-auto-limit-message-thread-${String(threadId).slice(0, 8)}.png`, {
+        requireChatWorkspace: true,
+      });
     }
 
     if (!guard.paths.length) {
