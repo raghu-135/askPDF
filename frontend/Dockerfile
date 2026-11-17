@@ -14,7 +14,9 @@ FROM base AS deps
 
 COPY package.json package-lock.json ./
 
-RUN npm ci
+# Postinstall hooks (e.g. onnxruntime-node GPU binary fetch) are flaky in CI/VM
+# builders; runtime TTS still warms models in the builder stage below.
+RUN npm ci --ignore-scripts
 
 FROM base AS dev
 
