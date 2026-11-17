@@ -87,6 +87,26 @@ def positive_float_value(value: Any, *, name: str) -> float:
     return normalized
 
 
+def optional_positive_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be numeric") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise RuntimeError(f"Environment variable {name} must be greater than zero")
+    return value
+
+
+def chat_resume_deadline_seconds() -> float:
+    """Wall-clock bound for continue/resume after a human-review decision."""
+
+    reconnect_deadline = optional_positive_float("AGENT_RUNTIME_RECONNECT_DEADLINE_SECONDS", 600.0)
+    return optional_positive_float("AGENT_CHAT_RESUME_DEADLINE_SECONDS", reconnect_deadline)
+
+
 def required_positive_int(name: str) -> int:
     raw = os.getenv(name)
     if raw is None or not raw.strip():

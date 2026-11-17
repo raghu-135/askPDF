@@ -198,6 +198,47 @@ export async function assertChatWorkspaceVisible(page) {
  * @param {import('playwright').Page} page
  * @param {string} [projectLabel]
  */
+export async function bootstrapProjectThreadViaApi(page, projectLabel = `ui-proof-${Date.now()}`) {
+  const admin = loadEnvAdmin();
+  const project = await apiJson(`${DEFAULT_API_URL}/api/projects`, {
+    method: 'POST',
+    admin,
+    body: {
+      name: projectLabel,
+      description: 'cloud-agent delegate UI proof',
+      embedding_model: 'BAAI/bge-m3',
+    },
+  });
+  const threadName = `thread-${Date.now()}`;
+  const thread = await apiJson(`${DEFAULT_API_URL}/api/projects/${project.id}/threads`, {
+    method: 'POST',
+    admin,
+    body: { name: threadName },
+  });
+  await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    const threadRow = page.getByText(threadName, { exact: false }).first();
+    const projectRow = page.getByText(projectLabel, { exact: false }).first();
+    if (await threadRow.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await threadRow.click({ force: true });
+      await waitForThreadWorkspaceReady(page);
+      return {
+        projectId: String(project.id),
+        threadId: String(thread.id),
+        threadName,
+        projectLabel,
+      };
+    }
+    if (await projectRow.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await projectRow.click({ force: true });
+      await page.waitForTimeout(800);
+    }
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+  }
+  throw new Error(`thread ${threadName} did not appear in sidebar after API create`);
+}
+
 export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Date.now()}`) {
   await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForTimeout(1200);
@@ -210,16 +251,31 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
 
   const createInExisting = page.getByRole('button', { name: /Create thread in /i }).first();
   if (!(await createInExisting.isVisible({ timeout: 4000 }).catch(() => false))) {
-    const createProject = page.getByRole('button', { name: /Create Project/i });
+    const createProject = page
+      .getByRole('button', { name: /Create project/i })
+      .or(page.getByRole('button', { name: /Create Project/i }))
+      .first();
     await createProject.waitFor({ timeout: 60_000 });
-    await createProject.click();
-    await page.getByRole('textbox').first().fill(projectLabel);
-    const confirmCreateProject = page.getByRole('button', { name: /^Create Project$/i });
+    await createProject.evaluate((button) => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    const createProjectDialog = page.getByRole('dialog').first();
+    await createProjectDialog.waitFor({ state: 'visible', timeout: 60_000 });
+    await createProjectDialog.getByLabel('Project Name').fill(projectLabel);
+    const embeddingSelect = createProjectDialog
+      .getByRole('combobox', { name: /Embedding Model/i })
+      .or(createProjectDialog.getByLabel('Embedding Model'))
+      .first();
+    await embeddingSelect.click();
+    await page.getByRole('option', { name: /BAAI\/bge-m3/i }).first().click();
+    const confirmCreateProject = createProjectDialog.getByRole('button', { name: /^Create Project$/i });
     for (let attempt = 0; attempt < 120; attempt += 1) {
       if (await confirmCreateProject.isEnabled().catch(() => false)) break;
       await page.waitForTimeout(1000);
     }
-    await confirmCreateProject.click({ timeout: 120_000 });
+    await confirmCreateProject.evaluate((button) => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
     await page.waitForTimeout(1200);
   } else {
     const match = await createInExisting.innerText();
