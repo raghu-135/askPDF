@@ -37,6 +37,7 @@ UNIT_TEST_FILES = [
     "test_agent_course_correction_reconciliation_pytest.py",
     "test_agent_grounding_evaluator_pytest.py",
     "test_agent_prompt_behavior.py",
+    "test_auto_limits_settings_pytest.py",
     "test_agent_run_cancellation_pytest.py",
     "test_agent_runtime_reconciliation_pytest.py",
     "test_agent_task_budget_steer_delivery_pytest.py",
@@ -116,6 +117,7 @@ UNIT_TEST_FILES = [
     "test_retrieval_clip_pytest.py",
     "test_temporal_metadata_retrieval.py",
     "test_time_utils.py",
+    "test_delegate_context_inheritance_pytest.py",
     "test_workflow_delegate_pytest.py",
     "test_http_client_lifecycle.py",
 ]
