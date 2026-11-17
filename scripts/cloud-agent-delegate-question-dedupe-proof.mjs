@@ -166,11 +166,16 @@ async function main() {
   `${testedSha}\n`,
   );
 
+  const storagePath = path.join(ART_DIR, 'delegate-dedupe-storage.json');
   const browser = await chromium.launch({
     headless: process.env.ASKPDF_E2E_HEADLESS !== '0',
     args: ['--disable-dev-shm-usage', '--no-sandbox'],
   });
-  const context = await browser.newContext({ viewport: REAL_UI_VIEWPORT });
+  const contextOptions = { viewport: REAL_UI_VIEWPORT };
+  if (fs.existsSync(storagePath) && process.env.ASKPDF_E2E_IGNORE_STORAGE !== '1') {
+    contextOptions.storageState = storagePath;
+  }
+  const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
 
   try {
@@ -198,7 +203,6 @@ async function main() {
     assertSingleQuestion(afterApproveCount, 'after approve');
     await captureWithThread(guard, page, threadId, 'delegate-dedupe-02-after-approve-1440x900.png');
 
-    const storagePath = path.join(ART_DIR, 'delegate-dedupe-storage.json');
     await context.storageState({ path: storagePath });
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
     await waitForNoLoadingShell(page, { timeout: 300_000 });

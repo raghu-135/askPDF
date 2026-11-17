@@ -212,14 +212,14 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
   if (!(await createInExisting.isVisible({ timeout: 4000 }).catch(() => false))) {
     const createProject = page.getByRole('button', { name: /Create Project/i });
     await createProject.waitFor({ timeout: 60_000 });
-    await createProject.click();
+    await createProject.click({ force: true });
     await page.getByRole('textbox').first().fill(projectLabel);
     const confirmCreateProject = page.getByRole('button', { name: /^Create Project$/i });
     for (let attempt = 0; attempt < 120; attempt += 1) {
       if (await confirmCreateProject.isEnabled().catch(() => false)) break;
       await page.waitForTimeout(1000);
     }
-    await confirmCreateProject.click({ timeout: 120_000 });
+    await confirmCreateProject.click({ timeout: 120_000, force: true });
     await page.waitForTimeout(1200);
   } else {
     const match = await createInExisting.innerText();
