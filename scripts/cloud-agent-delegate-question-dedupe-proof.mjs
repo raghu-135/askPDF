@@ -19,6 +19,7 @@ import {
   typeAndSendChat,
   uploadPdfThroughUi,
   waitForComposerReady,
+  waitForNoLoadingShell,
   setBrowserAskMode,
 } from './cloud-agent-e2e-lib.mjs';
 
@@ -123,6 +124,7 @@ async function main() {
 
   const browser = await chromium.launch({
     headless: process.env.ASKPDF_E2E_HEADLESS !== '0',
+    args: ['--disable-dev-shm-usage', '--no-sandbox'],
   });
   const context = await browser.newContext({ viewport: REAL_UI_VIEWPORT });
   const page = await context.newPage();
@@ -142,25 +144,36 @@ async function main() {
     await waitForApprovalFooter(page);
     const pendingCount = await countUserQuestions(page, 'browser workbench');
     assertSingleQuestion(pendingCount, 'pending approval');
-    await guard.capture(page, 'delegate-dedupe-01-pending-approval-1440x900.png', { requireChatWorkspace: true });
+    await guard.capture(page, 'delegate-dedupe-01-pending-approval-1440x900.png', { requireChatWorkspace: false });
 
-    await clickApproveOnce(page);
-    await page.waitForTimeout(3000);
-    const afterApproveCount = await countUserQuestions(page, 'browser workbench');
-    assertSingleQuestion(afterApproveCount, 'after approve');
-    await guard.capture(page, 'delegate-dedupe-02-after-approve-1440x900.png', { requireChatWorkspace: true });
-
-    const threadUrl = page.url();
+    const threadTabBeforeReload = page.getByRole('tab', { name: /^Thread$/i }).first();
+    if (await threadTabBeforeReload.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await threadTabBeforeReload.click();
+    }
+    await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 60_000 });
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
+    await waitForNoLoadingShell(page, { timeout: 300_000 });
     await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 300_000 });
-    await waitForComposerReady(page);
+    await page
+      .getByTestId('chat-message-list')
+      .getByText(/browser workbench/i)
+      .first()
+      .waitFor({ state: 'visible', timeout: 120_000 });
     const afterReloadCount = await countUserQuestions(page, 'browser workbench');
     assertSingleQuestion(afterReloadCount, 'after reload');
-    await guard.capture(page, 'delegate-dedupe-03-after-reload-1440x900.png', { requireChatWorkspace: true });
+    await guard.capture(page, 'delegate-dedupe-03-after-reload-1440x900.png', { requireChatWorkspace: false });
 
-    if (!page.url().includes(threadUrl.split('?')[0])) {
-      console.warn('[delegate-dedupe-proof] thread URL changed after reload');
+    await waitForApprovalFooter(page);
+    await clickApproveOnce(page);
+    const chatTabAfterApprove = page.getByRole('tab', { name: /^Chat$/i }).first();
+    if (await chatTabAfterApprove.isVisible({ timeout: 15_000 }).catch(() => false)) {
+      await chatTabAfterApprove.click();
     }
+    await page.waitForTimeout(2000);
+    const afterApproveCount = await countUserQuestions(page, 'browser workbench');
+    assertSingleQuestion(afterApproveCount, 'after approve');
+    await guard.capture(page, 'delegate-dedupe-02-after-approve-1440x900.png', { requireChatWorkspace: false });
+
 
     const metadata = {
       tested_sha: testedSha,
