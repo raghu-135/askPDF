@@ -263,7 +263,9 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
   if (!(await createInExisting.isVisible({ timeout: 4000 }).catch(() => false))) {
     const createProject = page.getByRole('button', { name: /Create Project/i });
     await createProject.waitFor({ timeout: 60_000 });
-    await createProject.click({ force: true });
+    await createProject.evaluate((button) => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
     const createProjectDialog = page.getByRole('dialog').first();
     await createProjectDialog.waitFor({ state: 'visible', timeout: 60_000 });
     await createProjectDialog.getByRole('textbox').first().fill(projectLabel);
