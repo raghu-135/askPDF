@@ -809,6 +809,11 @@ async def test_normal_recall_never_falls_back_when_global_representation_is_miss
         "unavailable_memory_count": 0,
     }))
     monkeypatch.setattr(memory_service, "require_embedding_model_ready", AsyncMock(return_value=None))
+
+    async def _mock_invoke(_callable, *_args, **_kwargs):
+        return [0.1]
+
+    monkeypatch.setattr(memory_service, "invoke_with_retry", _mock_invoke)
     monkeypatch.setattr(
         memory_service,
         "get_embedding_model",

@@ -542,6 +542,13 @@ def _hermes_upstream_idle_timeout_seconds() -> float:
     return optional_positive_float("AGENT_HERMES_UPSTREAM_IDLE_TIMEOUT_SECONDS", min(120.0, sse_heartbeat * 4))
 
 
+def _upstream_sse_line_is_idle_noise(line: str) -> bool:
+    """SSE comment lines (for example ``: keepalive``) must not extend continue waits."""
+
+    stripped = (line or "").strip()
+    return bool(stripped) and stripped.startswith(":")
+
+
 async def _fetch_upstream_run_payload(
     hermes_api_url: str,
     runtime_profile: str,
@@ -1615,13 +1622,42 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     data: list[str] = []
                     output_seen = False
                     line_iter = events_response.aiter_lines().__aiter__()
+                    last_terminal_progress_at = time.monotonic()
+
+                    async def _synthesized_continue_terminal_tuple() -> tuple[Any, ...] | None:
+                        if not (reconcile_upstream_terminal_on_idle and upstream_run_id and execution_profile):
+                            return None
+                        return await _synthesize_continue_terminal_from_upstream(
+                            hermes_api_url=hermes_api_url,
+                            runtime_profile=execution_profile,
+                            upstream_run_id=upstream_run_id,
+                            headers=headers,
+                            process_frame=process_frame,
+                            output_seen=output_seen,
+                        )
+
                     while True:
                         try:
                             if reconcile_upstream_terminal_on_idle and idle_timeout is not None:
-                                line = await asyncio.wait_for(
-                                    line_iter.__anext__(),
-                                    timeout=idle_timeout,
-                                )
+                                elapsed = time.monotonic() - last_terminal_progress_at
+                                if elapsed >= idle_timeout:
+                                    synthesized = await _synthesized_continue_terminal_tuple()
+                                    if synthesized is not None:
+                                        event, result, operation_event, output_complete_event, llm_complete_event = synthesized
+                                        if operation_event is not None:
+                                            yield _sse(operation_event)
+                                        if output_complete_event is not None:
+                                            yield _sse(output_complete_event)
+                                        if llm_complete_event is not None:
+                                            yield _sse(llm_complete_event)
+                                        yield _sse(event, result)
+                                        return
+                                    if not neutral_request.get("task_id") and time.monotonic() >= deadline:
+                                        raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes execution exceeded the configured duration"))
+                                    last_terminal_progress_at = time.monotonic()
+                                    continue
+                                remaining = idle_timeout - elapsed
+                                line = await asyncio.wait_for(line_iter.__anext__(), timeout=remaining)
                             else:
                                 line = await line_iter.__anext__()
                         except StopAsyncIteration:
@@ -1629,27 +1665,21 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         except asyncio.TimeoutError:
                             if not reconcile_upstream_terminal_on_idle:
                                 raise
-                            if upstream_run_id and execution_profile:
-                                synthesized = await _synthesize_continue_terminal_from_upstream(
-                                    hermes_api_url=hermes_api_url,
-                                    runtime_profile=execution_profile,
-                                    upstream_run_id=upstream_run_id,
-                                    headers=headers,
-                                    process_frame=process_frame,
-                                    output_seen=output_seen,
-                                )
-                                if synthesized is not None:
-                                    event, result, operation_event, output_complete_event, llm_complete_event = synthesized
-                                    if operation_event is not None:
-                                        yield _sse(operation_event)
-                                    if output_complete_event is not None:
-                                        yield _sse(output_complete_event)
-                                    if llm_complete_event is not None:
-                                        yield _sse(llm_complete_event)
-                                    yield _sse(event, result)
-                                    return
+                            synthesized = await _synthesized_continue_terminal_tuple()
+                            if synthesized is not None:
+                                event, result, operation_event, output_complete_event, llm_complete_event = synthesized
+                                if operation_event is not None:
+                                    yield _sse(operation_event)
+                                if output_complete_event is not None:
+                                    yield _sse(output_complete_event)
+                                if llm_complete_event is not None:
+                                    yield _sse(llm_complete_event)
+                                yield _sse(event, result)
+                                return
                             if not neutral_request.get("task_id") and time.monotonic() >= deadline:
                                 raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes execution exceeded the configured duration"))
+                            continue
+                        if reconcile_upstream_terminal_on_idle and _upstream_sse_line_is_idle_noise(line):
                             continue
                         preempt_frames, preempt_kind = lifecycle_preempt_frames()
                         if preempt_kind:
@@ -1685,6 +1715,8 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                                 if llm_complete_event is not None:
                                     yield _sse(llm_complete_event)
                                 yield _sse(event, result)
+                                if reconcile_upstream_terminal_on_idle:
+                                    last_terminal_progress_at = time.monotonic()
                                 if terminal_seen:
                                     return
                                 if result is not None and result.get("status") == "awaiting_human":
@@ -1709,25 +1741,17 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         if result is not None and result.get("status") == "awaiting_human":
                             return
                     if not terminal_seen:
-                        if reconcile_upstream_terminal_on_idle and upstream_run_id and execution_profile:
-                            synthesized = await _synthesize_continue_terminal_from_upstream(
-                                hermes_api_url=hermes_api_url,
-                                runtime_profile=execution_profile,
-                                upstream_run_id=upstream_run_id,
-                                headers=headers,
-                                process_frame=process_frame,
-                                output_seen=output_seen,
-                            )
-                            if synthesized is not None:
-                                event, result, operation_event, output_complete_event, llm_complete_event = synthesized
-                                if operation_event is not None:
-                                    yield _sse(operation_event)
-                                if output_complete_event is not None:
-                                    yield _sse(output_complete_event)
-                                if llm_complete_event is not None:
-                                    yield _sse(llm_complete_event)
-                                yield _sse(event, result)
-                                return
+                        synthesized = await _synthesized_continue_terminal_tuple()
+                        if synthesized is not None:
+                            event, result, operation_event, output_complete_event, llm_complete_event = synthesized
+                            if operation_event is not None:
+                                yield _sse(operation_event)
+                            if output_complete_event is not None:
+                                yield _sse(output_complete_event)
+                            if llm_complete_event is not None:
+                                yield _sse(llm_complete_event)
+                            yield _sse(event, result)
+                            return
                         error = _error("hermes_upstream_protocol_error", "Hermes closed the event stream without a terminal event", retryable=True)
                         event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
                         terminal_seen = True
