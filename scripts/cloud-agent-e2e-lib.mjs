@@ -216,21 +216,22 @@ export async function bootstrapProjectThreadViaApi(page, projectLabel = `ui-proo
     body: { name: threadName },
   });
   await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForTimeout(1500);
-  const projectRow = page.getByText(projectLabel, { exact: false }).first();
-  await projectRow.waitFor({ state: 'visible', timeout: 120_000 });
-  await projectRow.click({ force: true });
-  await page.waitForTimeout(1200);
-  const threadRow = page.getByText(threadName, { exact: false }).first();
-  await threadRow.waitFor({ state: 'visible', timeout: 120_000 });
-  await threadRow.click({ force: true });
-  await waitForThreadWorkspaceReady(page);
-  return {
-    projectId: String(project.id),
-    threadId: String(thread.id),
-    threadName,
-    projectLabel,
-  };
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const threadRow = page.getByText(threadName, { exact: false }).first();
+    if (await threadRow.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await threadRow.click({ force: true });
+      await waitForThreadWorkspaceReady(page);
+      return {
+        projectId: String(project.id),
+        threadId: String(thread.id),
+        threadName,
+        projectLabel,
+      };
+    }
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+  }
+  throw new Error(`thread ${threadName} did not appear in sidebar after API create`);
 }
 
 export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Date.now()}`) {
