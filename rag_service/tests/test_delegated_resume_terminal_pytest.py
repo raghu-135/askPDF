@@ -98,14 +98,26 @@ async def test_resume_agent_run_times_out_continue_run_and_fails_run(monkeypatch
     lifecycle.get_run = AsyncMock(return_value=failed_run)
     service.repository_factory = MagicMock(return_value=lifecycle)
 
-    sink = MagicMock()
-    sink.emit = AsyncMock()
-    sink.flush = AsyncMock()
-    sink.finish = AsyncMock()
-    sink.bind_runtime_event_persister = MagicMock()
-    sink.bind_trace_recorder = MagicMock()
-    sink.bind_runtime_binding_persister = MagicMock()
-    sink.bind_runtime_fact_persister = MagicMock()
+    class DummySink:
+        async def emit(self, *args, **kwargs):
+            return None
+
+        async def flush(self):
+            return None
+
+        async def finish(self, *args, **kwargs):
+            return None
+
+        def bind_trace_recorder(self, *args, **kwargs):
+            return None
+
+        def bind_runtime_binding_persister(self, *args, **kwargs):
+            return None
+
+        def bind_runtime_fact_persister(self, *args, **kwargs):
+            return None
+
+    sink = DummySink()
 
     with pytest.raises(RuntimeContractError) as excinfo:
         await service.resume_agent_run(
