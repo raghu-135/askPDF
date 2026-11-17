@@ -34,6 +34,7 @@ import {
     composerHumanReviewPending,
     shouldDismissToolApprovalOnAction,
 } from '../lib/chat-tool-approval-ui';
+import { buildRecoveredPendingHumanReviewMessages } from '../lib/pending-human-review-recovery';
 import { canRequestChatCancellation, recoverCanceledChat } from '../lib/chat-run-cancellation';
 import {
     Thread,
@@ -1226,30 +1227,19 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 ? String(inputSummary.question || '')
                 : '';
             setMessages(prev => {
-                if (prev.some(msg => msg.agent_run_id === run.id || msg.id === localAssistantMessageId)) {
+                const recovered = buildRecoveredPendingHumanReviewMessages({
+                    run,
+                    interruptTitle: interrupt.title || '',
+                    recoveredQuestion,
+                    localUserMessageId,
+                    localAssistantMessageId,
+                    existingMessages: prev,
+                    interruptRequestedAt: interrupt.requested_at,
+                });
+                if (!recovered) {
                     return prev;
                 }
-                const recovered: ChatMessage[] = [];
-                if (recoveredQuestion.trim()) {
-                    recovered.push({
-                        id: localUserMessageId,
-                        role: MessageRole.User,
-                        content: recoveredQuestion.trim(),
-                        created_at: run.started_at || new Date().toISOString(),
-                        agent_run_id: run.id,
-                        agent_run_turn_kind: 'user_prompt',
-                    });
-                }
-                recovered.push({
-                    id: localAssistantMessageId,
-                    role: MessageRole.Assistant,
-                    content: interrupt.title || 'Human review required before the agent can continue.',
-                    created_at: interrupt.requested_at || run.started_at || new Date().toISOString(),
-                    agent_run_id: run.id,
-                    agent_run_turn_kind: 'assistant_pending_review',
-                    pending_human_review: true,
-                });
-                return [...prev, ...recovered];
+                return [...prev, ...recovered as ChatMessage[]];
             });
         } catch (error) {
             if (activeThreadIdRef.current !== threadId) return;
