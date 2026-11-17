@@ -648,6 +648,7 @@ async def _handle_compiled_rag_chat(
         "available_worker_nodes": worker_nodes_from_spec(resolved_spec),
         "hitl_policy": hitl_policy,
         "loop_policy": loop_policy,
+        "auto_policy": dict(workflow_config.get("auto_policy") or {}),
         "context_policy": context_policy,
         "prefetch_policy": prefetch_policy,
         "parallel_enabled": parallel_enabled,

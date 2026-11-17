@@ -51,7 +51,7 @@
           "exclude_workflow_ids": ["auto_rag_agent", "hermes_rag_agent"]
         }
       },
-      "prefetch_policy": {"enabled": true, "mode": "evidence"},
+      "prefetch_policy": {"enabled": true, "mode": "routing"},
       "hitl_policy": {
         "enabled": true,
         "max_interrupts_per_run": 4,

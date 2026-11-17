@@ -31,6 +31,8 @@ class DelegateSyncRequest(BaseModel):
     system_role: str = ""
     custom_instructions: str = ""
     tool_instructions: Dict[str, str] = Field(default_factory=dict)
+    context_window: Optional[int] = Field(default=None, ge=256, le=2_000_000)
+    context_budget: Optional[Dict[str, float]] = None
 
 
 def _validate_execution_context(
@@ -89,6 +91,8 @@ async def delegate_sync(
             system_role=body.system_role,
             custom_instructions=body.custom_instructions,
             tool_instructions=body.tool_instructions,
+            context_window=body.context_window or context_fields.get("context_window"),
+            context_budget=body.context_budget,
             mcp_execution_context_token=execution_context.strip() if execution_context else None,
         )
     except ValueError as exc:

@@ -206,6 +206,8 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         system_role=str(state.get("system_role") or ""),
         custom_instructions=str(state.get("custom_instructions") or ""),
         tool_instructions=state.get("tool_instructions") if isinstance(state.get("tool_instructions"), dict) else {},
+        context_window=state.get("context_window"),
+        context_budget=state.get("context_budget") if isinstance(state.get("context_budget"), dict) else None,
     )
     child_run_id = str(response.get("child_run_id") or "")
     child_result = response.get("result") if isinstance(response.get("result"), dict) else {}
