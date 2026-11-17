@@ -61,6 +61,14 @@ def test_gateway_overlay_dockerfile_installs_patch_via_site_packages_pth():
     assert "/opt/askpdf-pylib" in dockerfile
 
 
+def test_real_hermes_gateway_uses_built_upstream_service():
+    services = _compose("docker-compose.yml")["services"]
+    assert services["hermes-real"]["build"]["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream-real"
+    assert (
+        services["hermes-real"]["depends_on"]["hermes-upstream-real"]["condition"] == "service_completed_successfully"
+    )
+
+
 def test_main_compose_keeps_pinned_real_hermes_opt_in():
     services = _compose("docker-compose.yml")["services"]
     for name in (
@@ -80,10 +88,12 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert any(str(entry).startswith("HERMES_GATEWAY_HOME=") for entry in adapter["environment"])
     assert services["hermes-config-init"]["profiles"] == ["hermes"]
     assert hermes["build"]["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
-    assert hermes["build"]["additional_contexts"]["hermes-upstream"].startswith(
-        "https://github.com/NousResearch/hermes-agent.git#"
-    )
-    assert "${HERMES_UPSTREAM_REVISION:?" in hermes["build"]["additional_contexts"]["hermes-upstream"]
+    assert hermes["build"]["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream"
+    upstream = services["hermes-upstream"]
+    assert upstream["build"]["context"].startswith("https://github.com/NousResearch/hermes-agent.git#")
+    assert "${HERMES_UPSTREAM_REVISION:?" in upstream["build"]["context"]
+    assert upstream["entrypoint"] == ["/bin/true"]
+    assert hermes["depends_on"]["hermes-upstream"]["condition"] == "service_completed_successfully"
     assert hermes["healthcheck"]["test"][-1].endswith("/health")
     assert "ASKPDF_HERMES_COMPAT_ENABLED=1" in set(hermes["environment"])
     assert "LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
@@ -189,8 +199,10 @@ def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
     assert "hermes-fake" not in compose["services"]
     hermes_build = compose["services"]["integration-hermes"]["build"]
     assert hermes_build["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
-    assert hermes_build["additional_contexts"]["hermes-upstream"].endswith(
-        "#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
+    assert hermes_build["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream"
+    assert (
+        compose["services"]["integration-hermes"]["depends_on"]["hermes-upstream"]["condition"]
+        == "service_completed_successfully"
     )
     assert compose["services"]["integration-hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"
     assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["integration-hermes"]["volumes"]
@@ -263,9 +275,9 @@ def _compose_services_for_profiles(active_profiles: set[str]) -> list[str]:
 
 def test_compose_service_counts_by_profile():
     assert len(_compose_services_for_profiles(set())) == 7
-    assert len(_compose_services_for_profiles({"hermes"})) == 10
+    assert len(_compose_services_for_profiles({"hermes"})) == 11
     assert len(_compose_services_for_profiles({"test"})) == 12
-    assert len(_compose_services_for_profiles({"integration"})) == 17
+    assert len(_compose_services_for_profiles({"integration"})) == 18
 
 
 def test_rag_service_image_is_shared_across_compose_builds():

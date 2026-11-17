@@ -78,8 +78,10 @@ build_with_cache askpdf-hermes-runtime \
   -f hermes_runtime/Dockerfile
 docker tag askpdf-hermes-runtime askpdf-hermes-runtime:ci
 
-# Integration-only services (gateway build pulls upstream git context directly).
-RUNTIME_CI_BUILD_SERVICES=(fake-llm hermes)
+bash scripts/ci_product_compose_build.sh
+
+# Integration-only services (gateway builds from service:hermes-upstream).
+RUNTIME_CI_BUILD_SERVICES=(hermes-upstream fake-llm hermes)
 echo "Building runtime integration services (no duplicate rag/langgraph/test rebuild): ${RUNTIME_CI_BUILD_SERVICES[*]}"
 runtime_compose askpdf-ci-prefetch build "${RUNTIME_CI_BUILD_SERVICES[@]}"
 
