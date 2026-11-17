@@ -44,8 +44,20 @@ def merge_auto_limits(overrides: Mapping[str, Any] | None) -> dict[str, Any]:
     base = default_auto_limits()
     if not isinstance(overrides, Mapping):
         return base
-    merged = AutoLimitsSettings(**{**base, **{k: v for k, v in overrides.items() if k in base}})
-    merged.max_delegates_per_turn = max(1, min(3, merged.max_delegates_per_turn))
-    merged.max_total_visits = max(4, min(48, merged.max_total_visits))
-    merged.max_interrupts_per_run = max(1, min(20, merged.max_interrupts_per_run))
-    return merged.model_dump()
+    combined = {**base, **{k: v for k, v in overrides.items() if k in base}}
+    if "max_delegates_per_turn" in combined:
+        try:
+            combined["max_delegates_per_turn"] = max(1, min(3, int(combined["max_delegates_per_turn"])))
+        except (TypeError, ValueError):
+            combined["max_delegates_per_turn"] = base["max_delegates_per_turn"]
+    if "max_total_visits" in combined:
+        try:
+            combined["max_total_visits"] = max(4, min(48, int(combined["max_total_visits"])))
+        except (TypeError, ValueError):
+            combined["max_total_visits"] = base["max_total_visits"]
+    if "max_interrupts_per_run" in combined:
+        try:
+            combined["max_interrupts_per_run"] = max(1, min(20, int(combined["max_interrupts_per_run"])))
+        except (TypeError, ValueError):
+            combined["max_interrupts_per_run"] = base["max_interrupts_per_run"]
+    return AutoLimitsSettings(**combined).model_dump()
