@@ -272,7 +272,10 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
     const createProjectDialog = page.getByRole('dialog').first();
     await createProjectDialog.waitFor({ state: 'visible', timeout: 60_000 });
     await createProjectDialog.getByLabel('Project Name').fill(projectLabel);
-    const embeddingSelect = createProjectDialog.getByLabel('Embedding Model');
+    const embeddingSelect = createProjectDialog
+      .getByRole('combobox', { name: /Embedding Model/i })
+      .or(createProjectDialog.getByLabel('Embedding Model'))
+      .first();
     await embeddingSelect.click();
     await page.getByRole('option', { name: /BAAI\/bge-m3/i }).first().click();
     const confirmCreateProject = createProjectDialog.getByRole('button', { name: /^Create Project$/i });
