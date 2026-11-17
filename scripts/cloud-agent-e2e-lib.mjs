@@ -248,8 +248,10 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
     const createProject = page.getByRole('button', { name: /Create Project/i });
     await createProject.waitFor({ timeout: 60_000 });
     await createProject.click({ force: true });
-    await page.getByRole('textbox').first().fill(projectLabel);
-    const confirmCreateProject = page.getByRole('button', { name: /^Create Project$/i });
+    const createProjectDialog = page.getByRole('dialog').first();
+    await createProjectDialog.waitFor({ state: 'visible', timeout: 60_000 });
+    await createProjectDialog.getByRole('textbox').first().fill(projectLabel);
+    const confirmCreateProject = createProjectDialog.getByRole('button', { name: /^Create Project$/i });
     for (let attempt = 0; attempt < 120; attempt += 1) {
       if (await confirmCreateProject.isEnabled().catch(() => false)) break;
       await page.waitForTimeout(1000);

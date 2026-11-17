@@ -14,7 +14,7 @@ import {
   REAL_UI_VIEWPORT,
   ScreenshotGuard,
   chatRateLimitPause,
-  bootstrapProjectThreadViaApi,
+  ensureProjectAndThread,
   loadEnvAdmin,
   apiJson,
   selectLlmModel,
@@ -171,7 +171,11 @@ async function main() {
 
   try {
     await waitForServiceReady();
-    const { threadId } = await bootstrapProjectThreadViaApi(page, `delegate-proof-${Date.now()}`);
+    const { threadName } = await ensureProjectAndThread(page, `delegate-proof-${Date.now()}`);
+    const admin = loadEnvAdmin();
+    const threads = await apiJson(`${process.env.ASKPDF_API_URL || 'http://127.0.0.1:8000'}/api/threads`, { admin });
+    const rows = Array.isArray(threads) ? threads : threads.threads || [];
+    const threadId = String(rows.find((row) => row.name === threadName)?.id || 'unknown-thread');
     await selectLlmModel(page, MODEL);
     await ensureAutoWorkflow(page);
     await setBrowserAskMode(page);
