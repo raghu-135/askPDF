@@ -85,6 +85,7 @@ async def test_resume_agent_run_times_out_continue_run_and_fails_run(monkeypatch
         "app.product_orchestration.service.resolve_run_capability_resolution",
         AsyncMock(return_value=SimpleNamespace(error=None, capabilities=SimpleNamespace(behavior={}))),
     )
+    monkeypatch.setattr("app.product_orchestration.service.require_capability", AsyncMock())
     monkeypatch.setattr("app.product_orchestration.service._submit_runtime_approval", AsyncMock())
 
     failed_run = SimpleNamespace(
@@ -129,3 +130,158 @@ async def test_resume_agent_run_times_out_continue_run_and_fails_run(monkeypatch
         )
     assert excinfo.value.code == "agent_run_resume_timeout"
     lifecycle.complete_run.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resume_agent_run_completes_delegated_child_after_continue(monkeypatch):
+    service = AgentRunService(repository=MagicMock())
+    service.repository._session = None
+    service.projection = MagicMock()
+    service.projection.project_chat_result = AsyncMock(
+        return_value={
+            "status": "completed",
+            "answer": "navigation finished",
+            "final_answer": "navigation finished",
+        }
+    )
+
+    awaiting_run = SimpleNamespace(
+        id="child-run",
+        thread_id="thread-1",
+        workflow_id="external_research",
+        parent_run_id="parent-run",
+        status=AgentRunStatus.AWAITING_HUMAN.value,
+        task_id=None,
+        metrics_json={},
+        resolved_spec_json={"schema_version": 1, "runtime": {"features": {}}},
+        runtime_binding_json={"binding_type": "hermes.session", "payload": {"upstream_run_id": "up-1"}},
+        pending_interrupt_json={
+            "interrupt_id": "int-1",
+            "status": "pending",
+            "checkpoint_resume": True,
+            "response_operation": "run.approval.respond",
+        },
+        debug_trace_json=None,
+    )
+    resolution_run = SimpleNamespace(
+        id="child-run",
+        thread_id="thread-1",
+        workflow_id="external_research",
+        parent_run_id="parent-run",
+        status=AgentRunStatus.RUNNING.value,
+        task_id=None,
+        metrics_json={},
+        resolved_spec_json={"schema_version": 1, "runtime": {"features": {}}},
+        runtime_binding_json={"binding_type": "hermes.session", "payload": {"upstream_run_id": "up-1"}},
+        pending_interrupt_json=None,
+        debug_trace_json=None,
+    )
+    interrupt = {
+        "interrupt_id": "int-1",
+        "response_operation": "run.approval.respond",
+        "checkpoint_resume": True,
+    }
+    resolution = SimpleNamespace(
+        duplicate=False,
+        outcome="resumed",
+        interrupt=interrupt,
+        run=resolution_run,
+    )
+
+    service.repository.get_run = AsyncMock(side_effect=[awaiting_run, resolution_run])
+    service.repository.resolve_pending_interrupt = AsyncMock(return_value=resolution)
+    service.repository.update_runtime_binding = AsyncMock()
+    service.repository.update_run_metadata_fields = AsyncMock()
+
+    completed_child = SimpleNamespace(
+        id="child-run",
+        thread_id="thread-1",
+        parent_run_id="parent-run",
+        status=AgentRunStatus.COMPLETED.value,
+        metrics_json={},
+        resolved_spec_json={"schema_version": 1},
+        debug_trace_json=None,
+    )
+    parent = SimpleNamespace(
+        id="parent-run",
+        status=AgentRunStatus.RUNNING.value,
+        metrics_json={},
+    )
+    event_repository = MagicMock()
+    event_repository.list_run_events = AsyncMock(return_value=[])
+    lifecycle = MagicMock()
+    lifecycle.complete_run = AsyncMock(return_value=completed_child)
+    lifecycle.get_run = AsyncMock(side_effect=[parent, completed_child])
+    lifecycle.set_run_debug_trace = AsyncMock(return_value=completed_child)
+    lifecycle.append_run_event = AsyncMock()
+    service.repository_factory = MagicMock(side_effect=[event_repository, lifecycle, lifecycle])
+
+    adapter = MagicMock()
+    adapter.prepare_request = AsyncMock(side_effect=lambda req, **kwargs: req)
+    adapter.continue_run = AsyncMock(
+        return_value=AgentRuntimeResult(
+            status="completed",
+            output={"answer": "navigation finished", "final_answer": "navigation finished"},
+        )
+    )
+
+    monkeypatch.setattr("app.product_orchestration.service.adapter_for_definition", lambda d: adapter)
+    monkeypatch.setattr(
+        "app.product_orchestration.service.definition_from_run",
+        lambda run: SimpleNamespace(definition_id="external_research", framework="hermes", builder_id="hermes_agent"),
+    )
+    monkeypatch.setattr(
+        "app.product_orchestration.service.resolve_run_capability_resolution",
+        AsyncMock(return_value=SimpleNamespace(error=None, capabilities=SimpleNamespace(behavior={}))),
+    )
+    monkeypatch.setattr("app.product_orchestration.service.require_capability", AsyncMock())
+    monkeypatch.setattr("app.product_orchestration.service._submit_runtime_approval", AsyncMock())
+    monkeypatch.setattr(
+        "app.product_orchestration.service.result_to_product_payload",
+        lambda runtime_result: {"status": "completed", "answer": "navigation finished"},
+    )
+    monkeypatch.setattr(
+        "app.product_orchestration.service.build_run_metrics",
+        lambda result, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "app.product_orchestration.service.AgentTraceRecorder",
+        lambda run: MagicMock(finalize=MagicMock(return_value={})),
+    )
+
+    class DummySink:
+        async def emit(self, *args, **kwargs):
+            return None
+
+        async def flush(self):
+            return None
+
+        async def finish(self, *args, **kwargs):
+            return None
+
+        def bind_trace_recorder(self, *args, **kwargs):
+            return None
+
+        def bind_runtime_binding_persister(self, *args, **kwargs):
+            return None
+
+        def bind_runtime_fact_persister(self, *args, **kwargs):
+            return None
+
+        def bind_runtime_event_persister(self, *args, **kwargs):
+            return None
+
+    sink = DummySink()
+
+    result = await service.resume_agent_run(
+        "child-run",
+        interrupt_id="int-1",
+        action="approve",
+        expected_thread_id="thread-1",
+        execution_event_sink=sink,
+    )
+
+    assert result is not None
+    assert result.run.status == AgentRunStatus.COMPLETED.value
+    lifecycle.complete_run.assert_awaited()
+    adapter.continue_run.assert_awaited_once()

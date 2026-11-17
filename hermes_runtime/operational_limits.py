@@ -5,6 +5,19 @@ from __future__ import annotations
 import os
 
 
+def optional_positive_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"Environment variable {name} must be numeric") from exc
+    if value <= 0:
+        raise RuntimeError(f"Environment variable {name} must be greater than zero")
+    return value
+
+
 def required_positive_float(name: str) -> float:
     raw = os.getenv(name)
     if raw is None or not raw.strip():

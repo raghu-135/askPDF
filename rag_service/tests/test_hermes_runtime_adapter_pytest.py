@@ -1007,6 +1007,73 @@ def test_native_approval_pause_publishes_task_delta_and_resumes(monkeypatch, tmp
     assert not streams
 
 
+def test_continue_materializes_upstream_terminal_when_event_stream_is_empty(monkeypatch, tmp_path):
+    """After approval, upstream may finish before fresh SSE events arrive."""
+    from runtime_protocol.protocol import decode_event_frame
+
+    monkeypatch.setenv("HERMES_API_URL", "http://hermes.test")
+    monkeypatch.setenv("HERMES_RUNTIME_STATE_PATH", str(tmp_path / "continue-empty-stream.json"))
+    monkeypatch.setenv("AGENT_HERMES_UPSTREAM_IDLE_TIMEOUT_SECONDS", "0.05")
+    monkeypatch.setattr(hermes_api.RunProfileManager, "is_reusable", lambda *_: True)
+    monkeypatch.setattr(hermes_api.RunProfileManager, "retire", lambda *_: None)
+    approval = {
+        "event": "approval.request",
+        "id": "native-approval-2",
+        "command": "browser_navigate",
+        "choices": ["once", "deny"],
+    }
+    start_streams = [approval]
+    upstream_status = {"status": "completed", "output": "navigation finished"}
+    phase = {"value": "start"}
+    async_client = httpx.AsyncClient
+
+    def handler(request):
+        if request.method == "GET" and request.url.path.endswith("/upstream-run-7"):
+            if phase["value"] == "continue":
+                return httpx.Response(200, json=upstream_status, request=request)
+            return httpx.Response(200, json={"status": "awaiting_human"}, request=request)
+        assert request.method == "GET" and request.url.path.endswith("/events")
+        if phase["value"] == "start" and start_streams:
+            event = start_streams.pop(0)
+            return httpx.Response(200, text="data: " + json.dumps(event) + "\n\n", request=request)
+        return httpx.Response(200, text="", request=request)
+
+    monkeypatch.setattr(hermes_api.httpx, "AsyncClient", lambda *_args, **_kwargs: async_client(transport=httpx.MockTransport(handler)))
+    payload = {
+        "request": {
+            "run_id": "run-2",
+            "thread_id": "thread-1",
+            "task_id": "task-2",
+            "input": {
+                "question": "Navigate",
+                "task_context": {"metadata": {"attempt_id": "attempt-2", "task_version": 1, "plan_revision": 0}},
+            },
+            "options": {"idempotency_key": "start-operation-2"},
+            "continuation": _cancel_payload()["continuation"],
+        },
+        "context": {"resolved_spec": {"managed_profile": {"limits": {"max_duration_seconds": 60}}}},
+    }
+
+    def results(response):
+        assert response.status_code == 200, response.text
+        frames = [decode_event_frame(block + "\n\n") for block in response.text.split("\n\n") if "data:" in block]
+        return [frame["result"] for frame in frames if frame.get("result")]
+
+    with TestClient(hermes_api.create_app(require_auth=False)) as client:
+        paused = results(client.post("/v1/runs/start", json=payload))[-1]
+        assert paused["status"] == "awaiting_human"
+        payload["request"]["options"]["idempotency_key"] = "approval-operation-2"
+        payload["request"]["continuation"] = paused["continuation"]
+        phase["value"] = "continue"
+        completed = results(client.post("/v1/runs/run-2/continue", json=payload))[-1]
+        assert completed["status"] == "completed"
+        assert "navigation finished" in str(
+            completed.get("task_result", {}).get("text")
+            or completed.get("output", {}).get("answer")
+            or ""
+        )
+
+
 def test_native_run_failed_string_error_round_trips_as_object(monkeypatch, tmp_path):
     from runtime_protocol.protocol import decode_event_frame
     from runtime_protocol.transport import result_from_dict

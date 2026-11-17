@@ -27,7 +27,7 @@ from hermes_runtime.execution_store import (
     HermesExecutionConflictError,
     HermesExecutionStore,
 )
-from hermes_runtime.operational_limits import required_positive_float, required_positive_int
+from hermes_runtime.operational_limits import optional_positive_float, required_positive_float, required_positive_int
 from runtime_protocol.protocol import decode_event_frame
 from runtime_protocol.hermes_contract import HERMES_APPROVAL_CHOICES, HERMES_REVISION, HERMES_TERMINAL_EVENTS, validate_hermes_context_length
 from hermes_runtime.gateway_control import ensure_profile_served, release_profile_served
@@ -533,6 +533,71 @@ async def _confirm_upstream_stop(
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
     )
+
+
+def _hermes_upstream_idle_timeout_seconds() -> float:
+    """Idle gap on the upstream SSE before polling run status (post-approval continue)."""
+
+    sse_heartbeat = optional_positive_float("AGENT_RUNTIME_SSE_HEARTBEAT_INTERVAL_SECONDS", 15.0)
+    return optional_positive_float("AGENT_HERMES_UPSTREAM_IDLE_TIMEOUT_SECONDS", min(120.0, sse_heartbeat * 4))
+
+
+async def _fetch_upstream_run_payload(
+    hermes_api_url: str,
+    runtime_profile: str,
+    upstream_run_id: str,
+    headers: Mapping[str, str],
+) -> Mapping[str, Any] | None:
+    polling_headers = {
+        key: value
+        for key, value in headers.items()
+        if key.lower() != "x-hermes-session-id"
+    }
+    status_url = hermes_api_url.rstrip("/") + f"/p/{runtime_profile}/v1/runs/{upstream_run_id}"
+    async with httpx.AsyncClient(timeout=_upstream_timeout()) as client:
+        response = await client.get(status_url, headers=polling_headers)
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, Mapping) else None
+
+
+async def _synthesize_continue_terminal_from_upstream(
+    *,
+    hermes_api_url: str,
+    runtime_profile: str,
+    upstream_run_id: str,
+    headers: Mapping[str, str],
+    process_frame: Any,
+    output_seen: bool,
+) -> tuple[Any, Any] | None:
+    """Materialize a terminal frame when the upstream run finished without a fresh SSE event."""
+
+    payload = await _fetch_upstream_run_payload(
+        hermes_api_url,
+        runtime_profile,
+        upstream_run_id,
+        headers,
+    )
+    if payload is None:
+        return None
+    upstream_status = str(payload.get("status") or "").lower()
+    if upstream_status not in {"completed", "failed", "cancelled"}:
+        return None
+    upstream_event = "run.completed"
+    if upstream_status == "failed":
+        upstream_event = "run.failed"
+    elif upstream_status == "cancelled":
+        upstream_event = "run.cancelled"
+    output = payload.get("output") or payload.get("result") or payload.get("text")
+    if output is None and isinstance(payload.get("last_event"), Mapping):
+        output = (payload.get("last_event") or {}).get("output")
+    synthetic = {
+        "event": upstream_event,
+        "output": output,
+        "usage": payload.get("usage"),
+        "error": payload.get("error"),
+    }
+    return process_frame(upstream_event, [json.dumps(synthetic)], output_seen=output_seen)
 
 
 async def _confirm_upstream_terminal(
@@ -1534,12 +1599,58 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                     "session_id": session_id,
                 }, continuation=continuation))
                 sequence += 1
+                # Post-approval continue can outlive the upstream SSE socket even after
+                # the upstream run has already reached a terminal state. Only reconcile in
+                # that continuation path; fresh starts must not treat stale run-status polls
+                # as authoritative while the live event stream is still in flight.
+                reconcile_upstream_terminal_on_idle = expected_run_id is not None
+                idle_timeout = (
+                    _hermes_upstream_idle_timeout_seconds()
+                    if reconcile_upstream_terminal_on_idle
+                    else None
+                )
                 async with client.stream("GET", profile_upstream_url(execution_profile) + f"/v1/runs/{upstream_run_id}/events", headers=headers) as events_response:
                     events_response.raise_for_status()
                     event_name = ""
                     data: list[str] = []
                     output_seen = False
-                    async for line in events_response.aiter_lines():
+                    line_iter = events_response.aiter_lines().__aiter__()
+                    while True:
+                        try:
+                            if reconcile_upstream_terminal_on_idle and idle_timeout is not None:
+                                line = await asyncio.wait_for(
+                                    line_iter.__anext__(),
+                                    timeout=idle_timeout,
+                                )
+                            else:
+                                line = await line_iter.__anext__()
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            if not reconcile_upstream_terminal_on_idle:
+                                raise
+                            if upstream_run_id and execution_profile:
+                                synthesized = await _synthesize_continue_terminal_from_upstream(
+                                    hermes_api_url=hermes_api_url,
+                                    runtime_profile=execution_profile,
+                                    upstream_run_id=upstream_run_id,
+                                    headers=headers,
+                                    process_frame=process_frame,
+                                    output_seen=output_seen,
+                                )
+                                if synthesized is not None:
+                                    event, result, operation_event, output_complete_event, llm_complete_event = synthesized
+                                    if operation_event is not None:
+                                        yield _sse(operation_event)
+                                    if output_complete_event is not None:
+                                        yield _sse(output_complete_event)
+                                    if llm_complete_event is not None:
+                                        yield _sse(llm_complete_event)
+                                    yield _sse(event, result)
+                                    return
+                            if not neutral_request.get("task_id") and time.monotonic() >= deadline:
+                                raise HTTPException(status_code=409, detail=_error("runtime_limit_exceeded", "Hermes execution exceeded the configured duration"))
+                            continue
                         preempt_frames, preempt_kind = lifecycle_preempt_frames()
                         if preempt_kind:
                             for frame in preempt_frames:
@@ -1598,6 +1709,25 @@ def create_app(*, require_auth: bool = True) -> FastAPI:
                         if result is not None and result.get("status") == "awaiting_human":
                             return
                     if not terminal_seen:
+                        if reconcile_upstream_terminal_on_idle and upstream_run_id and execution_profile:
+                            synthesized = await _synthesize_continue_terminal_from_upstream(
+                                hermes_api_url=hermes_api_url,
+                                runtime_profile=execution_profile,
+                                upstream_run_id=upstream_run_id,
+                                headers=headers,
+                                process_frame=process_frame,
+                                output_seen=output_seen,
+                            )
+                            if synthesized is not None:
+                                event, result, operation_event, output_complete_event, llm_complete_event = synthesized
+                                if operation_event is not None:
+                                    yield _sse(operation_event)
+                                if output_complete_event is not None:
+                                    yield _sse(output_complete_event)
+                                if llm_complete_event is not None:
+                                    yield _sse(llm_complete_event)
+                                yield _sse(event, result)
+                                return
                         error = _error("hermes_upstream_protocol_error", "Hermes closed the event stream without a terminal event", retryable=True)
                         event = _neutral_event(run_id, sequence, "run.failed", {"error": error}, terminal=True, continuation=continuation)
                         terminal_seen = True
