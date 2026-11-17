@@ -124,7 +124,8 @@ Related implementation:
 - rag_service/main.py
 - rag_service/app/product_orchestration/
 - rag_service/app/runtime/
-- rag_service/app/services/embedding_tokenizer_registry.py
+- rag_service/config/embedding_models.json
+- rag_service/app/services/embedding_model_catalog.py
 - rag_service/scripts/download_embedding_tokenizers.py
 - [Research canvases](research-canvases.md)
 - runtime_protocol/

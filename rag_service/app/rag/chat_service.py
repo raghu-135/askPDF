@@ -74,8 +74,9 @@ async def prefetch_context(
     budget = compute_prefetch_budget(context_window, overrides)
 
     # Embed the raw question ONCE and share the vector across parallel tasks
-    embedding_client = get_embedding_model(embedding_model)
-    shared_query_vector = await invoke_with_retry(embedding_client.aembed_query, raw_question)
+    from app.models.llm_server_client import embed_query
+
+    shared_query_vector = await invoke_with_retry(embed_query, embedding_model, raw_question)
 
     def _message_ref(msg: Any) -> Dict[str, Any]:
         text = (getattr(msg, "context_compact", None) or getattr(msg, "content", None) or "").strip()

@@ -1,35 +1,29 @@
 #!/usr/bin/env python3
-"""Prefetch Hugging Face tokenizers used by remote embedding models."""
+"""Prefetch Hugging Face tokenizers listed in the embedding model catalog."""
 
 from __future__ import annotations
 
-import importlib.util
+import os
 import sys
 from pathlib import Path
 
 
-def _load_registry():
-    candidates = [
-        Path("/tmp/embedding_tokenizer_registry.py"),
-        Path(__file__).resolve().parents[1] / "app/services/embedding_tokenizer_registry.py",
-    ]
-    for path in candidates:
-        if not path.is_file():
-            continue
-        spec = importlib.util.spec_from_file_location("embedding_tokenizer_registry", path)
-        if spec is None or spec.loader is None:
-            continue
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    raise FileNotFoundError("embedding_tokenizer_registry.py was not found")
+def _bootstrap_path() -> None:
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    default_catalog = root / "config" / "embedding_models.json"
+    if not os.environ.get("EMBEDDING_MODELS_CONFIG", "").strip() and default_catalog.is_file():
+        os.environ.setdefault("EMBEDDING_MODELS_CONFIG", str(default_catalog))
 
 
 def main() -> int:
+    _bootstrap_path()
     from transformers import AutoTokenizer
 
-    registry = _load_registry()
-    identities = list(registry.unique_tokenizer_identities())
+    from app.services.embedding_model_catalog import unique_hf_tokenizer_identities
+
+    identities = list(unique_hf_tokenizer_identities())
     for identity, revision in identities:
         kwargs = {"local_files_only": False}
         if revision:

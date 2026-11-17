@@ -109,8 +109,9 @@ async def index_memory_record(memory) -> int:
     await mark_memory_indexing(memory.id)
     try:
         await require_embedding_model_ready(memory.embedding_model)
-        embedding_client = get_embedding_model(memory.embedding_model)
-        vector = await invoke_with_retry(embedding_client.aembed_query, memory.content)
+        from app.models.llm_server_client import embed_document
+
+        vector = await invoke_with_retry(embed_document, memory.embedding_model, memory.content)
         inserted = await get_vector_db().index_memory(
             memory_id=memory.id,
             scope_type=memory.scope_type,
@@ -288,8 +289,9 @@ async def search_thread_memory(
         })
     await require_embedding_model_ready(context.embedding_model)
     if query_vector is None:
-        embedding_client = get_embedding_model(context.embedding_model)
-        query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
+        from app.models.llm_server_client import embed_query
+
+        query_vector = await invoke_with_retry(embed_query, context.embedding_model, query)
     model_hits = await get_vector_db().search_memory(
         query_vector=query_vector,
         embedding_model=context.embedding_model,

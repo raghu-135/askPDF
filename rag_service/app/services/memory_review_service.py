@@ -391,10 +391,11 @@ async def build_memory_review_batch(
     seen_pairs: set[tuple[str, str]] = set()
     try:
         await require_embedding_model_ready(model)
-        embedder = get_embedding_model(model)
+        from app.models.llm_server_client import embed_query
+
         scope_filters = [{"scope_type": kind, "scope_id": ident} for kind, ident in scopes]
         for anchor in selected_anchors:
-            vector = await invoke_with_retry(embedder.aembed_query, anchor.content)
+            vector = await invoke_with_retry(embed_query, model, anchor.content)
             hits = await get_vector_db().search_memory(
                 query_vector=vector,
                 embedding_model=model,

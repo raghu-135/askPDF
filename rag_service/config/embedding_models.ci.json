@@ -1,0 +1,8 @@
+{
+  "generic": {
+    "encoding": "cl100k_base",
+    "effective_input_limit": 8192,
+    "pack_margin_ratio": 0.85
+  },
+  "models": {}
+}
