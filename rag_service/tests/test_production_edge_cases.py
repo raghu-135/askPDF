@@ -467,9 +467,7 @@ class TestSystemResourceMonitoring:
         
         call_times = []
         
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
-            mock_model = MagicMock()
-            
+        with patch('app.db.vector.model_registry.embed_query') as mock_embed_query:
             async def rate_limited_embed(*args, **kwargs):
                 call_times.append(time.time())
                 if len(call_times) > 1:
@@ -479,9 +477,8 @@ class TestSystemResourceMonitoring:
                         raise Exception("Rate limit exceeded")
                 await asyncio.sleep(0.05)  # Small delay
                 return [0.1] * 384
-            
-            mock_model.aembed_query.side_effect = rate_limited_embed
-            mock_get_model.return_value = mock_model
+
+            mock_embed_query.side_effect = rate_limited_embed
             
             # Multiple rapid calls should be handled gracefully
             tasks = []
@@ -525,9 +522,10 @@ class TestDisasterRecoveryScenarios:
         """Test graceful degradation when dependent services are unavailable."""
         registry = EmbeddingModelRegistry()
         
-        with patch('app.db.vector.model_registry.get_embedding_model') as mock_get_model:
-            mock_get_model.side_effect = Exception("Service unavailable")
-            
+        with (
+            patch('app.db.vector.model_registry.should_use_local_embeddings', return_value=False),
+            patch('app.db.vector.model_registry.embed_query', side_effect=Exception("Service unavailable")),
+        ):
             # Should handle service unavailability gracefully
             with pytest.raises(Exception, match=r"Could not determine dimensions"):
                 await registry._probe_model_dimensions("unavailable-model")
