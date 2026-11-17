@@ -261,20 +261,28 @@ export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Da
 
   const createInExisting = page.getByRole('button', { name: /Create thread in /i }).first();
   if (!(await createInExisting.isVisible({ timeout: 4000 }).catch(() => false))) {
-    const createProject = page.getByRole('button', { name: /Create Project/i });
+    const createProject = page
+      .getByRole('button', { name: /Create project/i })
+      .or(page.getByRole('button', { name: /Create Project/i }))
+      .first();
     await createProject.waitFor({ timeout: 60_000 });
     await createProject.evaluate((button) => {
       button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
     const createProjectDialog = page.getByRole('dialog').first();
     await createProjectDialog.waitFor({ state: 'visible', timeout: 60_000 });
-    await createProjectDialog.getByRole('textbox').first().fill(projectLabel);
+    await createProjectDialog.getByLabel('Project Name').fill(projectLabel);
+    const embeddingSelect = createProjectDialog.getByLabel('Embedding Model');
+    await embeddingSelect.click();
+    await page.getByRole('option', { name: /BAAI\/bge-m3/i }).first().click();
     const confirmCreateProject = createProjectDialog.getByRole('button', { name: /^Create Project$/i });
     for (let attempt = 0; attempt < 120; attempt += 1) {
       if (await confirmCreateProject.isEnabled().catch(() => false)) break;
       await page.waitForTimeout(1000);
     }
-    await confirmCreateProject.click({ timeout: 120_000, force: true });
+    await confirmCreateProject.evaluate((button) => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
     await page.waitForTimeout(1200);
   } else {
     const match = await createInExisting.innerText();
