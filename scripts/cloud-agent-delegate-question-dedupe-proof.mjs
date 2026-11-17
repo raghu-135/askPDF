@@ -14,7 +14,7 @@ import {
   REAL_UI_VIEWPORT,
   ScreenshotGuard,
   chatRateLimitPause,
-  ensureProjectAndThread,
+  bootstrapProjectThreadViaApi,
   loadEnvAdmin,
   apiJson,
   selectLlmModel,

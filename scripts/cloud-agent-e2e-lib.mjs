@@ -215,38 +215,28 @@ export async function bootstrapProjectThreadViaApi(page, projectLabel = `ui-proo
     admin,
     body: { name: threadName },
   });
-  const threadId = String(thread.id);
-  const projectId = String(project.id);
-  await page.addInitScript(
-    ({ resumeThreadId }) => {
-      const key = 'askpdf.workspace.resume.v1';
-      let existing = {};
-      try {
-        existing = JSON.parse(window.localStorage.getItem(key) || '{}');
-      } catch {
-        existing = {};
-      }
-      existing[`thread:${resumeThreadId}`] = {
-        tabId: 'documents-tab',
-        documentId: null,
-        traceId: null,
-        canvasId: null,
+  await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    const threadRow = page.getByText(threadName, { exact: false }).first();
+    const projectRow = page.getByText(projectLabel, { exact: false }).first();
+    if (await threadRow.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await threadRow.click({ force: true });
+      await waitForThreadWorkspaceReady(page);
+      return {
+        projectId: String(project.id),
+        threadId: String(thread.id),
+        threadName,
+        projectLabel,
       };
-      window.localStorage.setItem(key, JSON.stringify(existing));
-    },
-    { resumeThreadId: threadId },
-  );
-  const openUrl = new URL(DEFAULT_BASE_URL);
-  openUrl.searchParams.set('project', projectId);
-  openUrl.searchParams.set('thread', threadId);
-  await page.goto(openUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await waitForThreadWorkspaceReady(page);
-  return {
-    projectId,
-    threadId,
-    threadName,
-    projectLabel,
-  };
+    }
+    if (await projectRow.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await projectRow.click({ force: true });
+      await page.waitForTimeout(800);
+    }
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+  }
+  throw new Error(`thread ${threadName} did not appear in sidebar after API create`);
 }
 
 export async function ensureProjectAndThread(page, projectLabel = `ui-proof-${Date.now()}`) {
