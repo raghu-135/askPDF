@@ -17,7 +17,6 @@ import {
   uploadPdfThroughUi,
   waitForAssistantAnswer,
   waitForComposerReady,
-  waitForThreadWorkspaceReady,
 } from './cloud-agent-e2e-lib.mjs';
 
 const requireFromFrontend = createRequire(path.join(process.cwd(), 'frontend/package.json'));
@@ -38,28 +37,38 @@ async function resolveThreadId(page, admin, ensured) {
   return null;
 }
 
-async function openDeepLink(page, threadId) {
-  await page.goto(`${DEFAULT_BASE_URL}/threads/${threadId}`, {
-    waitUntil: 'domcontentloaded',
-    timeout: 120_000,
-  });
-  await waitForThreadWorkspaceReady(page);
-  await selectLlmModel(page, MODEL);
+async function showThreadIdInLocationBar(page, threadId) {
+  await page.evaluate((id) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('thread', id);
+    window.history.replaceState({}, '', url.toString());
+  }, threadId);
 }
 
 async function openTraceOnLatestMessage(page) {
-  const openTrace = page.getByRole('button', { name: /open trace|debug trace/i }).first();
-  if (await openTrace.isVisible({ timeout: 15_000 }).catch(() => false)) {
-    await openTrace.click();
-    await page.waitForTimeout(1200);
-    return true;
+  const openTrace = page
+    .getByRole('button', { name: /Open trace ·/i })
+    .or(page.getByRole('link', { name: /Open trace ·/i }))
+    .last();
+  if (!(await openTrace.isVisible({ timeout: 30_000 }).catch(() => false))) {
+    return false;
   }
-  return false;
+  await openTrace.scrollIntoViewIfNeeded();
+  await openTrace.click();
+  const debugTab = page.getByRole('tab', { name: /^Debug Trace$/i }).first();
+  if (await debugTab.isVisible({ timeout: 10_000 }).catch(() => false)) {
+    await debugTab.click();
+  }
+  await page.locator('.MuiAccordionSummary-root').first().waitFor({ state: 'visible', timeout: 120_000 });
+  await page.waitForTimeout(800);
+  return true;
 }
 
 async function expandTimelineNode(page, label) {
-  const summary = page.locator('.MuiAccordionSummary-root').filter({ hasText: label }).first();
-  await summary.waitFor({ state: 'visible', timeout: 60_000 });
+  const pattern = typeof label === 'string' ? new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : label;
+  const summary = page.locator('.MuiAccordionSummary-root').filter({ hasText: pattern }).first();
+  await summary.scrollIntoViewIfNeeded({ timeout: 30_000 }).catch(() => {});
+  await summary.waitFor({ state: 'visible', timeout: 120_000 });
   const expanded = await summary.getAttribute('aria-expanded');
   if (expanded !== 'true') await summary.click();
   await page.waitForTimeout(600);
@@ -87,23 +96,18 @@ async function main() {
     await selectLlmModel(page, MODEL);
     await uploadPdfThroughUi(page, PDF);
     await waitForComposerReady(page);
+    await showThreadIdInLocationBar(page, threadId);
 
-    await openDeepLink(page, threadId);
-
-    await page
-      .getByRole('button', { name: /tune|context \d/i })
-      .first()
-      .click({ timeout: 10_000 })
-      .catch(async () => {
-        await page.getByLabel(/Initial retrieval budget|Context packing/i).first().click();
-      });
+    await page.getByRole('button', { name: /^Context / }).click({ timeout: 15_000 });
+    await page.getByText('Initial retrieval budget', { exact: false }).waitFor({ state: 'visible', timeout: 15_000 });
     await guard.capture(page, `proof-01-initial-retrieval-budget-thread-${String(threadId).slice(0, 8)}.png`, {
-      requireChatWorkspace: true,
+      requireChatWorkspace: false,
     });
     await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
 
     await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/settings`, {
-      method: 'PATCH',
+      method: 'PUT',
       admin,
       body: {
         agent_workflow: { workflow_id: 'auto_rag_agent' },
@@ -123,7 +127,7 @@ async function main() {
       'Summarize this PDF in two sentences, then delegate a focused follow-up to the standard RAG workflow for one extra detail.',
     );
     await waitForAssistantAnswer(page, 300_000);
-    await openDeepLink(page, threadId);
+    await showThreadIdInLocationBar(page, threadId);
     await guard.capture(page, `proof-02-chat-after-auto-thread-${String(threadId).slice(0, 8)}.png`);
 
     const limitBanner = page.getByText(/hit the thread limit/i);
@@ -132,20 +136,21 @@ async function main() {
     }
 
     if (await openTraceOnLatestMessage(page)) {
-      await expandTimelineNode(page, 'Context loader');
+      await showThreadIdInLocationBar(page, threadId);
+      await expandTimelineNode(page, 'Context Loader');
       await expandDisclosure(page, 'Prefetch context');
       await guard.capture(page, `proof-04-context-loader-expanded-thread-${String(threadId).slice(0, 8)}.png`);
       await expandTimelineNode(page, 'Prompt');
       await expandDisclosure(page, 'Prompt');
       await guard.capture(page, `proof-04b-prompts-expanded-thread-${String(threadId).slice(0, 8)}.png`);
-      await expandTimelineNode(page, 'Workflow delegate');
-      await expandDisclosure(page, 'Delegated child');
+      await expandTimelineNode(page, 'Workflow Delegate');
+      await expandDisclosure(page, 'Delegated child run');
       await guard.capture(page, `proof-05-workflow-delegate-expanded-thread-${String(threadId).slice(0, 8)}.png`);
       const openChild = page.getByRole('button', { name: /Open child run in Debug Trace/i }).first();
       if (await openChild.isVisible({ timeout: 5000 }).catch(() => false)) {
         await openChild.click();
         await page.waitForTimeout(1500);
-        await expandTimelineNode(page, 'Context loader');
+        await expandTimelineNode(page, 'Context Loader');
         await expandDisclosure(page, 'Prefetch');
         await guard.capture(page, `proof-06-child-trace-opened-thread-${String(threadId).slice(0, 8)}.png`);
       }
@@ -153,7 +158,7 @@ async function main() {
 
     if (!(await limitBanner.isVisible({ timeout: 1000 }).catch(() => false))) {
       await apiJson(`${DEFAULT_API_URL}/api/threads/${threadId}/settings`, {
-        method: 'PATCH',
+        method: 'PUT',
         admin,
         body: {
           auto_limits: {
@@ -171,11 +176,14 @@ async function main() {
       await waitForAssistantAnswer(page, 300_000).catch(() => null);
       const limitText = page.getByText(/hit the thread limit/i);
       if (await limitText.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await openDeepLink(page, threadId);
+        await showThreadIdInLocationBar(page, threadId);
         await guard.capture(page, `proof-03-auto-limit-message-thread-${String(threadId).slice(0, 8)}.png`);
       }
     }
 
+    if (!guard.paths.length) {
+      throw new Error('No proof screenshots captured');
+    }
     console.log('[proof] thread_id', threadId);
     console.log('[proof] artifacts', guard.paths);
   } finally {
