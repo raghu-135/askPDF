@@ -33,6 +33,16 @@ test('parseAgentRunResumeStreamEvent normalizes nested response envelopes', () =
   assert.equal(parsed?.response.answer, 'from outcome');
 });
 
+test('isAgentRunResumeProductTerminal ignores non-terminal run.completed agent_run', () => {
+  assert.equal(
+    isAgentRunResumeProductTerminal('run.completed', {
+      agent_run: { status: 'running' },
+      outcome: {},
+    }),
+    false,
+  );
+});
+
 test('isAgentRunResumeProductTerminal ignores raw runtime run.completed', () => {
   assert.equal(
     isAgentRunResumeProductTerminal('run.completed', { final_output: { answer: 'x' } }),

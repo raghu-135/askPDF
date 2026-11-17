@@ -1,5 +1,20 @@
 /** Normalize terminal agent-run resume SSE payloads into one response shape. */
 
+const RESUME_PRODUCT_TERMINAL_RUN_STATUSES = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'rejected',
+  'expired',
+  'clarification',
+  'clarification_required',
+  'awaiting_human',
+]);
+
+export function isResumeProductTerminalRunStatus(status: unknown): boolean {
+  return RESUME_PRODUCT_TERMINAL_RUN_STATUSES.has(String(status ?? '').trim());
+}
+
 export type AgentRunResumeStreamResponse = {
   agent_run?: Record<string, unknown>;
   outcome?: Record<string, unknown>;
@@ -87,12 +102,26 @@ export function isAgentRunResumeProductTerminal(
   if (!data) return false;
   if (eventName === '__result__' || eventName === '__error__') return true;
   if (eventName === 'stream.error' || eventName === 'run.failed' || eventName === 'run.cancelled') return true;
-  if (eventName === 'run.completed' || eventName === 'interrupt.requested') {
+  if (eventName === 'interrupt.requested') {
     const agentRun = (data.agent_run ?? (data.response as Record<string, unknown> | undefined)?.agent_run) as
       | Record<string, unknown>
       | undefined;
     if (agentRun && typeof agentRun === 'object') {
-      return true;
+      return isResumeProductTerminalRunStatus(agentRun.status);
+    }
+    return false;
+  }
+  if (eventName === 'run.completed') {
+    const agentRun = (data.agent_run ?? (data.response as Record<string, unknown> | undefined)?.agent_run) as
+      | Record<string, unknown>
+      | undefined;
+    if (agentRun && typeof agentRun === 'object') {
+      return isResumeProductTerminalRunStatus(agentRun.status);
+    }
+    const envelopeStatus = data.status
+      ?? (data.response as Record<string, unknown> | undefined)?.status;
+    if (envelopeStatus !== undefined) {
+      return isResumeProductTerminalRunStatus(envelopeStatus);
     }
     return Object.prototype.hasOwnProperty.call(data, 'outcome');
   }

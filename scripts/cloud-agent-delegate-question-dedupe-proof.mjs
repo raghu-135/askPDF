@@ -15,11 +15,14 @@ import {
   ScreenshotGuard,
   chatRateLimitPause,
   ensureProjectAndThread,
+  loadEnvAdmin,
+  apiJson,
   selectLlmModel,
   typeAndSendChat,
   uploadPdfThroughUi,
   waitForComposerReady,
   waitForNoLoadingShell,
+  waitOutOfSending,
   setBrowserAskMode,
 } from './cloud-agent-e2e-lib.mjs';
 
@@ -113,6 +116,52 @@ function assertSingleQuestion(count, phase) {
   }
 }
 
+async function resolveThreadId(threadName) {
+  const admin = loadEnvAdmin();
+  const projects = await apiJson(`${process.env.ASKPDF_API_URL || 'http://127.0.0.1:8000'}/api/projects`, { admin });
+  for (const project of projects.projects || []) {
+    const threads = await apiJson(
+      `${process.env.ASKPDF_API_URL || 'http://127.0.0.1:8000'}/api/projects/${project.id}/threads`,
+      { admin },
+    );
+    const match = (threads.threads || []).find((row) => row.name === threadName);
+    if (match?.id) return String(match.id);
+  }
+  return 'unknown-thread';
+}
+
+async function stampThreadId(page, threadId) {
+  await page.evaluate((id) => {
+    const prior = document.getElementById('e2e-thread-stamp');
+    if (prior) prior.remove();
+    const div = document.createElement('div');
+    div.id = 'e2e-thread-stamp';
+    div.textContent = `thread_id: ${id}`;
+    Object.assign(div.style, {
+      position: 'fixed',
+      top: '8px',
+      left: '8px',
+      zIndex: '99999',
+      background: 'rgba(0,0,0,0.72)',
+      color: '#fff',
+      padding: '6px 10px',
+      font: '12px monospace',
+      borderRadius: '4px',
+      pointerEvents: 'none',
+    });
+    document.body.appendChild(div);
+  }, threadId);
+}
+
+async function captureWithThread(guard, page, threadId, filename) {
+  await stampThreadId(page, threadId);
+  await guard.capture(page, filename, { requireChatWorkspace: false });
+  fs.writeFileSync(
+    path.join(ART_DIR, filename.replace(/\.png$/, '-thread.txt')),
+    `${threadId}\n`,
+  );
+}
+
 async function main() {
   fs.mkdirSync(ART_DIR, { recursive: true });
   const guard = new ScreenshotGuard(ART_DIR);
@@ -132,7 +181,8 @@ async function main() {
   try {
     await waitForServiceReady();
     await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-    await ensureProjectAndThread(page);
+    const { threadName } = await ensureProjectAndThread(page);
+    const threadId = await resolveThreadId(threadName);
     await selectLlmModel(page, MODEL);
     await ensureAutoWorkflow(page);
     await setBrowserAskMode(page);
@@ -144,13 +194,17 @@ async function main() {
     await waitForApprovalFooter(page);
     const pendingCount = await countUserQuestions(page, 'browser workbench');
     assertSingleQuestion(pendingCount, 'pending approval');
-    await guard.capture(page, 'delegate-dedupe-01-pending-approval-1440x900.png', { requireChatWorkspace: false });
+    await captureWithThread(guard, page, threadId, 'delegate-dedupe-01-pending-approval-1440x900.png');
 
-    const threadTabBeforeReload = page.getByRole('tab', { name: /^Thread$/i }).first();
-    if (await threadTabBeforeReload.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await threadTabBeforeReload.click();
-    }
-    await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 60_000 });
+    await clickApproveOnce(page);
+    await waitOutOfSending(page);
+    await waitForComposerReady(page);
+    const afterApproveCount = await countUserQuestions(page, 'browser workbench');
+    assertSingleQuestion(afterApproveCount, 'after approve');
+    await captureWithThread(guard, page, threadId, 'delegate-dedupe-02-after-approve-1440x900.png');
+
+    const storagePath = path.join(ART_DIR, 'delegate-dedupe-storage.json');
+    await context.storageState({ path: storagePath });
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
     await waitForNoLoadingShell(page, { timeout: 300_000 });
     await page.getByTestId('chat-message-list').waitFor({ state: 'visible', timeout: 300_000 });
@@ -161,22 +215,16 @@ async function main() {
       .waitFor({ state: 'visible', timeout: 120_000 });
     const afterReloadCount = await countUserQuestions(page, 'browser workbench');
     assertSingleQuestion(afterReloadCount, 'after reload');
-    await guard.capture(page, 'delegate-dedupe-03-after-reload-1440x900.png', { requireChatWorkspace: false });
+    await captureWithThread(guard, page, threadId, 'delegate-dedupe-03-after-reload-1440x900.png');
 
-    await waitForApprovalFooter(page);
-    await clickApproveOnce(page);
-    const chatTabAfterApprove = page.getByRole('tab', { name: /^Chat$/i }).first();
-    if (await chatTabAfterApprove.isVisible({ timeout: 15_000 }).catch(() => false)) {
-      await chatTabAfterApprove.click();
-    }
-    await page.waitForTimeout(2000);
-    const afterApproveCount = await countUserQuestions(page, 'browser workbench');
-    assertSingleQuestion(afterApproveCount, 'after approve');
-    await guard.capture(page, 'delegate-dedupe-02-after-approve-1440x900.png', { requireChatWorkspace: false });
-
+    await chatRateLimitPause();
+    await typeAndSendChat(page, 'What tools can you use?');
+    await waitOutOfSending(page);
+    await captureWithThread(guard, page, threadId, 'delegate-dedupe-04-follow-up-tools-1440x900.png');
 
     const metadata = {
       tested_sha: testedSha,
+      thread_id: threadId,
       model: MODEL,
       question_snippet: QUESTION.slice(0, 80),
       counts: {

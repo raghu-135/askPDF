@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -15,6 +16,7 @@ from app.product_orchestration.clarification import (
 )
 from app.product_orchestration.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.product_orchestration.enums import AgentRunResumeAction, InterruptStatus
+from app.product_orchestration.delegated_parent import release_delegated_parent_if_stalled
 from app.product_orchestration.execution_stream import AgentExecutionEventSink, close_agent_execution_sink
 from app.product_orchestration.metrics import build_run_metrics
 from app.product_orchestration.parallel_observability import project_parallel_events
@@ -45,7 +47,7 @@ from app.runtime.capability_resolver import (
 )
 from runtime_protocol.errors import RuntimeError as RuntimeContractError
 from app.runtime.registry import adapter_for_definition, get_runtime_registry
-from app.runtime.operational_limits import validate_bounded_json
+from app.runtime.operational_limits import chat_resume_deadline_seconds, validate_bounded_json
 from app.runtime.builder_registry import builder_for_definition
 from app.services.agent_runtime_projection import AgentRuntimeProjection
 from app.services.embedding_model_service import (
@@ -1341,19 +1343,33 @@ class AgentRunService:
                 type(adapter).__name__,
                 response_operation.value,
             )
-            if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
-                runtime_result = await adapter.continue_run(
-                    runtime_request,
-                    context=runtime_context,
-                    event_sink=execution_event_sink,
-                )
-            else:
-                runtime_result = await adapter.resume(
-                    runtime_request,
-                    interrupt=resolution.interrupt,
-                    context=runtime_context,
-                    event_sink=execution_event_sink,
-                )
+            resume_deadline = chat_resume_deadline_seconds()
+            try:
+                if response_operation is RuntimeOperationId.RUN_APPROVAL_RESPOND:
+                    runtime_result = await asyncio.wait_for(
+                        adapter.continue_run(
+                            runtime_request,
+                            context=runtime_context,
+                            event_sink=execution_event_sink,
+                        ),
+                        timeout=resume_deadline,
+                    )
+                else:
+                    runtime_result = await asyncio.wait_for(
+                        adapter.resume(
+                            runtime_request,
+                            interrupt=resolution.interrupt,
+                            context=runtime_context,
+                            event_sink=execution_event_sink,
+                        ),
+                        timeout=resume_deadline,
+                    )
+            except asyncio.TimeoutError as exc:
+                raise RuntimeContractError(
+                    "agent_run_resume_timeout",
+                    "The agent run resumed after approval but did not finish in time. Try again or choose a different model.",
+                    retryable=True,
+                ) from exc
             logger.info(
                 "Completed agent-run resume handoff | run_id=%s status=%s",
                 resolution.run.id,
@@ -1479,6 +1495,7 @@ class AgentRunService:
             )
             if completed_run is None:
                 return resolution
+            await release_delegated_parent_if_stalled(lifecycle_repository, completed_run)
             resume_debug_payload = resume_trace_recorder.finalize(
                 run=completed_run,
                 chat_turn_id=result.get("chat_turn_id"),
@@ -1522,6 +1539,8 @@ class AgentRunService:
                 interrupt=resolution.interrupt,
                 duplicate=False,
             )
+        except RuntimeContractError:
+            raise
         except Exception as exc:
             if resolution.interrupt.get("type") == "tool_approval":
                 restored = await repository.restore_pending_approval_after_runtime_failure(
@@ -1533,7 +1552,7 @@ class AgentRunService:
                     raise
             prior_metrics = dict(resolution.run.metrics_json or {})
             prior_metrics["error_count"] = max(int(prior_metrics.get("error_count") or 0), 1)
-            await lifecycle_repository.complete_run(
+            failed_run = await lifecycle_repository.complete_run(
                 resolution.run.id,
                 status=AgentRunStatus.FAILED.value,
                 metrics_json=prior_metrics,
@@ -1543,6 +1562,8 @@ class AgentRunService:
                     "retryable": True,
                 },
             )
+            if failed_run is not None:
+                await release_delegated_parent_if_stalled(lifecycle_repository, failed_run)
             if execution_event_sink is not None and hasattr(execution_event_sink, "finish"):
                 await execution_event_sink.finish(
                     "run.failed",

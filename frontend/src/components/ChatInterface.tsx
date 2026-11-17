@@ -138,7 +138,12 @@ import {
     WORKBENCH_AUTO_SIDE_MIN_WIDTH,
 } from '../lib/deep-research-review-panel-layout';
 import { clearInterruptPlaceholderForLiveRun, shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
-import { isAgentRunResumeProductTerminal, parseAgentRunResumeStreamEvent } from '../lib/agent-run-resume-stream';
+import { startAgentRunResumeIdleGuard } from '../lib/agent-run-resume-idle-guard';
+import {
+    isAgentRunResumeProductTerminal,
+    isResumeProductTerminalRunStatus,
+    parseAgentRunResumeStreamEvent,
+} from '../lib/agent-run-resume-stream';
 import type { ToolDisplayCatalog } from '../lib/tool-approval-presentation';
 import {
     type ClarificationChoice,
@@ -1928,6 +1933,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             let terminalError: string | undefined;
             const resumeAbort = new AbortController();
             let resumeTerminalReceived = false;
+            const resumeIdleGuard = startAgentRunResumeIdleGuard(resumeAbort.signal, () => {
+                if (!resumeTerminalReceived) resumeAbort.abort();
+            });
             try {
                 await streamResumeAgentRun(reviewSnapshot.runId, {
                     action,
@@ -1939,6 +1947,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
                     client_metadata: { source: 'chat_pending_review_panel' },
                 }, (event) => {
+                    resumeIdleGuard.touch(event.event);
                     if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
                     if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
                         setLiveCapabilityRevision((revision) => revision + 1);
@@ -2017,11 +2026,27 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 if (!resumeTerminalReceived && err?.name !== 'AbortError') {
                     throw err;
                 }
+            } finally {
+                resumeIdleGuard.dispose();
             }
             if (!response && terminalError) {
                 throw new Error(terminalError);
             }
-            if (!response) throw new Error(terminalError || 'The resume stream ended before returning a result.');
+            if (!response) {
+                try {
+                    const persisted = await getAgentRun(reviewSnapshot.runId, activeThread.id);
+                    if (persisted && isResumeProductTerminalRunStatus(persisted.status)) {
+                        await loadMessages();
+                        onThreadUpdate?.();
+                        setPendingHumanReview(null);
+                        setHumanReviewEditText('');
+                        return true;
+                    }
+                } catch {
+                    /* Fall through to the stream error below. */
+                }
+                throw new Error(terminalError || 'The resume stream ended before returning a result.');
+            }
 
             const resumedRun = response?.agent_run;
             if (resumedRun?.status === 'awaiting_human' && resumedRun?.pending_interrupt) {
