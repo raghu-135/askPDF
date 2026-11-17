@@ -98,12 +98,22 @@ async def test_resume_agent_run_times_out_continue_run_and_fails_run(monkeypatch
     lifecycle.get_run = AsyncMock(return_value=failed_run)
     service.repository_factory = MagicMock(return_value=lifecycle)
 
+    sink = MagicMock()
+    sink.emit = AsyncMock()
+    sink.flush = AsyncMock()
+    sink.finish = AsyncMock()
+    sink.bind_runtime_event_persister = MagicMock()
+    sink.bind_trace_recorder = MagicMock()
+    sink.bind_runtime_binding_persister = MagicMock()
+    sink.bind_runtime_fact_persister = MagicMock()
+
     with pytest.raises(RuntimeContractError) as excinfo:
         await service.resume_agent_run(
             "child-run",
             interrupt_id="int-1",
             action="approve",
             expected_thread_id="thread-1",
+            execution_event_sink=sink,
         )
     assert excinfo.value.code == "agent_run_resume_timeout"
     lifecycle.complete_run.assert_awaited()
