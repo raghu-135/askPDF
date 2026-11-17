@@ -14,7 +14,7 @@ import {
   REAL_UI_VIEWPORT,
   ScreenshotGuard,
   chatRateLimitPause,
-  bootstrapProjectThreadViaApi,
+  ensureProjectAndThread,
   loadEnvAdmin,
   apiJson,
   selectLlmModel,
@@ -116,13 +116,14 @@ function assertSingleQuestion(count, phase) {
   }
 }
 
-async function stampThreadId(page, threadId) {
-  await page.evaluate((id) => {
+async function stampThreadId(page, threadId, extraLine = '') {
+  await page.evaluate(({ id, extra }) => {
     const prior = document.getElementById('e2e-thread-stamp');
     if (prior) prior.remove();
     const div = document.createElement('div');
     div.id = 'e2e-thread-stamp';
-    div.textContent = `thread_id: ${id}`;
+    div.textContent = extra ? `thread_id: ${id}\n${extra}` : `thread_id: ${id}`;
+    div.style.whiteSpace = 'pre-line';
     Object.assign(div.style, {
       position: 'fixed',
       top: '8px',
@@ -136,11 +137,11 @@ async function stampThreadId(page, threadId) {
       pointerEvents: 'none',
     });
     document.body.appendChild(div);
-  }, threadId);
+  }, { id: threadId, extra: extraLine });
 }
 
-async function captureWithThread(guard, page, threadId, filename) {
-  await stampThreadId(page, threadId);
+async function captureWithThread(guard, page, threadId, filename, extraLine = '') {
+  await stampThreadId(page, threadId, extraLine);
   await guard.capture(page, filename, { requireChatWorkspace: false });
   fs.writeFileSync(
     path.join(ART_DIR, filename.replace(/\.png$/, '-thread.txt')),
@@ -189,12 +190,20 @@ async function main() {
     assertSingleQuestion(pendingCount, 'pending approval');
     await captureWithThread(guard, page, threadId, 'delegate-dedupe-01-pending-approval-1440x900.png');
 
+    const approveStartedAt = Date.now();
     await clickApproveOnce(page);
     await waitOutOfSending(page);
     await waitForComposerReady(page);
+    const approveToAnswerSeconds = ((Date.now() - approveStartedAt) / 1000).toFixed(1);
     const afterApproveCount = await countUserQuestions(page, 'browser workbench');
     assertSingleQuestion(afterApproveCount, 'after approve');
-    await captureWithThread(guard, page, threadId, 'delegate-dedupe-02-after-approve-1440x900.png');
+    await captureWithThread(
+      guard,
+      page,
+      threadId,
+      'delegate-dedupe-02-after-approve-1440x900.png',
+      `approve_to_answer_s: ${approveToAnswerSeconds}`,
+    );
 
     await context.storageState({ path: storagePath });
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 });
