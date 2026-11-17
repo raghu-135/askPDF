@@ -255,8 +255,6 @@ services:
   frontend-test-runner:
     command:
     - npm ci --ignore-scripts && npm run test:contracts && npm test
-    volumes:
-    - ./frontend/node_modules:/workspace/frontend/node_modules:ro
   test-runner:
     volumes:
     - ./.askpdf-hf-cache:/models/hf
