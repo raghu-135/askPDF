@@ -215,10 +215,15 @@ export async function bootstrapProjectThreadViaApi(page, projectLabel = `ui-proo
     admin,
     body: { name: threadName },
   });
-  const deepLink = new URL(DEFAULT_BASE_URL);
-  deepLink.searchParams.set('project', String(project.id));
-  deepLink.searchParams.set('thread', String(thread.id));
-  await page.goto(deepLink.toString(), { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await page.goto(DEFAULT_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+  await page.waitForTimeout(1500);
+  const projectRow = page.getByText(projectLabel, { exact: false }).first();
+  await projectRow.waitFor({ state: 'visible', timeout: 120_000 });
+  await projectRow.click({ force: true });
+  await page.waitForTimeout(1200);
+  const threadRow = page.getByText(threadName, { exact: false }).first();
+  await threadRow.waitFor({ state: 'visible', timeout: 120_000 });
+  await threadRow.click({ force: true });
   await waitForThreadWorkspaceReady(page);
   return {
     projectId: String(project.id),
