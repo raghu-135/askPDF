@@ -259,8 +259,17 @@ export interface ThreadMetadata {
   [key: string]: any;
 }
 
+export interface AutoLimitsSettings {
+  max_total_visits: number;
+  max_interrupts_per_run: number;
+  max_delegates_per_turn: number;
+  require_plan_approval_on_complex: boolean;
+  require_plan_approval_all: boolean;
+}
+
 export interface ThreadSettings {
   replans: number;
+  auto_limits?: AutoLimitsSettings;
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
@@ -813,6 +822,7 @@ export interface AgentWorkflow {
   framework?: string;
   builder_id?: string;
   supports_replans?: boolean;
+  supports_auto_limits_override?: boolean;
   supports_long_running_tasks?: boolean;
   created_at?: string | null;
   updated_at?: string | null;

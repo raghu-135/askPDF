@@ -23,6 +23,7 @@ from app.product_orchestration.execution_stream import AgentExecutionEventSink, 
 from app.product_orchestration.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
+    workflow_allows_auto_limits_override,
     workflow_is_chat_eligible,
     workflow_supports_replans,
 )
@@ -213,6 +214,9 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
         "is_builtin": workflow.is_builtin,
         "is_default": builtin_key == default_agent_workflow_key(),
         "supports_replans": workflow_supports_replans(spec),
+        "supports_auto_limits_override": workflow_allows_auto_limits_override(
+            {**spec, "workflow_id": spec.get("workflow_id") or workflow.id}
+        ),
         "supports_long_running_tasks": bool(
             ((spec.get("runtime") or {}).get("features") or {}).get("supports_long_running_tasks")
         ),

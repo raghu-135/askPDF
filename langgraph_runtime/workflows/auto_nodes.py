@@ -114,6 +114,20 @@ def _document_count(state: Mapping[str, Any]) -> int:
     return max(counts) if counts else 0
 
 
+def _require_plan_approval(state: Mapping[str, Any], *, workflow_id: str) -> bool:
+    policy = _auto_policy(state)
+    if policy.get("require_plan_approval_all"):
+        return bool(workflow_id)
+    if policy.get("require_plan_approval_on_complex"):
+        if workflow_id in {
+            DEEP_RESEARCH_WORKFLOW_ID,
+            ORCHESTRATOR_WORKFLOW_ID,
+            PLAN_EXECUTE_WORKFLOW_ID,
+        }:
+            return True
+    return workflow_id == DEEP_RESEARCH_WORKFLOW_ID
+
+
 def _choose_delegate_workflow(state: Mapping[str, Any], *, catalog_ids: set[str]) -> tuple[str, str]:
     question = str(state.get("question") or "")
     if DEEP_RESEARCH_WORKFLOW_ID in catalog_ids and _DEEP_RESEARCH_PATTERN.search(question):
@@ -132,8 +146,8 @@ def _choose_delegate_workflow(state: Mapping[str, Any], *, catalog_ids: set[str]
 
 
 def _auto_policy(state: Mapping[str, Any]) -> Dict[str, Any]:
-    # Resolved spec stores auto_policy on config; execution state may mirror it later.
-    return {}
+    policy = state.get("auto_policy")
+    return dict(policy) if isinstance(policy, dict) else {}
 
 
 async def auto_orchestrator_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -159,7 +173,7 @@ async def auto_orchestrator_node(state: RouterRagState, config: RunnableConfig) 
     if not workflow_id:
         route = AutoOrchestratorRoute.DECLINE.value
     else:
-        require_approval = workflow_id == DEEP_RESEARCH_WORKFLOW_ID
+        require_approval = _require_plan_approval(state, workflow_id=workflow_id)
         route = AutoOrchestratorRoute.PLAN_APPROVAL.value if require_approval else AutoOrchestratorRoute.DELEGATE.value
 
     plan_summary = f"Delegate to `{workflow_id}`: {rationale}" if workflow_id else rationale
@@ -187,6 +201,14 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
     parent_run_id = str(state.get("agent_run_id") or "").strip()
     thread_id = str(state.get("thread_id") or "").strip()
     question = str(state.get("question") or "")
+    policy = _auto_policy(state)
+    try:
+        delegate_cap = max(1, int(policy.get("max_delegates_per_turn", 1)))
+    except (TypeError, ValueError):
+        delegate_cap = 1
+    invocation_count = int(state.get("delegate_invocation_count") or 0)
+    if invocation_count >= delegate_cap:
+        raise ValueError(f"Auto delegate limit reached ({delegate_cap} per turn)")
     if not child_workflow_id or not parent_run_id or not thread_id:
         raise ValueError("workflow_delegate requires delegate_workflow_id, agent_run_id, and thread_id")
 
@@ -254,6 +276,7 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         "delegate_child_workflow_id": child_workflow_id,
         "child_final_answer": child_final_answer,
         "delegate_child_output": response,
+        "delegate_invocation_count": invocation_count + 1,
         "node_events": append_event(state, "workflow_delegate", data, started=started, config=config),
     }
     if agent_task_id:

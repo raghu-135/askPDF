@@ -8,6 +8,7 @@ from app.product_orchestration.enums import WorkflowNodeType, WorkflowRuntimeKin
 
 DEFAULT_AGENT_WORKFLOW_KEY_ENV = "ASKPDF_DEFAULT_AGENT_WORKFLOW_KEY"
 DEFAULT_AGENT_WORKFLOW_KEY = "auto_rag_agent"
+AUTO_WORKFLOW_ID = "auto_rag_agent"
 SUPPORTED_RUNTIME_KINDS = {kind.value for kind in WorkflowRuntimeKind}
 RUNTIME_TEXT_FIELDS = {
     "label",
@@ -32,6 +33,18 @@ def workflow_runtime_features(spec: Dict[str, Any]) -> Dict[str, Any]:
 
 def workflow_supports_replans(spec: Dict[str, Any]) -> bool:
     return bool(workflow_runtime_features(spec).get("supports_replans"))
+
+
+def workflow_supports_child_delegation(spec: Dict[str, Any]) -> bool:
+    return bool(workflow_runtime_features(spec).get("supports_child_delegation"))
+
+
+def workflow_allows_auto_limits_override(spec: Dict[str, Any]) -> bool:
+    features = workflow_runtime_features(spec)
+    return str(spec.get("workflow_id") or "") == AUTO_WORKFLOW_ID or (
+        workflow_supports_child_delegation(spec)
+        and features.get("allows_auto_limits_override", True) is not False
+    )
 
 
 def workflow_supports_long_running_tasks(spec: Dict[str, Any]) -> bool:

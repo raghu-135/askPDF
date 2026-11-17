@@ -20,6 +20,7 @@
       "features": {
         "supports_replans": false,
         "supports_child_delegation": true,
+        "allows_auto_limits_override": true,
         "supports_answer_quality": false
       }
     },

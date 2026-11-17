@@ -31,6 +31,7 @@ from app.product_orchestration.repository import AgentWorkflowRepository
 from app.product_orchestration.builtin_workflows import builtin_workflow_keys
 from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
+    workflow_allows_auto_limits_override,
     workflow_is_chat_eligible,
     workflow_supports_replans,
 )
@@ -114,6 +115,18 @@ async def _settings_workflow_supports_replans(settings: dict) -> bool:
     workflow = await AgentWorkflowRepository().get_workflow(workflow_id, include_custom=True)
     spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
     return workflow_supports_replans(spec)
+
+
+async def _settings_workflow_allows_auto_limits(settings: dict) -> bool:
+    agent_workflow = settings.get("agent_workflow")
+    workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
+    if not isinstance(workflow_id, str) or not workflow_id:
+        return False
+    workflow = await AgentWorkflowRepository().get_workflow(workflow_id, include_custom=True)
+    spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
+    if isinstance(spec, dict) and not spec.get("workflow_id"):
+        spec = {**spec, "workflow_id": workflow_id}
+    return workflow_allows_auto_limits_override(spec)
 
 
 async def _resolve_chat_workflow(workflow_id: str):
@@ -705,6 +718,8 @@ async def update_thread_settings_endpoint(
             raise HTTPException(status_code=400, detail="Agent workflow is not available for chat")
         if not await _settings_workflow_supports_replans(next_settings):
             next_settings.pop("replans", None)
+        if not await _settings_workflow_allows_auto_limits(next_settings):
+            next_settings.pop("auto_limits", None)
         next_settings["tool_instructions"] = normalize_tool_instructions(
             next_settings.get("tool_instructions", {})
         )
