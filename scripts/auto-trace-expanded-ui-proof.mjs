@@ -45,29 +45,30 @@ async function showThreadIdInLocationBar(page, threadId) {
   }, threadId);
 }
 
-async function openTraceOnLatestMessage(page) {
-  const openTrace = page
-    .getByRole('button', { name: /Open trace ·/i })
-    .or(page.getByRole('link', { name: /Open trace ·/i }))
-    .last();
+async function openDebugTraceWorkspace(page) {
+  const openTrace = page.getByText(/Open trace ·/i).last();
   if (!(await openTrace.isVisible({ timeout: 30_000 }).catch(() => false))) {
     return false;
   }
   await openTrace.scrollIntoViewIfNeeded();
   await openTrace.click();
-  const debugTab = page.getByRole('tab', { name: /^Debug Trace$/i }).first();
-  if (await debugTab.isVisible({ timeout: 10_000 }).catch(() => false)) {
-    await debugTab.click();
-  }
-  await page.locator('.MuiAccordionSummary-root').first().waitFor({ state: 'visible', timeout: 120_000 });
-  await page.waitForTimeout(800);
+  const debugTab = page.getByRole('tab', { name: /^Debug Trace$/i });
+  await debugTab.waitFor({ state: 'visible', timeout: 30_000 });
+  await debugTab.click();
+  await page.getByLabel('Open traces').waitFor({ state: 'visible', timeout: 120_000 });
+  await page.waitForTimeout(1000);
   return true;
+}
+
+function traceTimelineScope(page) {
+  return page.getByLabel('Open traces').locator('xpath=ancestor::div[contains(@style,"grid")]').last();
 }
 
 async function expandTimelineNode(page, label) {
   const pattern = typeof label === 'string' ? new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : label;
-  const summary = page.locator('.MuiAccordionSummary-root').filter({ hasText: pattern }).first();
-  await summary.scrollIntoViewIfNeeded({ timeout: 30_000 }).catch(() => {});
+  const scope = traceTimelineScope(page);
+  const summary = scope.locator('.MuiAccordionSummary-root').filter({ hasText: pattern }).first();
+  await summary.scrollIntoViewIfNeeded({ timeout: 60_000 }).catch(() => {});
   await summary.waitFor({ state: 'visible', timeout: 120_000 });
   const expanded = await summary.getAttribute('aria-expanded');
   if (expanded !== 'true') await summary.click();
@@ -124,7 +125,7 @@ async function main() {
     await chatRateLimitPause();
     await typeAndSendChat(
       page,
-      'Summarize this PDF in two sentences, then delegate a focused follow-up to the standard RAG workflow for one extra detail.',
+      'Use Auto: summarize this PDF in two sentences, then delegate exactly one child run on router_rag_agent to retrieve the arXiv id and publication date.',
     );
     await waitForAssistantAnswer(page, 300_000);
     await showThreadIdInLocationBar(page, threadId);
@@ -135,7 +136,7 @@ async function main() {
       await guard.capture(page, `proof-03-auto-limit-message-thread-${String(threadId).slice(0, 8)}.png`);
     }
 
-    if (await openTraceOnLatestMessage(page)) {
+    if (await openDebugTraceWorkspace(page)) {
       await showThreadIdInLocationBar(page, threadId);
       await expandTimelineNode(page, 'Context Loader');
       await expandDisclosure(page, 'Prefetch context');
@@ -171,7 +172,7 @@ async function main() {
       await chatRateLimitPause();
       await typeAndSendChat(
         page,
-        'Ask three detailed follow-up questions about every section of this PDF and keep delegating until you are done.',
+        'Use Auto with maximum depth: analyze every section, delegate multiple workflows, and replan until finished.',
       );
       await waitForAssistantAnswer(page, 300_000).catch(() => null);
       const limitText = page.getByText(/hit the thread limit/i);
