@@ -851,7 +851,11 @@ class TestThreadEndpoints:
         assert "defaults" in data
         assert isinstance(data["tools"], list)
         assert data["tools"]
-        assert all(set(tool) == {"id", "display_name", "description", "default_prompt"} for tool in data["tools"])
+        required_tool_fields = {"id", "display_name", "description", "default_prompt"}
+        assert all(required_tool_fields <= set(tool) for tool in data["tools"])
+        tool_ids = {tool["id"] for tool in data["tools"]}
+        assert "browser_navigate" in tool_ids
+        assert "wikidata_reference" in tool_ids
         assert {"system_role", "tool_instructions", "custom_instructions"} <= set(data["defaults"])
         assert "reasoning_mode" not in data["defaults"]
 

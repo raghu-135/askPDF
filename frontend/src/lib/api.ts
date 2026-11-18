@@ -908,6 +908,8 @@ export interface PromptToolDefinition {
   display_name: string;
   description: string;
   default_prompt: string;
+  category?: string;
+  group_label?: string;
 }
 
 export interface ContextBudgetDefaults {

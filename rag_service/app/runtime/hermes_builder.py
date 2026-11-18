@@ -22,6 +22,8 @@ from runtime_protocol.hermes_contract import HERMES_CHAT_PROVIDER, HERMES_MIN_CO
 from app.runtime.hermes_config import hermes_model_context_length
 from app.runtime.hermes_profile import resolve_hermes_profile
 from app.agent.canvas_layout_skills import apply_canvas_layout_skills
+from app.agent.prompting import build_tool_registry_and_playbook_sections
+from app.agent.tool_registry import get_workflow_prompt_tool_names
 from app.prompts.loaders import DEEP_RESEARCH_POLICY_ID, get_deep_research_policy
 
 
@@ -191,10 +193,56 @@ class HermesBuilderProvider:
         config["context_window"] = hermes_model_context_length(required=True)
         policy_id = str(config.get("research_policy_id") or "")
         runtime_instructions = str(config.get("system_prompt") or "").strip()
-        config["system_prompt"] = get_deep_research_policy(policy_id) + "\n\n" + runtime_instructions
+        use_web_search = bool(
+            config.get("use_web_search", False)
+            or (thread_settings or {}).get("use_web_search", False)
+        )
+        use_browser_access = (
+            str(config.get("browser_access_mode") or (thread_settings or {}).get("browser_access_mode") or "off") != "off"
+            or bool(config.get("use_browser_access", False))
+            or bool((thread_settings or {}).get("use_browser_access", False))
+        )
+        merged_tool_instructions: dict[str, str] = {}
+        if isinstance(thread_settings, Mapping):
+            raw_thread = thread_settings.get("tool_instructions")
+            if isinstance(raw_thread, dict):
+                merged_tool_instructions.update({str(k): str(v) for k, v in raw_thread.items()})
+        raw_config = config.get("tool_instructions")
+        if isinstance(raw_config, dict):
+            merged_tool_instructions.update({str(k): str(v) for k, v in raw_config.items()})
+        tool_sections = build_tool_registry_and_playbook_sections(
+            get_workflow_prompt_tool_names(
+                use_web_search=use_web_search,
+                use_browser_access=use_browser_access,
+            ),
+            merged_tool_instructions,
+            use_web_search=use_web_search,
+            use_browser_access=use_browser_access,
+        )
+        inventory_block = "\n\n".join(
+            section
+            for section in (
+                tool_sections["TOOL_REGISTRY_SECTION"],
+                tool_sections["TOOL_PLAYBOOK_SECTION"],
+            )
+            if section
+        )
+        config["system_prompt"] = "\n\n".join(
+            block
+            for block in (
+                get_deep_research_policy(policy_id),
+                runtime_instructions,
+                inventory_block,
+            )
+            if block
+        )
         config = apply_canvas_layout_skills(config)
         resolved["config"] = config
         resolved["managed_profile"] = resolve_hermes_profile(resolved)
+        managed = dict(resolved.get("managed_profile") or {})
+        if isinstance(managed, dict):
+            managed["instructions"] = config["system_prompt"]
+            resolved["managed_profile"] = managed
         return await self.normalize(definition, resolved)
 
     async def catalog(self, definition: AgentDefinition | None = None) -> BuilderCatalog:

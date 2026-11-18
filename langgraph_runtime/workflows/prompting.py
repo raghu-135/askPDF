@@ -4,14 +4,13 @@ import json
 from typing import Any, Dict, List, Optional
 
 from langgraph_runtime.agent.prompting import (
+    build_tool_registry_and_playbook_sections,
     format_runtime_datetime_context,
-    get_tool_catalog,
     normalize_tool_instructions,
     sanitize_custom_instructions,
     sanitize_system_role,
 )
-from langgraph_runtime.agent.tool_registry import TOOL_FRIENDLY_CONFIG
-from langgraph_runtime.workflows.enums import PromptProfile, ToolName
+from langgraph_runtime.workflows.enums import PromptProfile
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
 from langgraph_runtime.workflows.evidence import corrective_evidence_context, corrective_evidence_packets
 from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER
@@ -20,32 +19,6 @@ from langgraph_runtime.workflows.canvas_citation_menu import canvas_prompt_secti
 from langgraph_runtime.prompts.loaders import get_browser_access_mandate, get_web_search_mandate, load_runtime_prompt
 from runtime_protocol.prompt_assembly import truncate_for_workflow
 
-
-GRAPH_TOOL_NAMES = [
-    ToolName.SEARCH_KNOWLEDGE.value,
-    ToolName.INSPECT_DOCUMENT.value,
-    ToolName.READ_CONTEXT.value,
-    ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value,
-    ToolName.SEARCH_DURABLE_MEMORY.value,
-    ToolName.SEARCH_THREAD_EVENTS.value,
-    ToolName.SEARCH_WEB.value,
-    ToolName.ASK_FOR_CLARIFICATION.value,
-]
-GRAPH_TOOL_NAMES.extend(
-    name
-    for name, config in TOOL_FRIENDLY_CONFIG.items()
-    if config.get("mcp_server")
-    and name not in GRAPH_TOOL_NAMES
-    and name != ToolName.PUBLISH_CANVAS.value
-)
-
-BROWSER_GRAPH_TOOL_NAMES = frozenset({
-    "browser_navigate",
-    "browser_snapshot",
-    "browser_act",
-    "browser_read",
-    "browser_save_to_thread",
-})
 
 QUESTION_PLACEHOLDER = "{{QUESTION}}"
 PREFETCH_PLACEHOLDER = "{{PREFETCH_CONTEXT}}"
@@ -132,38 +105,11 @@ def _format_available_worker_nodes(state_or_settings: Dict[str, Any]) -> str:
 def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
     use_web_search = bool(state_or_settings.get("use_web_search", False))
     use_browser_access = bool(state_or_settings.get("use_browser_access", False))
-    active_tools = list(GRAPH_TOOL_NAMES if use_web_search else [name for name in GRAPH_TOOL_NAMES if name != ToolName.SEARCH_WEB.value])
-    if use_browser_access:
-        for name in BROWSER_GRAPH_TOOL_NAMES:
-            if name not in active_tools:
-                active_tools.append(name)
-    else:
-        active_tools = [name for name in active_tools if name not in BROWSER_GRAPH_TOOL_NAMES]
-    catalog = get_tool_catalog(active_tools)
-    playbook = normalize_tool_instructions(
+    tool_sections = build_tool_registry_and_playbook_sections(
+        None,
         state_or_settings.get("tool_instructions") or {},
-        tool_items=active_tools,
-    )
-    registry_lines = [
-        "## Tool Registry",
-        "",
-        "These are the retrieval and clarification tools represented by this graph runtime:",
-    ]
-    registry_lines.extend(
-        [
-            f"- {item['display_name']} (tool name: `{item['tool_name']}`): {item['description']}"
-            for item in catalog
-        ]
-    )
-    playbook_lines = [
-        "## Tool Playbook",
-        "",
-    ]
-    playbook_lines.extend(
-        [
-            f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
-            for item in catalog
-        ]
+        use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
     )
     web_search_mandate = ""
     if use_web_search:
@@ -184,8 +130,8 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
             client_locale=state_or_settings.get("client_locale"),
             client_now_iso=state_or_settings.get("client_now_iso"),
         ),
-        "TOOL_REGISTRY_SECTION": "\n".join(registry_lines),
-        "TOOL_PLAYBOOK_SECTION": "\n".join(playbook_lines),
+        "TOOL_REGISTRY_SECTION": tool_sections["TOOL_REGISTRY_SECTION"],
+        "TOOL_PLAYBOOK_SECTION": tool_sections["TOOL_PLAYBOOK_SECTION"],
         "CANVAS_LAYOUT_SKILLS_SECTION": layout_skills,
         "CANVAS_PUBLISH_CONTEXT_SECTION": canvas_context,
         "WEB_SEARCH_MANDATE_SECTION": web_search_mandate,

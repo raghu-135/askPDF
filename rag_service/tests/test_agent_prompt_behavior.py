@@ -24,7 +24,7 @@ def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
 
 
 def test_tool_catalog_and_instruction_keys_use_canonical_retrieval_names():
-    catalog = {item["tool_name"]: item for item in get_tool_catalog()}
+    catalog = {item["tool_name"]: item for item in get_tool_catalog(for_settings=True)}
 
     assert catalog["search_thread_conversation_history"]["id"] == "thread_conversation_history"
     assert catalog["search_durable_memory"]["id"] == "durable_memory"
