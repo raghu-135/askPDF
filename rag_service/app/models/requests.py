@@ -357,6 +357,7 @@ class ThreadChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=20_000)
     llm_model: str = Field(min_length=1, max_length=300)
     use_web_search: bool = False
+    web_search_mode: Optional[Literal["off", "ask", "on"]] = None
     hitl_web_approval: Optional[bool] = None
     browser_access_mode: Literal["off", "ask", "on"] = "off"
     use_reranker: Optional[bool] = None

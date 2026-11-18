@@ -53,6 +53,7 @@ async def delegate_sync(
     tool_instructions: Mapping[str, str] | None = None,
     context_window: int | None = None,
     context_budget: Mapping[str, Any] | None = None,
+    inherited_tool_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a child workflow synchronously via the control plane."""
 
@@ -77,6 +78,7 @@ async def delegate_sync(
         "tool_instructions": dict(tool_instructions or {}),
         "context_window": context_window,
         "context_budget": dict(context_budget or {}) if isinstance(context_budget, Mapping) else None,
+        "inherited_tool_settings": dict(inherited_tool_settings or {}),
     }
     timeout = httpx.Timeout(connect=10.0, read=600.0, write=60.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:

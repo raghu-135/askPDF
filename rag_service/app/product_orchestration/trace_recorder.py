@@ -10,6 +10,10 @@ from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttribu
 from app.product_orchestration.enums import NodeEventStatus, TraceStatus
 from app.product_orchestration.parallel_projection_contracts import PARALLEL_EVENT_NAMES, PARALLEL_TERMINAL_WORKER_STATUSES, ParallelEventName
 from app.product_orchestration.parallel_observability import parallel_span_refs
+from runtime_protocol.delegation_inheritance import (
+    delegated_child_runs_technical_details,
+    delegated_child_runs_from_technical,
+)
 from runtime_protocol.provider_usage import provider_cost_usd
 
 from app.product_orchestration.trace_otel import (
@@ -71,31 +75,56 @@ def _delegation_technical_details(result: Any) -> Dict[str, Any]:
 
     if not isinstance(result, Mapping):
         return {}
-    details: Dict[str, Any] = {}
-    for key in (
-        "child_run_id",
-        "child_workflow_id",
-        "delegate_child_run_id",
-        "delegate_child_workflow_id",
-        "agent_task_id",
-    ):
-        value = result.get(key)
-        if value not in (None, ""):
-            details[key] = value
     nested = result.get("debug_trace")
+    prior_technical: Dict[str, Any] = {}
     if isinstance(nested, Mapping):
         technical = nested.get("technical_details")
         if isinstance(technical, Mapping):
-            for key, value in technical.items():
-                if value not in (None, "") and key not in details:
-                    details[key] = value
-    for event in reversed(_as_list(result.get("node_events"))):
+            prior_technical = dict(technical)
+    child_runs = (
+        list(result.get("delegated_child_runs"))
+        if isinstance(result.get("delegated_child_runs"), list)
+        else []
+    )
+    for event in _as_list(result.get("node_events")):
         if not isinstance(event, Mapping):
             continue
-        for key in ("child_run_id", "child_workflow_id", "delegate_child_run_id", "delegate_child_workflow_id"):
-            value = event.get(key)
-            if value not in (None, "") and key not in details:
-                details[key] = value
+        event_data = event.get("data") if isinstance(event.get("data"), Mapping) else event
+        run_id = str(event_data.get("child_run_id") or event_data.get("delegate_child_run_id") or "").strip()
+        workflow_id = str(event_data.get("child_workflow_id") or event_data.get("delegate_child_workflow_id") or "").strip()
+        if not run_id:
+            delegation = event_data.get("delegation")
+            if isinstance(delegation, Mapping):
+                run_id = str(delegation.get("child_run_id") or "").strip()
+                workflow_id = workflow_id or str(delegation.get("child_workflow_id") or "").strip()
+        if not run_id:
+            continue
+        if any(str(row.get("run_id") or "").strip() == run_id for row in child_runs if isinstance(row, Mapping)):
+            continue
+        child_runs.append({"run_id": run_id, "workflow_id": workflow_id or None, "order": len(child_runs) + 1})
+    if not child_runs:
+        child_runs = delegated_child_runs_from_technical(prior_technical)
+    latest_run_id = str(
+        result.get("child_run_id")
+        or result.get("delegate_child_run_id")
+        or (child_runs[-1].get("run_id") if child_runs else "")
+        or ""
+    ).strip()
+    latest_workflow_id = str(
+        result.get("child_workflow_id")
+        or result.get("delegate_child_workflow_id")
+        or (child_runs[-1].get("workflow_id") if child_runs else "")
+        or ""
+    ).strip()
+    details = delegated_child_runs_technical_details(
+        {**result, "delegated_child_runs": child_runs, **prior_technical},
+        latest_run_id=latest_run_id or None,
+        latest_workflow_id=latest_workflow_id or None,
+    )
+    for key in ("agent_task_id",):
+        value = result.get(key)
+        if value not in (None, "") and key not in details:
+            details[key] = value
     return details
 
 
@@ -269,6 +298,8 @@ class AgentTraceRecorder:
         trace_extras: Dict[str, Any] = {}
         if isinstance(event_dict.get("prefetch_summary"), dict):
             trace_extras["prefetch_summary"] = event_dict["prefetch_summary"]
+        if isinstance(event_dict.get("prompt_summary"), dict):
+            trace_extras["prompt_summary"] = event_dict["prompt_summary"]
         delegation = event_dict.get("delegation")
         if isinstance(delegation, dict) and delegation:
             trace_extras["delegation"] = delegation

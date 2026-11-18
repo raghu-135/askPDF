@@ -9,6 +9,12 @@ from typing import Any, Dict, Mapping
 from langchain_core.runnables import RunnableConfig
 
 from langgraph_runtime.control_plane_client import delegate_sync
+from runtime_protocol.delegation_inheritance import (
+    append_delegated_child_run,
+    delegated_child_runs_from_technical,
+    delegated_child_runs_technical_details,
+    pick_delegate_inherited_tool_settings,
+)
 from langgraph_runtime.workflows.document_scope import (
     ATTACHMENT_IRRELEVANT_RETRIEVAL_SCORE,
     DOCUMENT_SCOPE_DECLINE_ANSWER,
@@ -23,6 +29,7 @@ from langgraph_runtime.workflows.runtime_invocation import append_event, log_nod
 from runtime_protocol.auto_limits import AUTO_LIMIT_MAX_DELEGATES_PER_TURN
 from langgraph_runtime.workflows.state import RouterRagState
 from langgraph_runtime.workflows.trace import compact_preview
+from langgraph_runtime.workflows.auto_handoff_sources import merge_auto_handoff_sources
 from langgraph_runtime.workflows.clarification_terminal import (
     clarification_options_from_mapping,
     clarification_terminal_active,
@@ -248,6 +255,12 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
                 "question_chars": len(question),
             },
         )
+    inherited_tool_settings = pick_delegate_inherited_tool_settings(state)
+    prior_child_runs = (
+        list(state.get("delegated_child_runs"))
+        if isinstance(state.get("delegated_child_runs"), list)
+        else []
+    )
     response = await delegate_sync(
         parent_run_id=parent_run_id,
         thread_id=thread_id,
@@ -265,8 +278,14 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         tool_instructions=state.get("tool_instructions") if isinstance(state.get("tool_instructions"), dict) else {},
         context_window=state.get("context_window"),
         context_budget=state.get("context_budget") if isinstance(state.get("context_budget"), dict) else None,
+        inherited_tool_settings=inherited_tool_settings,
     )
     child_run_id = str(response.get("child_run_id") or "")
+    delegated_child_runs = append_delegated_child_run(
+        prior_child_runs,
+        run_id=child_run_id,
+        workflow_id=child_workflow_id,
+    )
     child_result = response.get("result") if isinstance(response.get("result"), dict) else {}
     child_status = response.get("status") or child_result.get("status")
     child_options = clarification_options_from_mapping({**child_result, "clarification_options": response.get("clarification_options") or child_result.get("clarification_options")})
@@ -297,10 +316,12 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         log_node_end(state, "workflow_delegate", started, data)
         return {
             **clarification_terminal_state_update(child_options),
+            **merge_auto_handoff_sources(state, child_payload=response),
             "child_run_id": child_run_id,
             "child_workflow_id": child_workflow_id,
             "delegate_child_run_id": child_run_id,
             "delegate_child_workflow_id": child_workflow_id,
+            "delegated_child_runs": delegated_child_runs,
             "delegate_child_output": response,
             "node_events": append_event(state, "workflow_delegate", data, started=started, config=config),
         }
@@ -322,10 +343,12 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
     }
     log_node_end(state, "workflow_delegate", started, data)
     update: Dict[str, Any] = {
+        **merge_auto_handoff_sources(state, child_payload=response),
         "child_run_id": child_run_id,
         "child_workflow_id": child_workflow_id,
         "delegate_child_run_id": child_run_id,
         "delegate_child_workflow_id": child_workflow_id,
+        "delegated_child_runs": delegated_child_runs,
         "child_final_answer": child_final_answer,
         "delegate_child_output": response,
         "delegate_invocation_count": invocation_count + 1,
@@ -350,6 +373,7 @@ async def delegate_synthesizer_node(state: RouterRagState, config: RunnableConfi
         log_node_end(state, "delegate_synthesizer", started, data)
         return {
             **clarification_terminal_state_update(options),
+            **merge_auto_handoff_sources(state),
             "debug_trace": state.get("debug_trace"),
             "node_events": append_event(state, "delegate_synthesizer", data, started=started, config=config),
         }
@@ -376,15 +400,27 @@ async def delegate_synthesizer_node(state: RouterRagState, config: RunnableConfi
     log_node_end(state, "delegate_synthesizer", started, data)
     debug_trace = dict(state.get("debug_trace") or {}) if isinstance(state.get("debug_trace"), dict) else {}
     technical = dict(debug_trace.get("technical_details") or {})
+    existing_child_runs = (
+        list(state.get("delegated_child_runs"))
+        if isinstance(state.get("delegated_child_runs"), list)
+        else delegated_child_runs_from_technical(technical)
+    )
     technical.update(
-        {
-            "child_run_id": state.get("child_run_id"),
-            "child_workflow_id": state.get("child_workflow_id"),
-        }
+        delegated_child_runs_technical_details(
+            {
+                **state,
+                "delegated_child_runs": existing_child_runs,
+                "agent_task_id": state.get("agent_task_id"),
+            },
+            latest_run_id=str(state.get("child_run_id") or ""),
+            latest_workflow_id=str(state.get("child_workflow_id") or ""),
+        )
     )
     debug_trace["technical_details"] = technical
+    handoff = merge_auto_handoff_sources(state)
     return {
         "final_answer": answer,
+        **handoff,
         "debug_trace": debug_trace,
         "node_events": append_event(state, "delegate_synthesizer", data, started=started, config=config),
     }

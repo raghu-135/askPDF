@@ -378,14 +378,34 @@ class AgentRunService:
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         thread_settings = await get_thread_settings(thread_id)
+        from runtime_protocol.permission_modes import derive_browser_access_mode, derive_web_search_mode
+
         hitl_web_approval_override = getattr(req, "hitl_web_approval", None)
-        if hitl_web_approval_override is not None:
+        use_web_search_override = getattr(req, "use_web_search", None)
+        explicit_web_mode = getattr(req, "web_search_mode", None)
+        if any(
+            value is not None
+            for value in (hitl_web_approval_override, use_web_search_override, explicit_web_mode)
+        ):
+            web_mode = derive_web_search_mode(
+                web_search_mode=explicit_web_mode,
+                hitl_web_approval=hitl_web_approval_override,
+                use_web_search=use_web_search_override,
+            )
             thread_settings = {
                 **(thread_settings if isinstance(thread_settings, dict) else {}),
-                "hitl_web_approval": bool(hitl_web_approval_override),
+                "web_search_mode": web_mode,
+                "use_web_search": web_mode != "off",
+                "hitl_web_approval": web_mode == "ask",
             }
-        browser_mode = str(getattr(req, "browser_access_mode", "off") or "off")
-        if browser_mode in {"off", "ask", "on"}:
+        browser_mode = derive_browser_access_mode(
+            browser_access_mode=getattr(req, "browser_access_mode", None),
+            hitl_browser_approval=getattr(req, "hitl_browser_approval", None),
+            use_browser_access=getattr(req, "use_browser_access", None),
+        )
+        if str(getattr(req, "browser_access_mode", "off") or "off") in {"off", "ask", "on"} or getattr(
+            req, "use_browser_access", None
+        ) is not None:
             thread_settings = {
                 **(thread_settings if isinstance(thread_settings, dict) else {}),
                 "browser_access_mode": browser_mode,
@@ -427,11 +447,22 @@ class AgentRunService:
             workflow.id,
         )
 
+        thread_settings = thread_settings if isinstance(thread_settings, dict) else {}
+        web_mode = thread_settings.get("web_search_mode")
+        if web_mode not in {"off", "ask", "on"}:
+            web_mode = derive_web_search_mode(
+                web_search_mode=getattr(req, "web_search_mode", None),
+                hitl_web_approval=getattr(req, "hitl_web_approval", None),
+                use_web_search=getattr(req, "use_web_search", None),
+            )
         request_overrides = {
             "llm_model": getattr(req, "llm_model", None),
             "use_web_search": getattr(req, "use_web_search", None),
+            "web_search_mode": web_mode,
+            "hitl_web_approval": getattr(req, "hitl_web_approval", None),
             "browser_access_mode": getattr(req, "browser_access_mode", None),
             "use_browser_access": getattr(req, "browser_access_mode", "off") != "off",
+            "hitl_browser_approval": getattr(req, "hitl_browser_approval", None),
             "use_reranker": getattr(req, "use_reranker", None),
             "replans": getattr(req, "replans", None),
             "system_role": getattr(req, "system_role_override", None),
@@ -592,6 +623,7 @@ class AgentRunService:
                     "embedding_model": embedding_model,
                     "llm_model": getattr(req, "llm_model", None),
                     "use_web_search": getattr(req, "use_web_search", None),
+                    "web_search_mode": web_mode,
                     "browser_access_mode": getattr(req, "browser_access_mode", None),
                     "use_browser_access": getattr(req, "browser_access_mode", "off") != "off",
                     "use_reranker": getattr(req, "use_reranker", None),
@@ -837,12 +869,14 @@ class AgentRunService:
         context_window: Optional[int] = None,
         context_budget: Optional[Dict[str, Any]] = None,
         mcp_execution_context_token: Optional[str] = None,
+        inherited_tool_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         import hashlib
         from types import SimpleNamespace
 
         from app.db import get_thread
         from app.services.agent_task_repository import create_task
+        from runtime_protocol.delegation_inheritance import merge_delegate_inherited_tool_settings
 
         if not embedding_model:
             raise ValueError("embedding_model is required for delegation")
@@ -870,6 +904,11 @@ class AgentRunService:
                     "use_web_search": use_web_search,
                     "use_reranker": use_reranker is not False,
                     "limits": {},
+                    **(
+                        merge_delegate_inherited_tool_settings(inherited_tool_settings)
+                        if isinstance(inherited_tool_settings, dict)
+                        else {}
+                    ),
                 },
             )
             return {
@@ -889,30 +928,61 @@ class AgentRunService:
 
         thread_settings = await get_thread_settings(thread_id)
         thread_settings = thread_settings if isinstance(thread_settings, dict) else {}
-        resolved_browser_mode = (
-            browser_access_mode
-            if browser_access_mode in {"off", "ask", "on"}
-            else str(thread_settings.get("browser_access_mode") or "off")
+        parent_config: Dict[str, Any] = {}
+        parent_spec = getattr(parent_run, "resolved_spec_json", None)
+        if isinstance(parent_spec, dict):
+            parent_config = parent_spec.get("config") if isinstance(parent_spec.get("config"), dict) else {}
+        from runtime_protocol.permission_modes import derive_browser_access_mode, derive_web_search_mode
+
+        request_inheritance = {
+            "browser_access_mode": browser_access_mode,
+            "use_browser_access": use_browser_access,
+            "use_web_search": use_web_search,
+        }
+        if isinstance(inherited_tool_settings, dict):
+            if inherited_tool_settings.get("web_search_mode") is not None:
+                request_inheritance["web_search_mode"] = inherited_tool_settings.get("web_search_mode")
+            if inherited_tool_settings.get("hitl_web_approval") is not None:
+                request_inheritance["hitl_web_approval"] = inherited_tool_settings.get("hitl_web_approval")
+            if inherited_tool_settings.get("browser_access_mode") is not None:
+                request_inheritance["browser_access_mode"] = inherited_tool_settings.get("browser_access_mode")
+        inherited_tool = merge_delegate_inherited_tool_settings(
+            thread_settings,
+            parent_config,
+            request_inheritance,
+            inherited_tool_settings if isinstance(inherited_tool_settings, dict) else {},
         )
-        resolved_use_browser = (
-            use_browser_access
-            if use_browser_access is not None
-            else resolved_browser_mode != "off"
+        resolved_browser_mode = derive_browser_access_mode(
+            browser_access_mode=inherited_tool.get("browser_access_mode") or browser_access_mode,
+            hitl_browser_approval=inherited_tool.get("hitl_browser_approval"),
+            use_browser_access=inherited_tool.get("use_browser_access", use_browser_access),
+            config=parent_config,
         )
-        if resolved_browser_mode in {"off", "ask", "on"}:
-            thread_settings = {
-                **thread_settings,
-                "browser_access_mode": resolved_browser_mode,
-                "use_browser_access": resolved_use_browser,
-                "hitl_browser_approval": resolved_browser_mode == "ask",
-            }
+        resolved_use_browser = bool(
+            inherited_tool.get("use_browser_access")
+            if "use_browser_access" in inherited_tool
+            else (use_browser_access if use_browser_access is not None else resolved_browser_mode != "off")
+        )
+        resolved_web_search_mode = derive_web_search_mode(
+            web_search_mode=inherited_tool.get("web_search_mode"),
+            hitl_web_approval=inherited_tool.get("hitl_web_approval"),
+            use_web_search=inherited_tool.get("use_web_search", use_web_search),
+            config=parent_config,
+        )
+        resolved_use_web_search = resolved_web_search_mode != "off"
+        thread_settings = {**thread_settings, **inherited_tool}
         definition = definition_from_workflow(workflow)
         provider = builder_for_definition(definition)
         request_overrides = {
             "llm_model": llm_model,
-            "use_web_search": use_web_search,
+            "use_web_search": resolved_use_web_search,
+            "web_search_mode": resolved_web_search_mode,
+            "hitl_web_approval": resolved_web_search_mode == "ask",
             "browser_access_mode": resolved_browser_mode,
             "use_browser_access": resolved_use_browser,
+            "hitl_browser_approval": inherited_tool.get("hitl_browser_approval"),
+            "hitl_policy": inherited_tool.get("hitl_policy"),
+            "hitl_canvas_publish": inherited_tool.get("hitl_canvas_publish"),
             "use_reranker": use_reranker,
             "system_role": system_role or None,
             "tool_instructions": tool_instructions,
@@ -974,7 +1044,9 @@ class AgentRunService:
         req = SimpleNamespace(
             question=question,
             llm_model=llm_model,
-            use_web_search=use_web_search,
+            use_web_search=resolved_use_web_search,
+            web_search_mode=resolved_web_search_mode,
+            hitl_web_approval=inherited_tool.get("hitl_web_approval"),
             browser_access_mode=resolved_browser_mode,
             use_reranker=use_reranker,
             system_role_override=system_role,
@@ -995,9 +1067,14 @@ class AgentRunService:
             options={
                 "embedding_model": embedding_model,
                 "llm_model": llm_model,
-                "use_web_search": use_web_search,
+                "use_web_search": resolved_use_web_search,
+                "web_search_mode": resolved_web_search_mode,
+                "hitl_web_approval": resolved_web_search_mode == "ask",
                 "browser_access_mode": resolved_browser_mode,
                 "use_browser_access": resolved_use_browser,
+                "hitl_browser_approval": inherited_tool.get("hitl_browser_approval"),
+                "hitl_policy": inherited_tool.get("hitl_policy"),
+                "hitl_canvas_publish": inherited_tool.get("hitl_canvas_publish"),
                 "use_reranker": use_reranker,
                 "system_role_override": system_role,
                 "custom_instructions_override": custom_instructions,
@@ -1011,9 +1088,14 @@ class AgentRunService:
                 "question": question,
                 "pre_fetch_bundle": pre_fetch_bundle,
                 "llm_model": llm_model,
-                "use_web_search": use_web_search,
+                "use_web_search": resolved_use_web_search,
+                "web_search_mode": resolved_web_search_mode,
+                "hitl_web_approval": resolved_web_search_mode == "ask",
                 "browser_access_mode": resolved_browser_mode,
                 "use_browser_access": resolved_use_browser,
+                "hitl_browser_approval": inherited_tool.get("hitl_browser_approval"),
+                "hitl_policy": inherited_tool.get("hitl_policy"),
+                "hitl_canvas_publish": inherited_tool.get("hitl_canvas_publish"),
                 "use_reranker": use_reranker,
             },
             embedding_model=embedding_model,

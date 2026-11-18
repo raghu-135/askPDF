@@ -108,6 +108,7 @@ import {
     LiveTraceStreamController,
 } from '../lib/live-trace-stream';
 import { formatAgentTraceIdentity, formatOpenTraceControlLabel } from '../lib/trace-open-label';
+import { delegatedChildRunLinkLabel, delegatedChildRunsFromRunDetails } from '../lib/delegated-child-runs';
 import {
     formatContextLengthUserMessage,
     packingBudgetPayload,
@@ -139,6 +140,10 @@ import {
     WORKBENCH_AUTO_SIDE_MIN_WIDTH,
 } from '../lib/deep-research-review-panel-layout';
 import { clearInterruptPlaceholderForLiveRun, shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
+import {
+    isInterruptAlreadyResolvedError,
+    shouldDismissRecoveredHumanReview,
+} from '../lib/human-review-resume-recovery';
 import { startAgentRunResumeIdleGuard } from '../lib/agent-run-resume-idle-guard';
 import {
     isAgentRunResumeProductTerminal,
@@ -426,6 +431,8 @@ type ChatMessageItemProps = {
     onEditQuestion: (msg: ChatMessage, event: React.MouseEvent) => void;
     onDeleteMessage: (messageId: string, event: React.MouseEvent) => void;
     onOpenAgentRun: (msg: ChatMessage) => void;
+    onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
+    delegatedChildRuns: ReturnType<typeof delegatedChildRunsFromRunDetails>;
     onOpenCanvas?: (canvas: CanvasRef) => void;
     onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
     formatAgentWorkflowLabel: (msg: ChatMessage) => string;
@@ -450,6 +457,8 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
     onEditQuestion,
     onDeleteMessage,
     onOpenAgentRun,
+    onOpenDelegatedRun,
+    delegatedChildRuns,
     onOpenCanvas,
     onOpenDocumentCitation,
     formatAgentWorkflowLabel,
@@ -554,7 +563,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
             beforeContent={(
                 <>
                 {showAgentRunDebug && (
-                    <Box sx={{ mb: 1 }}>
+                    <Box sx={{ mb: 1, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.75 }}>
                         <Button
                             size="small"
                             variant="text"
@@ -569,6 +578,18 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                                 route: msg.agent_route,
                             })}
                         </Button>
+                        {onOpenDelegatedRun && delegatedChildRuns.map((child) => (
+                            <Button
+                                key={child.run_id}
+                                size="small"
+                                variant="text"
+                                data-testid="chat-delegated-child-run-link"
+                                onClick={() => onOpenDelegatedRun(child.run_id, child.workflow_id || undefined)}
+                                sx={{ minHeight: 26, px: 0.5, textTransform: 'none', fontSize: '0.75rem' }}
+                            >
+                                {delegatedChildRunLinkLabel(child.workflow_id)}
+                            </Button>
+                        ))}
                     </Box>
                 )}
                 {msg.canvas_ref && onOpenCanvas && (
@@ -740,6 +761,7 @@ export interface ChatInterfaceProps {
     autoScroll?: boolean;
     isPanelResizing?: boolean;
     onOpenTrace?: (trace: ChatTraceDescriptor) => void;
+    onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
     onOpenCanvas?: (canvas: CanvasRef) => void;
     onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
     onOpenMemoryReview?: (draftContent?: string) => void;
@@ -780,6 +802,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     autoScroll = true,
     isPanelResizing = false,
     onOpenTrace,
+    onOpenDelegatedRun,
     onOpenCanvas,
     onOpenDocumentCitation,
     onOpenMemoryReview,
@@ -1220,7 +1243,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 return;
             }
             const interrupt = run.pending_interrupt || latest.pending_interrupt;
-            if (!interrupt || interrupt.status && interrupt.status !== InterruptStatus.Pending) {
+            if (shouldDismissRecoveredHumanReview(run)) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
+            if (!interrupt || (interrupt.status && interrupt.status !== InterruptStatus.Pending)) {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
                 return;
@@ -1802,11 +1830,24 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setPendingHumanReview(null);
             setHumanReviewEditText('');
         }
-        const restoreToolApprovalUi = () => {
-            if (dismissToolApprovalOnAction) {
-                setPendingHumanReview(reviewSnapshot);
-                setHumanReviewEditText(interrupt.proposed_final_answer || '');
+        const restoreToolApprovalUi = (persistedRun?: AgentRunDetails | null) => {
+            if (!dismissToolApprovalOnAction) return;
+            if (shouldDismissRecoveredHumanReview(persistedRun)) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
             }
+            const pending = persistedRun?.pending_interrupt;
+            if (pending?.interrupt_id) {
+                setPendingHumanReview({
+                    ...reviewSnapshot,
+                    interrupt: pending as AgentRunPendingInterrupt,
+                });
+                setHumanReviewEditText(pending.proposed_final_answer || '');
+                return;
+            }
+            setPendingHumanReview(reviewSnapshot);
+            setHumanReviewEditText(interrupt.proposed_final_answer || '');
         };
         if (!interrupt.interrupt_id) {
             restoreToolApprovalUi();
@@ -2054,6 +2095,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             if (!response) {
                 try {
                     const persisted = await getAgentRun(reviewSnapshot.runId, activeThread.id);
+                    if (shouldDismissRecoveredHumanReview(persisted)) {
+                        await loadMessages();
+                        onThreadUpdate?.();
+                        setPendingHumanReview(null);
+                        setHumanReviewEditText('');
+                        setHumanReviewError(null);
+                        return true;
+                    }
                     if (persisted && isResumeProductTerminalRunStatus(persisted.status)) {
                         await loadMessages();
                         onThreadUpdate?.();
@@ -2098,8 +2147,26 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             onThreadUpdate?.();
             return true;
         } catch (err: any) {
-            setHumanReviewError(err?.message || 'Unable to submit review decision.');
-            restoreToolApprovalUi();
+            const errMessage = err?.message || 'Unable to submit review decision.';
+            let persistedRun: AgentRunDetails | null = null;
+            try {
+                persistedRun = await getAgentRun(reviewSnapshot.runId, activeThread.id);
+            } catch {
+                persistedRun = null;
+            }
+            if (
+                shouldDismissRecoveredHumanReview(persistedRun)
+                || isInterruptAlreadyResolvedError(errMessage)
+            ) {
+                await loadMessages();
+                onThreadUpdate?.();
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                setHumanReviewError(null);
+                return true;
+            }
+            setHumanReviewError(errMessage);
+            restoreToolApprovalUi(persistedRun);
             return false;
         } finally {
             if (humanReviewSubmissionKeyRef.current === submissionKey) {
@@ -2145,6 +2212,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
         setComposerText('');
         setClarificationOptions(null);
+        setPendingHumanReview(null);
+        setHumanReviewEditText('');
+        setHumanReviewError(null);
+        humanReviewSubmissionKeyRef.current = null;
         setLoading(true);
 
         const optimisticStamp = Date.now();
@@ -2283,6 +2354,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 undefined,
                 packingBudgetPayload(contextBudget),
                 browserAccessMode,
+                webSearchMode,
             );
             if (!response) throw new Error(terminalStreamError || 'The chat stream ended before returning a response.');
             const traceWasOpenForTempMessage = workspaceTraceMessageIdRef.current === tempAssistantMsg.id;
@@ -2892,6 +2964,32 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         })
     ), [agentWorkflowId, testRuntime?.baseWorkflowId]);
 
+    const prefetchedAgentRunIdsRef = useRef<Set<string>>(new Set());
+    useEffect(() => {
+        if (!activeThread?.id || isTestRuntime) return;
+        const pending = messages
+            .filter((msg) => msg.role === MessageRole.Assistant && msg.agent_run_id && isValidTraceId(msg.agent_run_id))
+            .map((msg) => msg.agent_run_id as string)
+            .filter((runId) => !agentRunDetails[runId] && !prefetchedAgentRunIdsRef.current.has(runId));
+        if (!pending.length) return;
+        let cancelled = false;
+        pending.forEach((runId) => prefetchedAgentRunIdsRef.current.add(runId));
+        void (async () => {
+            await Promise.all(pending.map(async (runId) => {
+                try {
+                    const run = await getAgentRun(runId, activeThread.id);
+                    if (cancelled) return;
+                    setAgentRunDetails((prev) => ({ ...prev, [runId]: run }));
+                } catch {
+                    // Child delegation links appear once run metadata is persisted.
+                }
+            }));
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [activeThread?.id, agentRunDetails, isTestRuntime, messages]);
+
     const handleOpenAgentRun = useCallback(async (msg: ChatMessage) => {
         const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
         const runId = msg.agent_run_id || liveForMessage?.runId;
@@ -3234,6 +3332,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                     onEditQuestion={handleEditQuestion}
                                     onDeleteMessage={handleDeleteMessage}
                                     onOpenAgentRun={handleOpenAgentRun}
+                                    onOpenDelegatedRun={onOpenDelegatedRun}
+                                    delegatedChildRuns={
+                                        msg.agent_run_id && isValidTraceId(msg.agent_run_id)
+                                            ? delegatedChildRunsFromRunDetails(agentRunDetails[msg.agent_run_id])
+                                            : []
+                                    }
                                     onOpenCanvas={onOpenCanvas}
                                     onOpenDocumentCitation={onOpenDocumentCitation}
                                     formatAgentWorkflowLabel={formatAgentWorkflowLabel}

@@ -54,8 +54,10 @@ function AgentNodeExecutionDetails({
       ? detail.event.child_workflow_id
       : undefined;
   const prefetchSummary = (detail.prefetch_summary || detail.event?.prefetch_summary) as Record<string, unknown> | undefined;
+  const promptSummary = (detail.event?.prompt_summary || detail.prompt_summary) as Record<string, unknown> | undefined;
   const hasPromptOrContext = Boolean(
     (Array.isArray(detail.llm?.prompt) && detail.llm.prompt.length > 0)
+    || hasData(promptSummary)
     || hasData(prefetchSummary)
     || hasData(delegation),
   );
@@ -82,6 +84,11 @@ function AgentNodeExecutionDetails({
       {hasData(prefetchSummary) && (
         <ConversationDisclosure label="Prefetch context" defaultExpanded>
           <JsonPreview value={prefetchSummary} maxHeight={320} />
+        </ConversationDisclosure>
+      )}
+      {hasData(promptSummary) && (
+        <ConversationDisclosure label="Prompt messages" defaultExpanded>
+          <JsonPreview value={promptSummary} maxHeight={440} />
         </ConversationDisclosure>
       )}
       {hasData(delegation) && (

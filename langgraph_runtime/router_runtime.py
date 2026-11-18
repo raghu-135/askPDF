@@ -23,6 +23,7 @@ from langgraph_runtime.models.llm import current_execution_model_client, runtime
 from langgraph_runtime.workflows.trace import compact_preview
 from runtime_protocol.errors import RuntimeError as RuntimeExecutionError
 from runtime_protocol.context_budget import resolve_context_budget
+from runtime_protocol.permission_modes import derive_browser_access_mode, derive_web_search_mode
 from runtime_protocol.model_errors import classify_model_error_message
 from langgraph_runtime.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
@@ -587,11 +588,32 @@ async def _handle_compiled_rag_chat(
         "use_browser_access",
         bool(workflow_config.get("use_browser_access")),
     )
-    browser_mode = str(
-        getattr(req, "browser_access_mode", None)
-        or (getattr(req, "options", {}) or {}).get("browser_access_mode")
-        or workflow_config.get("browser_access_mode")
-        or "off"
+    req_options = getattr(req, "options", None) if isinstance(getattr(req, "options", None), dict) else {}
+    hitl_web_approval = getattr(req, "hitl_web_approval", None)
+    if hitl_web_approval is None and req_options:
+        hitl_web_approval = req_options.get("hitl_web_approval")
+    if hitl_web_approval is None:
+        hitl_web_approval = workflow_config.get("hitl_web_approval")
+    explicit_web_mode = getattr(req, "web_search_mode", None) or req_options.get("web_search_mode")
+    web_search_mode = derive_web_search_mode(
+        web_search_mode=explicit_web_mode,
+        hitl_web_approval=hitl_web_approval,
+        use_web_search=use_web_search,
+        config=workflow_config,
+    )
+    if web_search_mode in {"ask", "on"}:
+        use_web_search = True
+    hitl_browser_approval = getattr(req, "hitl_browser_approval", None)
+    if hitl_browser_approval is None and req_options:
+        hitl_browser_approval = req_options.get("hitl_browser_approval")
+    if hitl_browser_approval is None:
+        hitl_browser_approval = workflow_config.get("hitl_browser_approval")
+    explicit_browser_mode = getattr(req, "browser_access_mode", None) or req_options.get("browser_access_mode")
+    browser_mode = derive_browser_access_mode(
+        browser_access_mode=explicit_browser_mode,
+        hitl_browser_approval=hitl_browser_approval,
+        use_browser_access=use_browser_access,
+        config=workflow_config,
     )
     if browser_mode in {"ask", "on"}:
         use_browser_access = True
@@ -728,8 +750,10 @@ async def _handle_compiled_rag_chat(
         # Durable deep-research fields are opt-in. Ordinary workflows ignore
         # them, which keeps the established chat execution contract unchanged.
         "agent_task_id": getattr(req, "agent_task_id", None),
-        "web_search_mode": str(getattr(req, "web_search_mode", "on" if use_web_search else "off")),
-        "browser_access_mode": str(getattr(req, "browser_access_mode", "on" if use_browser_access else "off")),
+        "web_search_mode": web_search_mode,
+        "hitl_web_approval": bool(web_search_mode == "ask"),
+        "browser_access_mode": browser_mode,
+        "hitl_browser_approval": bool(browser_mode == "ask"),
         "task_version": getattr(req, "agent_task_version", None),
         "task_observed_plan_revision": int(getattr(req, "task_plan_revision", 0) or 0),
         "task_enabled_profiles": list(getattr(req, "task_enabled_profiles", None) or []),

@@ -350,6 +350,7 @@ class RouterRagState(TypedDict, total=False):
     delegate_child_workflow_id: str
     child_final_answer: str
     delegate_child_output: Dict[str, Any]
+    delegated_child_runs: List[Dict[str, Any]]
     document_scope_declined: bool
     debug_trace: Dict[str, Any]
 
