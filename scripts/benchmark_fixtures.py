@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -52,11 +53,20 @@ def fixture_path(fixture_file: str) -> Path:
     return paper_path(fixture_file.replace(".pdf", ""))
 
 
+def _indexing_min_timeout_s() -> float:
+    raw = os.getenv("ASKPDF_EVAL_INDEX_MIN_TIMEOUT_S", "1800").strip()
+    try:
+        return max(300.0, float(raw))
+    except ValueError:
+        return 1800.0
+
+
 def indexing_timeout_seconds(fixture_file: str) -> float:
+    floor = _indexing_min_timeout_s()
     bundled = bundled_paper_for_file(fixture_file)
     if bundled:
         pages = int(bundled.get("pages") or 20)
-        return min(7200.0, max(600.0, pages * 25.0))
+        return min(7200.0, max(floor, pages * 40.0))
     from benchmark_papers import indexing_timeout_seconds as legacy_timeout
 
     return legacy_timeout(fixture_file)

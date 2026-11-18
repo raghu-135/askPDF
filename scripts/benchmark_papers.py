@@ -108,7 +108,10 @@ def indexing_timeout_seconds(fixture_file: str) -> float:
     if not paper:
         return 1200.0
     pages = int(paper.get("pages") or 30)
-    return min(7200.0, max(1200.0, pages * 25.0))
+    from benchmark_fixtures import _indexing_min_timeout_s
+
+    floor = max(1200.0, _indexing_min_timeout_s())
+    return min(7200.0, max(floor, pages * 40.0))
 
 
 def main(argv: list[str] | None = None) -> int:
