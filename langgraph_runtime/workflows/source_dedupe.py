@@ -6,10 +6,21 @@ import hashlib
 import json
 from typing import Any, Dict, Iterable, List, Mapping
 
-from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_PROVENANCE_FIELDS
 from langgraph_runtime.workflows.evidence import (
     canonical_source_id,
     normalized_source_url,
+)
+
+CORRECTIVE_PROVENANCE_FIELDS = (
+    "dispatch_id",
+    "work_id",
+    "query_id",
+    "work_ordinal",
+    "wave_id",
+    "retrieval_query",
+    "source_strategy",
+    "source_scope",
+    "source_expansion",
 )
 
 
