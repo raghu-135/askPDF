@@ -358,6 +358,27 @@ for _deep_tool_name in (
         NODE_DEEP_RESEARCH_SUBAGENT,
     ]))
 
+# Context loader prefetches bounded evidence via MCP before routing (langgraph_runtime graph.context_loader).
+for _prefetch_tool_name in (
+    "search_knowledge",
+    TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY,
+    TOOL_NAME_SEARCH_DURABLE_MEMORY,
+    TOOL_NAME_SEARCH_WEB,
+):
+    _prefetch_contract = TOOL_CONTRACT_METADATA[_prefetch_tool_name]
+    _prefetch_contract["allowed_caller_nodes"] = list(dict.fromkeys([
+        *(_prefetch_contract.get("allowed_caller_nodes") or []),
+        NODE_CONTEXT_LOADER,
+    ]))
+    _prefetch_contract["allowed_node_types"] = list(dict.fromkeys([
+        *(_prefetch_contract.get("allowed_node_types") or []),
+        NODE_CONTEXT_LOADER,
+    ]))
+    _prefetch_contract["required_node_capabilities"] = list(dict.fromkeys([
+        *(_prefetch_contract.get("required_node_capabilities") or []),
+        CAP_CONTEXT_PREFETCH,
+    ]))
+
 
 def get_tool_contract_metadata(tool_name: str) -> Dict[str, Any]:
     """Return contract metadata for a canonical tool name."""
