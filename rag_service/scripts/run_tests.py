@@ -142,6 +142,7 @@ HERMES_TEST_FILES = [
 MCP_TEST_FILES = [
     "test_delegate_mcp_grant_pytest.py",
     "test_delegate_browser_context_pytest.py",
+    "test_delegate_inherited_tool_settings_pytest.py",
     "test_delegated_chat_projection_pytest.py",
     "test_delegate_sync_sink_finalize_pytest.py",
     "test_delegated_child_resume_guard_pytest.py",
