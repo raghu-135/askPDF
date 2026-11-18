@@ -22,7 +22,7 @@ sys.path.insert(0, str(SCRIPTS))
 from benchmark_config import context_baseline_record, load_benchmark_config, thread_settings_baseline  # noqa: E402
 from benchmark_execution import run_case  # noqa: E402
 from benchmark_fixtures import ensure_optional_arxiv, fixture_path, indexing_timeout_seconds  # noqa: E402
-from benchmark_scoring import aggregate, default_judge_model, llm_judge  # noqa: E402
+from benchmark_scoring import aggregate, default_judge_model, judge_request_timeout_s, llm_judge  # noqa: E402
 from live_stack_client import admin_token, create_thread, live_client, upload_pdf, wait_indexed  # noqa: E402
 
 QUESTIONS = REPO / "benchmarks" / "questions.json"
@@ -142,7 +142,11 @@ def run_suite(
         "cases": [],
     }
 
-    judge_client = httpx.Client(timeout=120.0)
+    judge_timeout = judge_request_timeout_s()
+    judge_client = httpx.Client(
+        timeout=httpx.Timeout(judge_timeout, connect=30.0),
+        base_url="http://127.0.0.1:8000",
+    )
 
     def judge_fn(q: str, a: str, m: dict[str, Any]) -> bool:
         _throttle()

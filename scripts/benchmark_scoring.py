@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any, Callable
 
 import httpx
@@ -69,6 +70,14 @@ def grounding_pass(answer: str, *, require_citation: bool = True) -> bool:
     return True
 
 
+def judge_request_timeout_s() -> float:
+    raw = os.getenv("ASKPDF_EVAL_JUDGE_TIMEOUT_S", "240").strip()
+    try:
+        return max(30.0, float(raw))
+    except ValueError:
+        return 240.0
+
+
 def llm_judge(
     client: httpx.Client,
     question: str,
@@ -87,15 +96,31 @@ def llm_judge(
         ],
         "temperature": 0,
     }
-    r = client.post(completions_url, json=payload, timeout=180.0)
-    if r.status_code >= 400:
-        return string_constraints(answer, match) is True
-    text = r.json()["choices"][0]["message"]["content"]
-    try:
-        parsed = json.loads(text[text.find("{") : text.rfind("}") + 1])
-        return bool(parsed.get("pass"))
-    except (json.JSONDecodeError, ValueError):
-        return False
+    req_timeout = judge_request_timeout_s()
+    max_attempts = int(os.getenv("ASKPDF_EVAL_JUDGE_RETRIES", "3"))
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            r = client.post(completions_url, json=payload, timeout=req_timeout)
+            if r.status_code >= 400:
+                return string_constraints(answer, match) is True
+            text = r.json()["choices"][0]["message"]["content"]
+            try:
+                parsed = json.loads(text[text.find("{") : text.rfind("}") + 1])
+                return bool(parsed.get("pass"))
+            except (json.JSONDecodeError, ValueError):
+                return False
+        except httpx.TimeoutException as exc:
+            last_exc = exc
+            if attempt + 1 < max_attempts:
+                time.sleep(min(60.0, 5.0 * (attempt + 1)))
+                continue
+        except httpx.HTTPError:
+            return string_constraints(answer, match) is True
+    if last_exc is not None:
+        fallback = string_constraints(answer, match)
+        return fallback if fallback is not None else False
+    return string_constraints(answer, match) is True
 
 
 def score_answer(

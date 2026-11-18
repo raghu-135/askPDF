@@ -4,7 +4,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from benchmark_scoring import INTERNAL_KNOWLEDGE_RE, grounding_pass, numeric_score, string_constraints
+from benchmark_scoring import (
+    INTERNAL_KNOWLEDGE_RE,
+    grounding_pass,
+    judge_request_timeout_s,
+    numeric_score,
+    string_constraints,
+)
 
 
 def test_numeric_range_not_single_digit_trap():
@@ -21,3 +27,8 @@ def test_internal_knowledge_fails_grounding():
 def test_decline_match():
     answer = "The attached documents do not contain Neptune's orbital period."
     assert string_constraints(answer, {"decline": True}) is True
+
+
+def test_judge_request_timeout_respects_env(monkeypatch):
+    monkeypatch.setenv("ASKPDF_EVAL_JUDGE_TIMEOUT_S", "90")
+    assert judge_request_timeout_s() == 90.0

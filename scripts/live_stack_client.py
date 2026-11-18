@@ -13,6 +13,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_API = os.getenv("ASKPDF_API_URL", "http://127.0.0.1:8000/api").rstrip("/")
 
 
+def eval_chat_timeout_s() -> float:
+    raw = os.getenv("ASKPDF_EVAL_CHAT_TIMEOUT_S", "2400").strip()
+    try:
+        return max(60.0, float(raw))
+    except ValueError:
+        return 2400.0
+
+
 def admin_token() -> str:
     token = os.getenv("ASKPDF_ADMIN_TOKEN", "").strip()
     if token:
@@ -139,10 +147,11 @@ def thread_chat(
     }
     if chat_options:
         payload.update(chat_options)
+    chat_timeout = eval_chat_timeout_s()
     response = client.post(
         f"/threads/{thread_id}/chat",
         json=payload,
-        timeout=900.0,
+        timeout=chat_timeout,
     )
     response.raise_for_status()
     body = response.json()
@@ -153,7 +162,7 @@ def thread_chat(
             f"/agent-runs/{run_id}/resume",
             params={"thread_id": thread_id},
             json={"interrupt_id": interrupt["interrupt_id"], "action": "approve"},
-            timeout=900.0,
+            timeout=chat_timeout,
         ).raise_for_status()
     return body
 
@@ -226,6 +235,6 @@ def live_client(api_base: Optional[str] = None, **kwargs: Any) -> httpx.Client:
     return httpx.Client(
         base_url=(api_base or DEFAULT_API),
         headers=auth_headers(),
-        timeout=kwargs.pop("timeout", 900.0),
+        timeout=kwargs.pop("timeout", eval_chat_timeout_s()),
         **kwargs,
     )
