@@ -225,6 +225,9 @@ test.describe('Deep Research review panel layout fixture', () => {
         await expect(page.locator('.workbench.stacked')).toHaveCount(1);
       }
       await assertReviewLayout(page);
+      if (viewport.name === '1280x800') {
+        await page.screenshot({ path: '/opt/cursor/artifacts/deep-research-review-panel-1280x800.png', fullPage: false });
+      }
     });
   }
 

@@ -109,6 +109,18 @@ excluded. Document-scope decline uses the canonical
       → final artifact
       → optional publication as a ChatTurn
 
+## Context engineering (prefetch vs workflow)
+
+Run settings expose a **context window** and an **initial retrieval budget**
+(context budget ratios from `.env` / thread overrides). Only `context_loader`
+consumes that budget to build `pre_fetch_bundle`. Later LLM hops truncate via
+each workflow’s `context_policy` and JIT tools, not per-message ratio sliders.
+
+Auto orchestrator limits (`AUTO_*` in `.env`) default thread `auto_limits` for
+`auto_rag_agent` (visits, interrupts, delegates per turn, plan approval). Child
+delegations inherit the parent run’s context window and prefetch snapshot;
+Debug Trace links parent `workflow_delegate` operations to child runs.
+
 ## Important boundaries
 
 - Product APIs never expose framework checkpoint identifiers.
@@ -124,7 +136,8 @@ Related implementation:
 - rag_service/main.py
 - rag_service/app/product_orchestration/
 - rag_service/app/runtime/
-- rag_service/app/services/embedding_tokenizer_registry.py
+- rag_service/config/embedding_models.json
+- rag_service/app/services/embedding_model_catalog.py
 - rag_service/scripts/download_embedding_tokenizers.py
 - [Research canvases](research-canvases.md)
 - runtime_protocol/

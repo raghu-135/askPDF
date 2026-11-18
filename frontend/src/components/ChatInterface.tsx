@@ -28,6 +28,13 @@ import {
     type ConversationSentenceCache,
 } from '../lib/chat-sentence-cache';
 import { getChatComposerState } from '../lib/chat-composer-state';
+import {
+    chatHumanReviewUsesStackedDecisionLayout,
+    chatToolApprovalReplacesComposer,
+    composerHumanReviewPending,
+    shouldDismissToolApprovalOnAction,
+} from '../lib/chat-tool-approval-ui';
+import { buildRecoveredPendingHumanReviewMessages } from '../lib/pending-human-review-recovery';
 import { canRequestChatCancellation, recoverCanceledChat } from '../lib/chat-run-cancellation';
 import {
     Thread,
@@ -62,6 +69,7 @@ import {
     streamAgentWorkflowBuilderTest,
     type Project,
     type ThreadChatResponse,
+    type AutoLimitsSettings,
 } from '../lib/api';
 import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../lib/runtime-capabilities';
 import type { AgentExecutionStreamEnvelope } from '../lib/agent-execution-stream';
@@ -81,6 +89,8 @@ import {
     type ReasoningFormat as ReasoningFormatValue,
 } from '../lib/enums';
 import ChatSettingsDialog from './ChatSettingsDialog';
+import type { ThreadAdvancedSettingsValue } from './ThreadAdvancedSettingsSection';
+import type { ContextBudgetDefaults } from '../lib/api';
 import { useThreadChatSettingsRegistryOptional } from '../lib/thread-chat-settings-context';
 import DeepResearchTaskPanel, { DeepResearchTaskPicker } from './DeepResearchTaskPanel';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
@@ -100,6 +110,7 @@ import {
     LiveTraceStreamController,
 } from '../lib/live-trace-stream';
 import { formatAgentTraceIdentity, formatOpenTraceControlLabel } from '../lib/trace-open-label';
+import { delegatedChildRunLinkLabel, delegatedChildRunsFromRunDetails } from '../lib/delegated-child-runs';
 import {
     formatContextLengthUserMessage,
     packingBudgetPayload,
@@ -117,9 +128,11 @@ import {
     HumanReviewDecisionPanel,
     ResizableDecisionPanel,
     WebSearchModeControl,
+    BrowserAccessModeControl,
     SourceList,
 } from './conversation';
 import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
+import { useBrowserAccessMode, type BrowserAccessMode } from '../hooks/useBrowserAccessMode';
 import {
     DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT,
     REVIEW_DECISION_COLUMN_MIN_HEIGHT,
@@ -128,7 +141,22 @@ import {
     REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT,
     WORKBENCH_AUTO_SIDE_MIN_WIDTH,
 } from '../lib/deep-research-review-panel-layout';
-import { shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
+import { clearInterruptPlaceholderForLiveRun, shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
+import {
+    isInterruptAlreadyResolvedError,
+    shouldDismissRecoveredHumanReview,
+} from '../lib/human-review-resume-recovery';
+import { startAgentRunResumeIdleGuard } from '../lib/agent-run-resume-idle-guard';
+import {
+    isAgentRunResumeProductTerminal,
+    isResumeProductTerminalRunStatus,
+    parseAgentRunResumeStreamEvent,
+} from '../lib/agent-run-resume-stream';
+import type { ToolDisplayCatalog } from '../lib/tool-approval-presentation';
+import {
+    type ClarificationChoice,
+    clarificationChoicesFromPayload,
+} from '../lib/clarification-options';
 import type { CanvasRef, DocumentCanvasCitationTarget } from '../lib/canvas-spec';
 import type { DocumentSource } from '../lib/api';
 
@@ -158,22 +186,6 @@ type LiveChatExecution = {
     running: boolean;
     canceling?: boolean;
     error?: string;
-};
-
-type ClarificationChoice = {
-    text: string;
-    isOriginal: boolean;
-};
-
-const clarificationChoiceText = (choice: unknown): string => {
-    if (typeof choice === 'string') return choice;
-    if (choice && typeof choice === 'object') {
-        const candidate = choice as { text?: unknown; label?: unknown; title?: unknown; question?: unknown };
-        for (const value of [candidate.text, candidate.label, candidate.title, candidate.question]) {
-            if (typeof value === 'string') return value;
-        }
-    }
-    return '';
 };
 
 type PendingHumanReview = {
@@ -282,6 +294,8 @@ const ChatComposer = React.memo(function ChatComposer({
     onStop,
     onOpenSettings,
     onOpenMemoryReview,
+    humanReviewPending = false,
+    clarificationPending = false,
 }: {
     inputRef: React.Ref<HTMLInputElement | HTMLTextAreaElement>;
     seedText: string;
@@ -299,6 +313,8 @@ const ChatComposer = React.memo(function ChatComposer({
     onStop: () => void;
     onOpenSettings: () => void;
     onOpenMemoryReview?: (draftContent?: string) => void;
+    humanReviewPending?: boolean;
+    clarificationPending?: boolean;
 }) {
     const [draftPresent, setDraftPresent] = useState(Boolean(seedText));
     useEffect(() => setDraftPresent(Boolean(seedText.trim())), [seedText, seedVersion]);
@@ -311,8 +327,12 @@ const ChatComposer = React.memo(function ChatComposer({
         isEmbeddingModelValid,
         indexingStatus,
         hasInput: draftPresent,
+        humanReviewPending,
+        clarificationPending,
     }), [
+        clarificationPending,
         draftPresent,
+        humanReviewPending,
         indexingStatus,
         isEmbeddingModelValid,
         isLlmModelValid,
@@ -413,6 +433,8 @@ type ChatMessageItemProps = {
     onEditQuestion: (msg: ChatMessage, event: React.MouseEvent) => void;
     onDeleteMessage: (messageId: string, event: React.MouseEvent) => void;
     onOpenAgentRun: (msg: ChatMessage) => void;
+    onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
+    delegatedChildRuns: ReturnType<typeof delegatedChildRunsFromRunDetails>;
     onOpenCanvas?: (canvas: CanvasRef) => void;
     onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
     formatAgentWorkflowLabel: (msg: ChatMessage) => string;
@@ -437,6 +459,8 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
     onEditQuestion,
     onDeleteMessage,
     onOpenAgentRun,
+    onOpenDelegatedRun,
+    delegatedChildRuns,
     onOpenCanvas,
     onOpenDocumentCitation,
     formatAgentWorkflowLabel,
@@ -541,7 +565,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
             beforeContent={(
                 <>
                 {showAgentRunDebug && (
-                    <Box sx={{ mb: 1 }}>
+                    <Box sx={{ mb: 1, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.75 }}>
                         <Button
                             size="small"
                             variant="text"
@@ -556,6 +580,18 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                                 route: msg.agent_route,
                             })}
                         </Button>
+                        {onOpenDelegatedRun && delegatedChildRuns.map((child) => (
+                            <Button
+                                key={child.run_id}
+                                size="small"
+                                variant="text"
+                                data-testid="chat-delegated-child-run-link"
+                                onClick={() => onOpenDelegatedRun(child.run_id, child.workflow_id || undefined)}
+                                sx={{ minHeight: 26, px: 0.5, textTransform: 'none', fontSize: '0.75rem' }}
+                            >
+                                {delegatedChildRunLinkLabel(child.workflow_id)}
+                            </Button>
+                        ))}
                     </Box>
                 )}
                 {msg.canvas_ref && onOpenCanvas && (
@@ -684,6 +720,10 @@ const workflowSupportsReplans = (workflows: AgentWorkflow[], workflowId?: string
     Boolean(workflows.find((workflow) => workflow.id === workflowId)?.supports_replans)
 );
 
+const workflowSupportsAutoLimits = (workflows: AgentWorkflow[], workflowId?: string | null) => (
+    Boolean(workflows.find((workflow) => workflow.id === workflowId)?.supports_auto_limits_override)
+);
+
 export interface ConversationRuntime {
     kind: 'normal-thread' | 'builder-test';
     persistent: boolean;
@@ -706,6 +746,39 @@ export interface BuilderTestConversationRuntime extends ConversationRuntime {
     onSessionChange: React.Dispatch<React.SetStateAction<BuilderTestSession>>;
 }
 
+function buildAdvancedSettingsPatch(
+    value: ThreadAdvancedSettingsValue,
+    defaults: ThreadAdvancedSettingsValue,
+): Record<string, unknown> {
+    const patch: Record<string, unknown> = {};
+    if (value.contextWindow !== defaults.contextWindow) {
+        patch.context_window = value.contextWindow;
+    }
+    const budgetPatch: Record<string, number | null> = {};
+    (Object.keys(value.contextBudget) as Array<keyof ContextBudgetDefaults>).forEach((key) => {
+        const current = value.contextBudget[key];
+        const baseline = defaults.contextBudget[key];
+        if (current !== undefined && current !== baseline) {
+            budgetPatch[key] = current;
+        }
+    });
+    if (Object.keys(budgetPatch).length > 0) {
+        patch.context_budget = budgetPatch;
+    }
+    const coveragePatch: Record<string, number | null> = {};
+    Object.keys(defaults.coverageIterations).forEach((key) => {
+        const current = value.coverageIterations[key];
+        const baseline = defaults.coverageIterations[key];
+        if (current !== undefined && current !== baseline) {
+            coveragePatch[key] = current;
+        }
+    });
+    if (Object.keys(coveragePatch).length > 0) {
+        patch.coverage_iterations = coveragePatch;
+    }
+    return patch;
+}
+
 export interface ChatInterfaceProps {
     activeThread: Thread | null;
     chatSentences: ConversationSentence[];
@@ -723,6 +796,7 @@ export interface ChatInterfaceProps {
     autoScroll?: boolean;
     isPanelResizing?: boolean;
     onOpenTrace?: (trace: ChatTraceDescriptor) => void;
+    onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
     onOpenCanvas?: (canvas: CanvasRef) => void;
     onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
     onOpenMemoryReview?: (draftContent?: string) => void;
@@ -732,7 +806,7 @@ export interface ChatInterfaceProps {
 export type ChatTraceDescriptor = {
     id: string;
     threadId?: string;
-    messageId: string;
+    messageId?: string;
     label: string;
     status?: string;
     routeReason?: string;
@@ -763,6 +837,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     autoScroll = true,
     isPanelResizing = false,
     onOpenTrace,
+    onOpenDelegatedRun,
     onOpenCanvas,
     onOpenDocumentCitation,
     onOpenMemoryReview,
@@ -783,6 +858,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [indexingStatus, setIndexingStatus] = useState<ChatComposerIndexingStatusValue>(ChatComposerIndexingStatus.Checking);
     const [useWebSearch, setUseWebSearch] = useState(false);
     const { mode: webSearchMode, setMode: setSharedWebSearchMode } = useWebSearchMode();
+    const { mode: browserAccessMode, setMode: setSharedBrowserAccessMode } = useBrowserAccessMode();
     const [contextWindow, setContextWindow] = useState<number>(0);
     const {
         contextBudget,
@@ -792,10 +868,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     } = useContextBudgetState();
     const [replans, setReplans] = useState(1);
     const [replansLimit, setReplansLimit] = useState<number | null>(null);
+    const [autoLimits, setAutoLimits] = useState<AutoLimitsSettings | null>(null);
+    const [defaultAutoLimits, setDefaultAutoLimits] = useState<AutoLimitsSettings | null>(null);
     const [defaultSystemRole, setDefaultSystemRole] = useState('');
     const [defaultCustomInstructions, setDefaultCustomInstructions] = useState('');
     const [systemRole, setSystemRole] = useState('');
     const [toolCatalog, setToolCatalog] = useState<PromptToolDefinition[]>([]);
+    const [toolDisplayCatalog, setToolDisplayCatalog] = useState<ToolDisplayCatalog>({});
     const [toolInstructions, setToolInstructions] = useState<Record<string, string>>({});
     const [customInstructions, setCustomInstructions] = useState('');
     const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
@@ -803,13 +882,21 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [promptPreview, setPromptPreview] = useState('');
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
+    const [clarificationDismissSeed, setClarificationDismissSeed] = useState('');
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
     const [hitlCanvasPublish, setHitlCanvasPublish] = useState(false);
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
+    const [savingBrowserAccessMode, setSavingBrowserAccessMode] = useState(false);
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
     const [defaultHitlCanvasPublish, setDefaultHitlCanvasPublish] = useState(false);
     const [useReranker, setUseReranker] = useState(false);
     const [defaultUseReranker, setDefaultUseReranker] = useState(false);
+    const [advancedDefaults, setAdvancedDefaults] = useState<ThreadAdvancedSettingsValue | null>(null);
+    const advancedDefaultsRef = useRef<ThreadAdvancedSettingsValue | null>(null);
+    const [advancedSettings, setAdvancedSettings] = useState<ThreadAdvancedSettingsValue | null>(null);
+    const [advancedFieldSpecs, setAdvancedFieldSpecs] = useState<
+        NonNullable<import('../lib/api').PromptDefaults['advanced_field_specs']>
+    >([]);
     const [useMemory, setUseMemory] = useState(true);
     const [useThreadMemory, setUseThreadMemory] = useState(true);
     const [useProjectMemory, setUseProjectMemory] = useState(true);
@@ -884,6 +971,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         `${pendingHumanReview?.interrupt.interrupt_id}:${pendingHumanReview?.interrupt.status}:${pendingHumanReview?.interrupt.resume_version}:${pendingHumanReview?.interrupt.response_operation}:${humanReviewCapabilityRevision}`,
     );
 
+    useEffect(() => {
+        if (!pendingHumanReview?.runId || !activeThread?.id) return;
+        void refreshHumanReviewCapabilities();
+    }, [
+        pendingHumanReview?.runId,
+        pendingHumanReview?.interrupt.interrupt_id,
+        pendingHumanReview?.interrupt.resume_version,
+        activeThread?.id,
+        refreshHumanReviewCapabilities,
+    ]);
+
     const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
     const sentenceCacheRef = useRef<ConversationSentenceCache>(new Map());
@@ -910,6 +1008,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const stackedWorkbench = useMediaQuery(`(max-width:${WORKBENCH_AUTO_SIDE_MIN_WIDTH - 1}px)`);
 
     useEffect(() => {
+        let cancelled = false;
+        void getPromptTools().then(({ tools }) => {
+            if (cancelled) return;
+            setToolDisplayCatalog(Object.fromEntries(
+                (tools || []).map((tool: PromptToolDefinition) => [tool.id, { display_name: tool.display_name, description: tool.description }]),
+            ));
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, []);
+
+    useEffect(() => {
         if (!pendingHumanReview?.interrupt || !stackedWorkbench) return undefined;
         window.dispatchEvent(new CustomEvent(DEEP_RESEARCH_REVIEW_WORKBENCH_BOOST_EVENT, { detail: { active: true } }));
         return () => {
@@ -921,6 +1030,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setComposerSeed(text);
         setComposerSeedVersion((version) => version + 1);
     }, []);
+
+    const focusComposer = useCallback(() => {
+        requestAnimationFrame(() => composerInputRef.current?.focus());
+    }, []);
+
+    const seedClarificationComposer = useCallback((text: string) => {
+        setClarificationOptions(null);
+        setClarificationDismissSeed('');
+        setComposerText(text);
+        focusComposer();
+    }, [focusComposer, setComposerText]);
 
     const applyThreadSettingsToState = useCallback((settings?: Thread['settings']) => {
         setReplans(settings?.replans ?? 1);
@@ -935,6 +1055,26 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseProjectMemory(settings?.memory?.thread_reads_project_memory ?? true);
         setUseGlobalMemory(settings?.memory?.thread_reads_user_memory ?? false);
         setAgentWorkflowId(normalizeAgentWorkflowForUi(settings?.agent_workflow?.workflow_id));
+        if (settings?.auto_limits) {
+            setAutoLimits(settings.auto_limits);
+        }
+        if (settings?.context_window) {
+            setContextWindow(settings.context_window);
+        }
+        const defaults = advancedDefaultsRef.current;
+        if (defaults) {
+            setAdvancedSettings({
+                contextWindow: settings?.context_window ?? defaults.contextWindow,
+                contextBudget: {
+                    ...defaults.contextBudget,
+                    ...(settings?.context_budget ?? {}),
+                },
+                coverageIterations: {
+                    ...defaults.coverageIterations,
+                    ...(settings?.coverage_iterations ?? {}),
+                },
+            });
+        }
     }, [
         defaultCustomInstructions,
         defaultHitlCanvasPublish,
@@ -1056,6 +1196,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 setAgentWorkflows(patterns.agent_workflows || []);
                 if (res.defaults) {
                     setReplansLimit(res.defaults.replans_limit);
+                    if (res.defaults.auto_limits) {
+                        setDefaultAutoLimits(res.defaults.auto_limits);
+                        if (!activeThread) {
+                            setAutoLimits(res.defaults.auto_limits);
+                        }
+                    }
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultHitlWebApproval(res.defaults.hitl_web_approval ?? false);
@@ -1063,6 +1209,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultUseReranker(res.defaults.use_reranker ?? false);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
+                    }
+                    const advancedValue: ThreadAdvancedSettingsValue = {
+                        contextWindow: res.defaults.context_window,
+                        contextBudget: res.defaults.context_budget,
+                        coverageIterations: res.defaults.coverage_iterations ?? {},
+                    };
+                    setAdvancedFieldSpecs(res.defaults.advanced_field_specs ?? []);
+                    setAdvancedDefaults(advancedValue);
+                    advancedDefaultsRef.current = advancedValue;
+                    if (!activeThread) {
+                        setAdvancedSettings(advancedValue);
                     }
                     if (!activeThread) {
                         setReplans(Math.min(1, res.defaults.replans_limit));
@@ -1133,7 +1290,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             // approval after a newer run has already completed.
             const response = await listThreadAgentRuns(threadId, { limit: 20 });
             if (activeThreadIdRef.current !== threadId) return;
-            const latest = (response.agent_runs || []).find((run) => !run.task_id);
+            const chatRuns = (response.agent_runs || []).filter((run) => !run.task_id);
+            const awaitingReview = chatRuns.find((run) => run.status === 'awaiting_human');
+            const latest = awaitingReview ?? chatRuns[0];
             if (latest?.status !== 'awaiting_human') {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
@@ -1153,7 +1312,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 return;
             }
             const interrupt = run.pending_interrupt || latest.pending_interrupt;
-            if (!interrupt || interrupt.status && interrupt.status !== InterruptStatus.Pending) {
+            if (shouldDismissRecoveredHumanReview(run)) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
+            if (!interrupt || (interrupt.status && interrupt.status !== InterruptStatus.Pending)) {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
                 return;
@@ -1181,30 +1345,19 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 ? String(inputSummary.question || '')
                 : '';
             setMessages(prev => {
-                if (prev.some(msg => msg.agent_run_id === run.id || msg.id === localAssistantMessageId)) {
+                const recovered = buildRecoveredPendingHumanReviewMessages({
+                    run,
+                    interruptTitle: interrupt.title || '',
+                    recoveredQuestion,
+                    localUserMessageId,
+                    localAssistantMessageId,
+                    existingMessages: prev,
+                    interruptRequestedAt: interrupt.requested_at,
+                });
+                if (!recovered) {
                     return prev;
                 }
-                const recovered: ChatMessage[] = [];
-                if (recoveredQuestion.trim()) {
-                    recovered.push({
-                        id: localUserMessageId,
-                        role: MessageRole.User,
-                        content: recoveredQuestion.trim(),
-                        created_at: run.started_at || new Date().toISOString(),
-                        agent_run_id: run.id,
-                        agent_run_turn_kind: 'user_prompt',
-                    });
-                }
-                recovered.push({
-                    id: localAssistantMessageId,
-                    role: MessageRole.Assistant,
-                    content: interrupt.title || 'Human review required before the agent can continue.',
-                    created_at: interrupt.requested_at || run.started_at || new Date().toISOString(),
-                    agent_run_id: run.id,
-                    agent_run_turn_kind: 'assistant_pending_review',
-                    pending_human_review: true,
-                });
-                return [...prev, ...recovered];
+                return [...prev, ...recovered as ChatMessage[]];
             });
         } catch (error) {
             if (activeThreadIdRef.current !== threadId) return;
@@ -1332,6 +1485,41 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseProjectMemory(true);
         setUseGlobalMemory(false);
         setAgentWorkflowId(agentWorkflows.find((workflow) => workflow.is_default)?.id || agentWorkflows[0]?.id || '');
+        if (defaultAutoLimits) {
+            setAutoLimits(defaultAutoLimits);
+        }
+        if (advancedDefaults) {
+            setAdvancedSettings(advancedDefaults);
+        }
+    };
+
+    const handleAdvancedResetField = (fieldKey: string) => {
+        if (!advancedDefaults || !advancedSettings) return;
+        if (fieldKey === 'context_window') {
+            setAdvancedSettings({ ...advancedSettings, contextWindow: advancedDefaults.contextWindow });
+            setContextWindow(advancedDefaults.contextWindow);
+            return;
+        }
+        if (fieldKey in advancedDefaults.coverageIterations) {
+            setAdvancedSettings({
+                ...advancedSettings,
+                coverageIterations: {
+                    ...advancedSettings.coverageIterations,
+                    [fieldKey]: advancedDefaults.coverageIterations[fieldKey],
+                },
+            });
+            return;
+        }
+        const budgetKey = fieldKey as keyof ContextBudgetDefaults;
+        if (advancedDefaults.contextBudget[budgetKey] !== undefined) {
+            setAdvancedSettings({
+                ...advancedSettings,
+                contextBudget: {
+                    ...advancedSettings.contextBudget,
+                    [budgetKey]: advancedDefaults.contextBudget[budgetKey] as number,
+                },
+            });
+        }
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -1441,6 +1629,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseWebSearch(webSearchMode !== 'off');
         setHitlWebApproval(webSearchMode === 'ask');
     }, [webSearchMode]);
+
+    const handleBrowserAccessModeChange = (nextMode: BrowserAccessMode) => {
+        if (savingBrowserAccessMode) return;
+        setSharedBrowserAccessMode(nextMode);
+    };
 
     const handleWebSearchModeChange = async (nextMode: WebSearchMode) => {
         if (savingWebSearchMode) return;
@@ -1731,26 +1924,62 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const handleHumanReviewAction = async (action: AgentRunResumeAction, selectedOptionIds?: string[]): Promise<boolean> => {
         if (!pendingHumanReview || !activeThread) return false;
-        const interrupt = pendingHumanReview.interrupt;
-        if (!interrupt.interrupt_id) return false;
+        const reviewSnapshot = pendingHumanReview;
+        const interrupt = reviewSnapshot.interrupt;
+        const dismissToolApprovalOnAction = shouldDismissToolApprovalOnAction(interrupt);
+        if (dismissToolApprovalOnAction) {
+            setPendingHumanReview(null);
+            setHumanReviewEditText('');
+        }
+        const restoreToolApprovalUi = (persistedRun?: AgentRunDetails | null) => {
+            if (!dismissToolApprovalOnAction) return;
+            if (shouldDismissRecoveredHumanReview(persistedRun)) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
+            const pending = persistedRun?.pending_interrupt;
+            if (pending?.interrupt_id) {
+                setPendingHumanReview({
+                    ...reviewSnapshot,
+                    interrupt: pending as AgentRunPendingInterrupt,
+                });
+                setHumanReviewEditText(pending.proposed_final_answer || '');
+                return;
+            }
+            setPendingHumanReview(reviewSnapshot);
+            setHumanReviewEditText(interrupt.proposed_final_answer || '');
+        };
+        if (!interrupt.interrupt_id) {
+            restoreToolApprovalUi();
+            return false;
+        }
         const responseOperation = runtimeInterruptResponseOperation(interrupt);
         if (!responseOperation) {
             setHumanReviewError('This human-input request has an invalid runtime response contract.');
+            restoreToolApprovalUi();
             return false;
         }
-        if (!isRuntimeOperationEnabled(humanReviewCapabilities, responseOperation)) return false;
+        const reviewAvailability = runtimeOperationAvailability(humanReviewCapabilities, responseOperation);
+        const reviewCapabilityStale = !reviewAvailability.enabled
+            && reviewAvailability.disabledReason === 'no_pending_interrupt'
+            && (!interrupt.status || interrupt.status === InterruptStatus.Pending);
+        if (!reviewAvailability.enabled && !reviewCapabilityStale) {
+            restoreToolApprovalUi();
+            return false;
+        }
         if (testRuntime && builderRuntime) {
             setHumanReviewSubmitting(action);
             setHumanReviewError(null);
             resetLiveExecutionEvents();
             setLiveExecution({
-                messageId: pendingHumanReview.localAssistantMessageId,
-                runId: pendingHumanReview.runId,
+                messageId: reviewSnapshot.localAssistantMessageId,
+                runId: reviewSnapshot.runId,
                 running: true,
             });
             try {
-                const traceStream = new LiveTraceStreamController(pendingHumanReview.runId);
-                await resumeAgentWorkflowBuilderTest(pendingHumanReview.runId, {
+                const traceStream = new LiveTraceStreamController(reviewSnapshot.runId);
+                await resumeAgentWorkflowBuilderTest(reviewSnapshot.runId, {
                     ...builderTestRequestContext(),
                     action,
                     interrupt_id: interrupt.interrupt_id,
@@ -1764,7 +1993,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     const snapshot = traceStream.append(event as AgentExecutionStreamEnvelope);
                     if (event.event !== 'heartbeat') {
                         publishLiveTrace(snapshot, {
-                            messageId: pendingHumanReview.localAssistantMessageId,
+                            messageId: reviewSnapshot.localAssistantMessageId,
                             label: `Test · ${workflowSpecFingerprint(testRuntime.spec)}`,
                         });
                     }
@@ -1778,9 +2007,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     || refreshed?.result_json?.final_answer
                     || 'The workflow test completed.',
                 );
-                updateBuilderTestMessage(pendingHumanReview.localAssistantMessageId, {
+                updateBuilderTestMessage(reviewSnapshot.localAssistantMessageId, {
                     content: answer,
-                    runId: refreshed?.id || pendingHumanReview.runId,
+                    runId: refreshed?.id || reviewSnapshot.runId,
                     status: refreshed?.pending_interrupt ? 'review' : 'completed',
                 });
                 if (refreshed) {
@@ -1788,7 +2017,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     onOpenTrace?.({
                         id: refreshed.id,
                         threadId: activeThread?.id,
-                        messageId: pendingHumanReview.localAssistantMessageId,
+                        messageId: reviewSnapshot.localAssistantMessageId,
                         label: `Test · ${workflowSpecFingerprint(testRuntime.spec)}`,
                         status: refreshed.status,
                         runDetails: refreshed,
@@ -1811,107 +2040,192 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 return true;
             } catch (error: any) {
                 setHumanReviewError(error?.message || 'Unable to submit the test review decision.');
+                restoreToolApprovalUi();
                 return false;
             } finally {
                 setLiveExecution(null);
                 setHumanReviewSubmitting(null);
             }
         }
-        const submissionKey = `${pendingHumanReview.runId}:${interrupt.interrupt_id}:${interrupt.resume_version ?? 1}:${action}`;
-        if (humanReviewSubmissionKeyRef.current) return false;
+        const submissionKey = `${reviewSnapshot.runId}:${interrupt.interrupt_id}:${interrupt.resume_version ?? 1}:${action}`;
+        if (humanReviewSubmissionKeyRef.current) {
+            restoreToolApprovalUi();
+            return false;
+        }
 
         humanReviewSubmissionKeyRef.current = submissionKey;
         setHumanReviewSubmitting(action);
         setHumanReviewError(null);
-        const liveMessageId = pendingHumanReview.localAssistantMessageId;
+        let activeInterrupt = interrupt;
+        try {
+            const freshRun = await getAgentRun(reviewSnapshot.runId, activeThread.id);
+            const freshInterrupt = freshRun.pending_interrupt;
+            if (
+                freshInterrupt?.status === InterruptStatus.Pending
+                && freshInterrupt.interrupt_id
+            ) {
+                activeInterrupt = freshInterrupt as AgentRunPendingInterrupt;
+                if (!dismissToolApprovalOnAction) {
+                    setPendingHumanReview((current) => (
+                        current ? { ...current, interrupt: activeInterrupt } : current
+                    ));
+                }
+            }
+        } catch {
+            /* Fall back to the interrupt shown in the approval card. */
+        }
+        const liveMessageId = reviewSnapshot.localAssistantMessageId;
+        const resumeAssistantMessage = messages.find((message) => message.id === liveMessageId);
+        const resumeTraceLabel = formatAgentTraceIdentity({
+            workflowId: resumeAssistantMessage?.agent_workflow_id,
+            route: resumeAssistantMessage?.agent_route,
+        });
+        setMessages((current) => current.map((message) => (
+            message.id === liveMessageId ? clearInterruptPlaceholderForLiveRun(message) : message
+        )));
         resetLiveExecutionEvents();
-        setLiveExecution({ messageId: liveMessageId, runId: pendingHumanReview.runId, running: true });
+        setLiveExecution({ messageId: liveMessageId, runId: reviewSnapshot.runId, running: true });
         setOpenAgentRunIds((current) => new Set(current).add(liveMessageId));
+        setLoading(true);
+        const traceStream = new LiveTraceStreamController(reviewSnapshot.runId);
+        let resumeStreamError: string | undefined;
         try {
             let response: any;
             let terminalError: string | undefined;
-            await streamResumeAgentRun(pendingHumanReview.runId, {
-                action,
-                interrupt_id: interrupt.interrupt_id,
-                resume_token: interrupt.resume_token || undefined,
-                resume_version: interrupt.resume_version || undefined,
-                selected_option_ids: selectedOptionIds,
-                thread_id: activeThread.id,
-                edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
-                client_metadata: { source: 'chat_pending_review_panel' },
-            }, (event) => {
-                if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
-                if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
-                    setHumanReviewCapabilityRevision((revision) => revision + 1);
-                    void refreshHumanReviewCapabilities();
-                }
-                if (event.event === '__result__' && event.data?.response) {
-                    const envelope = event.data.response as Record<string, unknown>;
-                    const agentRun = envelope.agent_run as Record<string, unknown> | undefined;
-                    const outcome = envelope.outcome as Record<string, unknown> | undefined;
-                    const resultJson = agentRun?.result_json as { answer?: string; final_answer?: string } | undefined;
-                    response = {
-                        ...envelope,
-                        agent_run: agentRun,
-                        answer: String(
-                            outcome?.answer
-                            || outcome?.final_answer
-                            || resultJson?.answer
-                            || resultJson?.final_answer
-                            || '',
-                        ),
-                    };
-                    setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: undefined }
-                        : current);
-                    return;
-                }
-                if (event.event === '__error__') {
-                    const rawError = event.data?.error;
-                    terminalError = String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.');
-                    setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: terminalError }
-                        : current);
-                    return;
-                }
-                if (['run.completed', 'run.failed', 'run.cancelled', 'interrupt.requested', 'stream.error'].includes(event.event)) {
-                    if (event.data?.response) {
-                        response = event.data.response;
-                    } else if (event.data?.agent_run) {
-                        const envelope = event.data as Record<string, unknown>;
-                        const agentRun = envelope.agent_run as Record<string, unknown> | undefined;
-                        const outcome = envelope.outcome as Record<string, unknown> | undefined;
-                        const resultJson = agentRun?.result_json as { answer?: string; final_answer?: string } | undefined;
-                        response = {
-                            ...envelope,
-                            agent_run: agentRun,
-                            answer: String(
-                                outcome?.answer
-                                || outcome?.final_answer
-                                || resultJson?.answer
-                                || resultJson?.final_answer
-                                || '',
-                            ),
-                        };
-                    }
-                    const rawError = event.data?.error;
-                    terminalError = ['run.failed', 'stream.error'].includes(event.event) && !response
-                        ? String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.')
-                        : undefined;
-                    setLiveExecution((current) => current?.messageId === liveMessageId
-                        ? { ...current, running: false, error: terminalError }
-                        : current);
-                }
+            const resumeAbort = new AbortController();
+            let resumeTerminalReceived = false;
+            const resumeIdleGuard = startAgentRunResumeIdleGuard(resumeAbort.signal, () => {
+                if (!resumeTerminalReceived) resumeAbort.abort();
             });
-            if (!response) throw new Error(terminalError || 'The resume stream ended before returning a result.');
+            try {
+                await streamResumeAgentRun(reviewSnapshot.runId, {
+                    action,
+                    interrupt_id: activeInterrupt.interrupt_id,
+                    resume_token: activeInterrupt.resume_token || undefined,
+                    resume_version: activeInterrupt.resume_version || undefined,
+                    selected_option_ids: selectedOptionIds,
+                    thread_id: activeThread.id,
+                    edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
+                    client_metadata: { source: 'chat_pending_review_panel' },
+                }, (event) => {
+                    resumeIdleGuard.touch(event.event);
+                    if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
+                    if (/^(run\.|interrupt\.|approval\.|subagent\.|artifact\.)/.test(event.event)) {
+                        setLiveCapabilityRevision((revision) => revision + 1);
+                        void refreshLiveRunCapabilities();
+                        if (
+                            humanReviewSubmissionKeyRef.current !== submissionKey
+                        ) {
+                            setHumanReviewCapabilityRevision((revision) => revision + 1);
+                            void refreshHumanReviewCapabilities();
+                        }
+                    }
+                    if (event.event === 'run.failed' && !event.data?.response) {
+                        const formatted = formatContextLengthUserMessage(event.data?.error);
+                        resumeStreamError = formatted.detail
+                            ? `${formatted.title}\n\n${formatted.detail}`
+                            : formatted.title;
+                    } else if (!isAgentRunResumeProductTerminal(event.event, event.data as Record<string, unknown> | undefined)) {
+                        resumeStreamError = undefined;
+                    }
+                    const snapshot = traceStream.append(
+                        event,
+                        resumeStreamError,
+                        response?.status,
+                    );
+                    if (isValidTraceId(snapshot.runId)) {
+                        setLiveExecution((current) => current?.messageId === liveMessageId
+                            ? {
+                                ...current,
+                                runId: snapshot.runId,
+                                running: snapshot.running,
+                                error: resumeStreamError,
+                            }
+                            : current);
+                    }
+                    if (event.event !== 'heartbeat') {
+                        publishLiveTrace(snapshot, {
+                            messageId: liveMessageId,
+                            label: resumeTraceLabel,
+                            routeReason: resumeAssistantMessage?.agent_route_reason,
+                            traceRefs: resumeAssistantMessage?.agent_trace_refs,
+                            error: resumeStreamError,
+                        });
+                    }
+                    if (!isAgentRunResumeProductTerminal(event.event, event.data as Record<string, unknown> | undefined)) return;
+                    const parsed = parseAgentRunResumeStreamEvent(event.event, event.data as Record<string, unknown> | undefined);
+                    if (!parsed) return;
+                    if (parsed.errorMessage) {
+                        terminalError = parsed.errorMessage;
+                    } else if (Object.keys(parsed.response).length > 0) {
+                        response = parsed.response;
+                    }
+                    const isFailure = ['__error__', 'run.failed', 'stream.error'].includes(event.event) && !response;
+                    if (isFailure && !terminalError) {
+                        terminalError = 'Unable to resume the agent run.';
+                    }
+                    const terminalSnapshot = traceStream.snapshot(event.event, terminalError, response?.status);
+                    setLiveExecution((current) => current?.messageId === liveMessageId
+                        ? {
+                            ...current,
+                            runId: terminalSnapshot.runId,
+                            running: false,
+                            error: isFailure ? terminalError : undefined,
+                        }
+                        : current);
+                    setOpenAgentRunIds((current) => {
+                        const next = new Set(current);
+                        if (!manuallyToggledAgentRunsRef.current.has(liveMessageId)) next.delete(liveMessageId);
+                        return next;
+                    });
+                    if (response || terminalError) {
+                        resumeTerminalReceived = true;
+                        resumeAbort.abort();
+                    }
+                }, resumeAbort.signal);
+            } catch (err: any) {
+                if (!resumeTerminalReceived && err?.name !== 'AbortError') {
+                    throw err;
+                }
+            } finally {
+                resumeIdleGuard.dispose();
+            }
+            if (!response && terminalError) {
+                throw new Error(terminalError);
+            }
+            if (!response) {
+                try {
+                    const persisted = await getAgentRun(reviewSnapshot.runId, activeThread.id);
+                    if (shouldDismissRecoveredHumanReview(persisted)) {
+                        await loadMessages();
+                        onThreadUpdate?.();
+                        setPendingHumanReview(null);
+                        setHumanReviewEditText('');
+                        setHumanReviewError(null);
+                        return true;
+                    }
+                    if (persisted && isResumeProductTerminalRunStatus(persisted.status)) {
+                        await loadMessages();
+                        onThreadUpdate?.();
+                        setPendingHumanReview(null);
+                        setHumanReviewEditText('');
+                        return true;
+                    }
+                } catch {
+                    /* Fall through to the stream error below. */
+                }
+                throw new Error(terminalError || 'The resume stream ended before returning a result.');
+            }
 
             const resumedRun = response?.agent_run;
             if (resumedRun?.status === 'awaiting_human' && resumedRun?.pending_interrupt) {
-                setPendingHumanReview(prev => prev ? {
-                    ...prev,
+                setPendingHumanReview({
+                    ...reviewSnapshot,
+                    runId: resumedRun.id || reviewSnapshot.runId,
                     interrupt: resumedRun.pending_interrupt as AgentRunPendingInterrupt,
-                } : prev);
+                });
                 setHumanReviewEditText(resumedRun.pending_interrupt.proposed_final_answer || humanReviewEditText);
+                setLoading(false);
                 return true;
             }
 
@@ -1923,25 +2237,37 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 || response?.agent_run?.result_json?.final_answer
                 || '',
             ).trim();
-            if (resumedAnswer) {
-                setMessages((current) => current.map((message) => (
-                    message.id === liveMessageId
-                        ? {
-                            ...message,
-                            content: resumedAnswer,
-                            pending_human_review: false,
-                            agent_run_turn_kind: 'assistant_final',
-                        }
-                        : message
-                )));
-            }
+            setMessages((current) => current.map((message) => {
+                if (message.id !== liveMessageId) return message;
+                const next = clearInterruptPlaceholderForLiveRun(message);
+                return resumedAnswer ? { ...next, content: resumedAnswer } : next;
+            }));
             setPendingHumanReview(null);
             setHumanReviewEditText('');
             await loadMessages();
             onThreadUpdate?.();
             return true;
         } catch (err: any) {
-            setHumanReviewError(err?.message || 'Unable to submit review decision.');
+            const errMessage = err?.message || 'Unable to submit review decision.';
+            let persistedRun: AgentRunDetails | null = null;
+            try {
+                persistedRun = await getAgentRun(reviewSnapshot.runId, activeThread.id);
+            } catch {
+                persistedRun = null;
+            }
+            if (
+                shouldDismissRecoveredHumanReview(persistedRun)
+                || isInterruptAlreadyResolvedError(errMessage)
+            ) {
+                await loadMessages();
+                onThreadUpdate?.();
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                setHumanReviewError(null);
+                return true;
+            }
+            setHumanReviewError(errMessage);
+            restoreToolApprovalUi(persistedRun);
             return false;
         } finally {
             if (humanReviewSubmissionKeyRef.current === submissionKey) {
@@ -1954,6 +2280,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             });
             setLiveExecution((current) => current?.messageId === liveMessageId ? null : current);
             setHumanReviewSubmitting(null);
+            setLoading(false);
         }
     };
 
@@ -1986,6 +2313,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
         setComposerText('');
         setClarificationOptions(null);
+        setPendingHumanReview(null);
+        setHumanReviewEditText('');
+        setHumanReviewError(null);
+        humanReviewSubmissionKeyRef.current = null;
         setLoading(true);
 
         const optimisticStamp = Date.now();
@@ -2060,6 +2391,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     }
                     if (isLiveTraceTerminalEvent(event.event)) {
                         if (event.data?.response) response = event.data.response as ThreadChatResponse;
+                        const streamClarificationChoices = response
+                            ? clarificationChoicesFromPayload(response)
+                            : [];
+                        if (
+                            streamClarificationChoices.length
+                            && (
+                                event.event === 'run.clarification'
+                                || response?.status === 'clarification_required'
+                                || event.event === 'interrupt.requested'
+                            )
+                        ) {
+                            setClarificationDismissSeed(textToSend);
+                            setClarificationOptions(streamClarificationChoices);
+                            setMessages((prev) => prev.filter((message) => message.id !== tempAssistantMsg.id));
+                            setLoading(false);
+                        }
                         if (
                             event.event === 'interrupt.requested'
                             && response?.status === 'awaiting_human'
@@ -2107,6 +2454,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 },
                 undefined,
                 packingBudgetPayload(contextBudget),
+                browserAccessMode,
+                webSearchMode,
             );
             if (!response) throw new Error(terminalStreamError || 'The chat stream ended before returning a response.');
             const traceWasOpenForTempMessage = workspaceTraceMessageIdRef.current === tempAssistantMsg.id;
@@ -2298,19 +2647,16 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             }
 
             // Handle ambiguous query / clarification options
-            if (response.clarification_options) {
-                setClarificationOptions([
-                    ...response.clarification_options
-                        .map((choice) => clarificationChoiceText(choice).trim())
-                        .filter(Boolean)
-                        .map((text) => ({ text, isOriginal: false })),
-                    { text: textToSend, isOriginal: true }
-                ]);
-                setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id && m.id !== tempAssistantMsg.id));
+            const terminalClarificationChoices = clarificationChoicesFromPayload(response);
+            if (terminalClarificationChoices.length) {
+                setClarificationDismissSeed(textToSend);
+                setClarificationOptions(terminalClarificationChoices);
+                setMessages((prev) => prev.filter((message) => message.id !== tempAssistantMsg.id));
                 if (isEditingQuestion) {
                     setEditingMessageId(null);
                     setEditingOriginalText('');
                 }
+                return;
             } else {
                 // Normal flow: update messages with real IDs and add assistant response
                 setMessages(prev => {
@@ -2332,7 +2678,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         created_at: new Date().toISOString()
                     });
 
-                    if (response.assistant_message_id || response.answer) {
+                    if ((response.assistant_message_id || response.answer) && !response.clarification_options?.length) {
                         finalMessages.push({
                             id: response.assistant_message_id || ('assistant-' + Date.now()),
                             role: MessageRole.Assistant,
@@ -2401,6 +2747,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         } finally {
             setLiveExecution((current) => current?.messageId === tempAssistantMsg.id ? null : current);
             setLoading(false);
+            if (activeThread?.id && !testRuntime) {
+                void recoverPendingHumanReview(activeThread.id);
+            }
         }
     };
 
@@ -2542,6 +2891,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             if (workflowSupportsReplans(agentWorkflows, agentWorkflowId) && replansLimit !== null) {
                 nextSettings.replans = Math.max(1, Math.min(replansLimit, replans));
             }
+            if (workflowSupportsAutoLimits(agentWorkflows, agentWorkflowId) && autoLimits) {
+                nextSettings.auto_limits = autoLimits;
+            }
+            if (advancedSettings && advancedDefaults) {
+                Object.assign(nextSettings, buildAdvancedSettingsPatch(advancedSettings, advancedDefaults));
+            }
             const saved = await updateThreadSettings(activeThread.id, nextSettings);
             applyThreadSettingsToState(saved);
             setSettingsDialogOpen(false);
@@ -2588,6 +2943,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             saveLabel: isTestRuntime ? 'Apply to test' : undefined,
             replans,
             replansLimit,
+            autoLimits,
+            defaultAutoLimits,
             useReranker,
             hitlCanvasPublish,
             useMemory,
@@ -2606,6 +2963,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             promptPreview,
             saving: savingSettings,
             onReplansChange: (value) => setReplans(value),
+            onAutoLimitsChange: (value) => setAutoLimits(value),
             onRerankerChange: (checked) => setUseReranker(checked),
             onHitlCanvasPublishChange: (checked) => setHitlCanvasPublish(checked),
             onMemoryChange: (checked) => setUseMemory(checked),
@@ -2625,6 +2983,20 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             onResetSystemRole: resetSystemRoleToDefault,
             onResetToolInstruction: resetToolInstructionToDefault,
             onResetCustomInstructions: resetCustomInstructionsToDefault,
+            advancedSettings,
+            advancedDefaults,
+            advancedFieldSpecs,
+            onAdvancedChange: (value) => {
+                setAdvancedSettings(value);
+                setContextWindow(value.contextWindow);
+            },
+            onAdvancedResetField: handleAdvancedResetField,
+            onAdvancedResetSection: () => {
+                if (advancedDefaults) {
+                    setAdvancedSettings(advancedDefaults);
+                    setContextWindow(advancedDefaults.contextWindow);
+                }
+            },
             onSave: () => { void handleSaveThreadSettings(); },
             onReset: () => { void loadThreadSettings(); },
         });
@@ -2642,6 +3014,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         projectAllowsGlobalMemory,
         promptPreview,
         registerThreadSettings,
+        autoLimits,
+        defaultAutoLimits,
         replans,
         replansLimit,
         savingSettings,
@@ -2653,6 +3027,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         useProjectMemory,
         useReranker,
         useThreadMemory,
+        advancedDefaults,
+        advancedFieldSpecs,
+        advancedSettings,
     ]);
 
     const handleCopy = useCallback((text: string, messageId: string) => {
@@ -2707,6 +3084,32 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             route: response?.agent_route || response?.route || msg.agent_route,
         })
     ), [agentWorkflowId, testRuntime?.baseWorkflowId]);
+
+    const prefetchedAgentRunIdsRef = useRef<Set<string>>(new Set());
+    useEffect(() => {
+        if (!activeThread?.id || isTestRuntime) return;
+        const pending = messages
+            .filter((msg) => msg.role === MessageRole.Assistant && msg.agent_run_id && isValidTraceId(msg.agent_run_id))
+            .map((msg) => msg.agent_run_id as string)
+            .filter((runId) => !agentRunDetails[runId] && !prefetchedAgentRunIdsRef.current.has(runId));
+        if (!pending.length) return;
+        let cancelled = false;
+        pending.forEach((runId) => prefetchedAgentRunIdsRef.current.add(runId));
+        void (async () => {
+            await Promise.all(pending.map(async (runId) => {
+                try {
+                    const run = await getAgentRun(runId, activeThread.id);
+                    if (cancelled) return;
+                    setAgentRunDetails((prev) => ({ ...prev, [runId]: run }));
+                } catch {
+                    // Child delegation links appear once run metadata is persisted.
+                }
+            }));
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [activeThread?.id, agentRunDetails, isTestRuntime, messages]);
 
     const handleOpenAgentRun = useCallback(async (msg: ChatMessage) => {
         const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
@@ -2839,6 +3242,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onChange={handleWebSearchModeChange}
             />}
             webSearchMode={webSearchMode}
+            browserAccessMode={browserAccessMode}
             onModelChange={(model) => void handleLlmModelChange(model)}
             onContextWindowChange={handleContextWindowChange}
             onContextBudgetChange={setContextBudget}
@@ -2869,24 +3273,52 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const pendingReviewAvailability = pendingReviewOperation
         ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
         : { visible: false, enabled: false, disabledReason: 'invalid_interrupt_response_operation' };
-    const chatHumanReviewOpen = Boolean(pendingReviewInterrupt);
-    const reviewTranscriptMaxHeight = chatHumanReviewOpen && stackedWorkbench
+    const pendingReviewInputEnabled = pendingReviewOperation && pendingReviewInterrupt && (
+        pendingReviewAvailability.enabled
+        || (
+            pendingReviewAvailability.disabledReason === 'no_pending_interrupt'
+            && (!pendingReviewInterrupt.status || pendingReviewInterrupt.status === InterruptStatus.Pending)
+        )
+    );
+    const toolApprovalSheetOpen = chatToolApprovalReplacesComposer(pendingReviewInterrupt);
+    const stackedHumanReviewLayout = chatHumanReviewUsesStackedDecisionLayout(pendingReviewInterrupt);
+    const reviewTranscriptMaxHeight = stackedHumanReviewLayout && stackedWorkbench
         ? REVIEW_STACKED_TRANSCRIPT_MAX_HEIGHT
         : REVIEW_TRANSCRIPT_EXPANDED_MAX_HEIGHT;
-    const reviewDecisionMinHeight = chatHumanReviewOpen && stackedWorkbench
+    const reviewDecisionMinHeight = stackedHumanReviewLayout && stackedWorkbench
         ? REVIEW_STACKED_DECISION_COLUMN_MIN_HEIGHT
         : REVIEW_DECISION_COLUMN_MIN_HEIGHT;
+    const reviewControlsLocked = Boolean(humanReviewSubmitting);
+    const pendingHumanReviewPanel = pendingReviewInterrupt ? (
+        <HumanReviewDecisionPanel
+            interrupt={pendingReviewInterrupt}
+            submitting={humanReviewSubmitting}
+            error={humanReviewError}
+            editText={humanReviewEditText}
+            toolCatalog={toolDisplayCatalog}
+            disabled={!reviewControlsLocked && (
+                !pendingReviewAvailability.visible || !pendingReviewInputEnabled
+            )}
+            disabledReason={reviewControlsLocked ? undefined : (
+                pendingReviewInputEnabled ? undefined : pendingReviewAvailability.disabledReason
+            )}
+            rootRef={chatRootRef}
+            onEditTextChange={setHumanReviewEditText}
+            onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
+        />
+    ) : null;
 
     return (
         <ConversationPanelTemplate
             ref={chatRootRef}
+            transcriptDataTestId="chat-message-list"
             sx={{
                 p: 1,
                 cursor: 'default',
-                ...(chatHumanReviewOpen ? { overflow: 'hidden', overflowX: 'hidden' } : {}),
+                ...(stackedHumanReviewLayout ? { overflow: 'hidden', overflowX: 'hidden' } : {}),
             }}
-            decisionBeforeTranscript={chatHumanReviewOpen}
-            transcriptSx={chatHumanReviewOpen ? {
+            decisionBeforeTranscript={stackedHumanReviewLayout}
+            transcriptSx={stackedHumanReviewLayout ? {
                 flex: '0 0 auto',
                 maxHeight: reviewTranscriptMaxHeight,
                 minHeight: 0,
@@ -2894,7 +3326,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 flex: '1 1 auto',
                 minHeight: 'min(44vh, 320px)',
             } : undefined}
-            decisionSx={chatHumanReviewOpen ? {
+            decisionSx={stackedHumanReviewLayout ? {
                 flex: '1 1 0',
                 minHeight: reviewDecisionMinHeight,
                 overflow: 'hidden',
@@ -2945,11 +3377,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     </>
                 )}
                 beforeModelControls={(
-                    <WebSearchModeControl
-                        mode={webSearchMode}
-                        disabled={savingWebSearchMode}
-                        onChange={handleWebSearchModeChange}
-                    />
+                    <Box sx={{ display: 'flex', gap: 0.25, alignItems: 'center' }}>
+                        <WebSearchModeControl
+                            mode={webSearchMode}
+                            disabled={savingWebSearchMode}
+                            onChange={handleWebSearchModeChange}
+                        />
+                        <BrowserAccessModeControl
+                            mode={browserAccessMode}
+                            disabled={savingBrowserAccessMode}
+                            onChange={handleBrowserAccessModeChange}
+                        />
+                    </Box>
                 )}
                 trailingActions={(
                     !isTestRuntime && <DeepResearchTaskPicker
@@ -3014,6 +3453,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                     onEditQuestion={handleEditQuestion}
                                     onDeleteMessage={handleDeleteMessage}
                                     onOpenAgentRun={handleOpenAgentRun}
+                                    onOpenDelegatedRun={onOpenDelegatedRun}
+                                    delegatedChildRuns={
+                                        msg.agent_run_id && isValidTraceId(msg.agent_run_id)
+                                            ? delegatedChildRunsFromRunDetails(agentRunDetails[msg.agent_run_id])
+                                            : []
+                                    }
                                     onOpenCanvas={onOpenCanvas}
                                     onOpenDocumentCitation={onOpenDocumentCitation}
                                     formatAgentWorkflowLabel={formatAgentWorkflowLabel}
@@ -3025,52 +3470,53 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
             </ConversationTranscriptFrame>
             )}
-            decision={clarificationOptions ? (
-                    <ResizableDecisionPanel
-                        title="I need a bit more clarification. Did you mean one of these?"
-                        rootRef={chatRootRef}
-                        onClose={() => setClarificationOptions(null)}
-                    >
-                            <DecisionChoiceList
-                                presentation="editable"
-                                choices={clarificationOptions.map((choice, index) => ({
-                                    id: String(index),
-                                    label: choice.isOriginal ? 'Original question' : `Option ${index + 1}`,
-                                    text: clarificationChoiceText(choice.text),
-                                }))}
-                                disabled={loading}
-                                onChoiceTextChange={(selectedChoice, text) => {
-                                    const selectedIndex = Number(selectedChoice.id);
-                                    setClarificationOptions(prev => prev?.map((item, index) => (
-                                        index === selectedIndex ? { ...item, text } : item
-                                    )) ?? null);
-                                }}
-                                onSelect={(selectedChoice, text) => {
-                                    const selectedIndex = Number(selectedChoice.id);
-                                    void handleSend(text, {
-                                        bypassClarification: Boolean(clarificationOptions[selectedIndex]?.isOriginal),
-                                    });
-                                }}
-                                onCustomSubmit={(text) => void handleSend(text)}
-                                customPlaceholder="Ask or explain it in your own words"
-                            />
-                    </ResizableDecisionPanel>
+            decision={clarificationOptions?.length ? (
+                <ResizableDecisionPanel
+                    title="I need a bit more clarification. Did you mean:"
+                    variant="clarification"
+                    rootRef={chatRootRef}
+                    horizontalInset={1}
+                    compact
+                    showResizeHandle
+                    onClose={() => {
+                        setClarificationOptions(null);
+                        if (clarificationDismissSeed.trim()) {
+                            setComposerSeed(clarificationDismissSeed);
+                            setComposerSeedVersion((version) => version + 1);
+                        }
+                        setClarificationDismissSeed('');
+                    }}
+                >
+                    <DecisionChoiceList
+                        presentation="editable"
+                        choices={clarificationOptions.map((choice, index) => ({
+                            id: String(index),
+                            label: choice.text,
+                            text: choice.text,
+                        }))}
+                        disabled={loading}
+                        onSelect={(_selectedChoice, text) => {
+                            seedClarificationComposer(text);
+                        }}
+                        onCustomSubmit={(text) => {
+                            seedClarificationComposer(text);
+                        }}
+                        customPlaceholder="Type your own question"
+                    />
+                </ResizableDecisionPanel>
             ) : pendingReviewInterrupt && !pendingReviewOperation ? (
                 <Alert severity="error">This human-input request has an invalid runtime response contract.</Alert>
-            ) : pendingReviewInterrupt ? (
-                <HumanReviewDecisionPanel
-                    interrupt={pendingReviewInterrupt}
-                    submitting={humanReviewSubmitting}
-                    error={humanReviewError}
-                    editText={humanReviewEditText}
-                    disabled={!pendingReviewAvailability.visible || !pendingReviewAvailability.enabled}
-                    disabledReason={pendingReviewAvailability.disabledReason}
-                    rootRef={chatRootRef}
-                    onEditTextChange={setHumanReviewEditText}
-                    onAction={(action, options) => void handleHumanReviewAction(action, options?.selectedOptionIds)}
-                />
+            ) : pendingHumanReviewPanel && !toolApprovalSheetOpen ? (
+                pendingHumanReviewPanel
             ) : undefined}
-            composer={!chatHumanReviewOpen ? (
+            composer={toolApprovalSheetOpen && pendingHumanReviewPanel ? (
+            <Box
+                data-testid="chat-tool-approval-composer-slot"
+                sx={{ display: 'flex', flexDirection: 'column', flexShrink: 0, minHeight: 0 }}
+            >
+                {pendingHumanReviewPanel}
+            </Box>
+            ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
                 {editingMessageId && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
@@ -3107,13 +3553,15 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     liveExecution={liveExecution}
                     liveRunCapabilities={liveRunCapabilities}
                     isTestRuntime={isTestRuntime}
+                    humanReviewPending={composerHumanReviewPending(pendingReviewInterrupt)}
+                    clarificationPending={Boolean(clarificationOptions?.length)}
                     onSubmit={(text) => void handleSend(text)}
                     onStop={handleStopChat}
                     onOpenSettings={handleOpenThreadSettings}
                     onOpenMemoryReview={onOpenMemoryReview}
                 />
             </Box>
-            ) : undefined}
+            )}
             footer={(
             <>
             <ChatSettingsDialog
@@ -3127,6 +3575,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 saveLabel={isTestRuntime ? 'Apply to test' : undefined}
                 replans={replans}
                 replansLimit={replansLimit}
+                autoLimits={autoLimits}
+                defaultAutoLimits={defaultAutoLimits}
                 useReranker={useReranker}
                 hitlCanvasPublish={hitlCanvasPublish}
                 useMemory={useMemory}
@@ -3144,6 +3594,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions={effectiveToolInstructions}
                 promptPreview={promptPreview}
                 onReplansChange={(value) => setReplans(value)}
+                onAutoLimitsChange={(value) => setAutoLimits(value)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
                 onHitlCanvasPublishChange={(checked) => setHitlCanvasPublish(checked)}
                 onMemoryChange={(checked) => setUseMemory(checked)}
@@ -3166,6 +3617,20 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onResetSystemRole={resetSystemRoleToDefault}
                 onResetToolInstruction={resetToolInstructionToDefault}
                 onResetCustomInstructions={resetCustomInstructionsToDefault}
+                advancedSettings={advancedSettings}
+                advancedDefaults={advancedDefaults}
+                advancedFieldSpecs={advancedFieldSpecs}
+                onAdvancedChange={(value) => {
+                    setAdvancedSettings(value);
+                    setContextWindow(value.contextWindow);
+                }}
+                onAdvancedResetField={handleAdvancedResetField}
+                onAdvancedResetSection={() => {
+                    if (advancedDefaults) {
+                        setAdvancedSettings(advancedDefaults);
+                        setContextWindow(advancedDefaults.contextWindow);
+                    }
+                }}
             />
             <ThreadForkDialog
                 open={Boolean(forkDialogMessageId)}

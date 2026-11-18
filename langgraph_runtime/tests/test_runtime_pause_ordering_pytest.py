@@ -44,6 +44,16 @@ async def test_human_wait_does_not_expire_a_dispatched_tool(monkeypatch):
     config = {}
     command = router_runtime._resume_command({"interrupt_id": "approval", "requested_at": iso_utc_z(now - timedelta(minutes=10)), "decision": {"action": "approve"}}, state, config)
     assert command.update["dispatch_deadline_epoch_ms"] > int(now.timestamp() * 1000)
+    command_without_deadline = router_runtime._resume_command(
+        {
+            "interrupt_id": "approval",
+            "requested_at": iso_utc_z(now - timedelta(minutes=10)),
+            "decision": {"action": "approve"},
+        },
+        {"work_items": [{"dispatch_id": "dispatch", "worker_node_id": "web_worker", "worker_type": "web_worker"}]},
+        config,
+    )
+    assert command_without_deadline.update["dispatch_deadline_epoch_ms"] > int(now.timestamp() * 1000)
     pending = GraphInterrupt([Interrupt(value={"type": "tool_approval"}, id="next-approval")])
 
     async def gated_tool(*args, **kwargs):

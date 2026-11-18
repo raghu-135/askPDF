@@ -121,8 +121,8 @@ export function ContextBudgetMenu({
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, mb: 1 }}>
-          <Typography variant="subtitle2">Context packing budget</Typography>
-          <ContextBudgetHelpTip text={CONTEXT_PACKING_MENU_HELP} ariaLabel="Context packing budget help" />
+          <Typography variant="subtitle2">Initial retrieval budget</Typography>
+          <ContextBudgetHelpTip text={CONTEXT_PACKING_MENU_HELP} ariaLabel="Initial retrieval budget help" />
         </Box>
         <TextField
           size="small"

@@ -274,6 +274,11 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [
             TOOL_LIVE_WEB_RECON,
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_act",
+            "browser_read",
+            "browser_save_to_thread",
             TOOL_WIKIPEDIA_REFERENCE,
             TOOL_WIKIDATA_REFERENCE,
             TOOL_ARXIV_RESEARCH,

@@ -8,7 +8,12 @@ from pydantic import ValidationError
 
 from langgraph_runtime.mcp_client import _PublishCanvasArguments, create_mcp_langchain_tool
 from runtime_protocol.research_gaps import _CANVAS_PUBLISH_CHAT_FALLBACK
+_CANVAS_SYNTHESIS_STATE = {
+    "question": "Compare these papers in an evidence matrix canvas",
+}
+
 from langgraph_runtime.workflows.canvas_publish import (
+    resolve_supersedes_id_from_state,
     CanvasSpecNormalizeError,
     canvas_idempotency_key,
     prepare_publish_canvas_tool_input,
@@ -167,7 +172,12 @@ async def test_helper_skips_mcp_when_spec_normalizes_to_empty_sections(monkeypat
     result = await synthesize_with_canvas_publish(
         LLM(),
         [HumanMessage(content="Compare")],
-        state={"allowed_tool_ids": ["research_canvas_publish"], "agent_run_id": "run-1", "llm_model": "test"},
+        state={
+            "allowed_tool_ids": ["research_canvas_publish"],
+            "agent_run_id": "run-1",
+            "llm_model": "test",
+            **_CANVAS_SYNTHESIS_STATE,
+        },
         config={},
         node="synthesizer",
         started=0.0,
@@ -250,7 +260,12 @@ async def test_helper_invokes_publish_canvas_once_with_draft(monkeypatch):
     result = await synthesize_with_canvas_publish(
         LLM(),
         [HumanMessage(content="Compare")],
-        state={"allowed_tool_ids": ["research_canvas_publish"], "agent_run_id": "run-1", "llm_model": "test"},
+        state={
+            "allowed_tool_ids": ["research_canvas_publish"],
+            "agent_run_id": "run-1",
+            "llm_model": "test",
+            **_CANVAS_SYNTHESIS_STATE,
+        },
         config={},
         node="synthesizer",
         started=0.0,
@@ -360,7 +375,12 @@ async def test_helper_strips_fake_call_after_admission_failure(monkeypatch):
     result = await synthesize_with_canvas_publish(
         LLM(),
         [HumanMessage(content="Compare")],
-        state={"allowed_tool_ids": ["research_canvas_publish"], "agent_run_id": "run-1", "llm_model": "test"},
+        state={
+            "allowed_tool_ids": ["research_canvas_publish"],
+            "agent_run_id": "run-1",
+            "llm_model": "test",
+            **_CANVAS_SYNTHESIS_STATE,
+        },
         config={},
         node="deep_task_synthesizer",
         started=0.0,
@@ -415,7 +435,12 @@ async def test_failed_publish_with_empty_content_reinvokes_unbound_for_prose(mon
     result = await synthesize_with_canvas_publish(
         LLM(),
         [HumanMessage(content="What year was BERT published?")],
-        state={"allowed_tool_ids": ["research_canvas_publish"], "agent_run_id": "run-1", "llm_model": "test"},
+        state={
+            "allowed_tool_ids": ["research_canvas_publish"],
+            "agent_run_id": "run-1",
+            "llm_model": "test",
+            "question": "Build a timeline canvas about BERT publication history",
+        },
         config={},
         node="synthesizer",
         started=0.0,
@@ -424,6 +449,14 @@ async def test_failed_publish_with_empty_content_reinvokes_unbound_for_prose(mon
     assert unbound_calls == 1
     assert "Factual answer from recovery." in result["answer"]
     assert "could not be published" in result["answer"]
+
+
+def test_resolve_supersedes_id_from_state_reads_quoted_canvas():
+    canvas_id = "41a7cdc2-1234-5678-9abc-def012345678"
+    state = {"question": f"Please update {canvas_id} with a stronger summary."}
+    assert resolve_supersedes_id_from_state(state, None) == canvas_id
+    explicit = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert resolve_supersedes_id_from_state(state, explicit) == explicit
 
 
 def test_sanitize_supersedes_id_drops_file_hash_and_garbage():

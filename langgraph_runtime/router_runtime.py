@@ -16,12 +16,14 @@ from langgraph_runtime.workflows.planning import worker_nodes_from_spec
 from langgraph_runtime.workflows.parallel_runtime import cancelled_parallel_dispatch, normalized_parallel_policy
 from langgraph_runtime.workflows.parallel_contracts import ParallelEventName
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, normalized_corrective_policy
+from langgraph_runtime.workflows.auto_limit_errors import AutoLimitExceeded, workflow_budget_as_auto_limit
 from langgraph_runtime.workflows.state import merge_parallel_deltas, merge_task_result_packets, WorkflowBudgetExceeded
 from langgraph_runtime.workflows.workflow_runtime import runtime_execution_options, workflow_runtime_features
 from langgraph_runtime.models.llm import current_execution_model_client, runtime_limits
 from langgraph_runtime.workflows.trace import compact_preview
 from runtime_protocol.errors import RuntimeError as RuntimeExecutionError
 from runtime_protocol.context_budget import resolve_context_budget
+from runtime_protocol.permission_modes import derive_browser_access_mode, derive_web_search_mode
 from runtime_protocol.model_errors import classify_model_error_message
 from langgraph_runtime.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
@@ -48,6 +50,35 @@ def _public_agent_context(context: Dict[str, Any]) -> Dict[str, Any]:
         key: context[key]
         for key in ("agent_run_id", "agent_workflow_id")
         if context.get(key) is not None
+    }
+
+
+def _auto_limit_runtime_result(
+    partial_state: Mapping[str, Any],
+    exc: AutoLimitExceeded,
+    *,
+    duration_ms: float,
+    agent_run_context: Mapping[str, Any],
+) -> Dict[str, Any]:
+    message = exc.user_message
+    error = exc.as_agent_error()
+    base = _without_runtime_keys(dict(partial_state))
+    return {
+        **base,
+        "answer": message,
+        "final_answer": message,
+        "status": AgentRunStatus.FAILED.value,
+        "duration_ms": duration_ms,
+        "agent_error": error,
+        "errors": [error],
+        "reasoning": "",
+        "reasoning_available": False,
+        "reasoning_format": ReasoningFormat.NONE.value,
+        "used_chat_ids": [],
+        "document_sources": [],
+        "web_sources": [],
+        "clarification_options": None,
+        **_public_agent_context(agent_run_context),
     }
 
 
@@ -176,6 +207,7 @@ def _runtime_config(
     embedding_model: Any = None,
     context_window: Any = None,
     use_web_search: Any = None,
+    use_browser_access: Any = None,
     use_reranker: Any = None,
     telemetry_sink: Dict[str, Any],
     trace_recorder: Any = None,
@@ -226,6 +258,8 @@ def _runtime_config(
         configurable["context_window"] = context_window
     if use_web_search is not None:
         configurable["use_web_search"] = use_web_search
+    if use_browser_access is not None:
+        configurable["use_browser_access"] = use_browser_access
     if use_reranker is not None:
         configurable["use_reranker"] = use_reranker
     result: Dict[str, Any] = {"configurable": configurable}
@@ -270,16 +304,32 @@ def _pending_interrupt_from_result(
 
 def _resume_command(interrupt: Dict[str, Any], state: Dict[str, Any], config: Dict[str, Any]) -> Command:
     """Exclude the durable human pause from an active dispatch deadline."""
-    update = {}
-    requested_at = parse_datetime_utc(interrupt.get("requested_at"))
+    update: Dict[str, Any] = {}
+    decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
+    pause_anchor = parse_datetime_utc(interrupt.get("requested_at")) or parse_datetime_utc(decision.get("decided_at"))
     deadline = int(state.get("dispatch_deadline_epoch_ms") or 0)
-    if requested_at is not None and deadline:
-        paused_ms = max(0, int((utc_now() - requested_at).total_seconds() * 1000))
-        update["dispatch_deadline_epoch_ms"] = deadline + paused_ms
+    work_items = [item for item in state.get("work_items") or [] if isinstance(item, dict)]
+    dispatch_id = state.get("dispatch_id")
+    if not dispatch_id and work_items:
+        for item in work_items:
+            candidate = item.get("dispatch_id")
+            if candidate:
+                dispatch_id = str(candidate)
+                break
+    now_ms = int(time.time() * 1000)
+    if pause_anchor is not None and (deadline or work_items):
+        paused_ms = max(0, int((utc_now() - pause_anchor).total_seconds() * 1000))
+        policy = normalized_parallel_policy(state.get("parallel_policy"))
+        if deadline:
+            new_deadline = max(now_ms + 5_000, deadline + paused_ms)
+        else:
+            new_deadline = now_ms + int(policy["dispatch_timeout_ms"])
+        update["dispatch_deadline_epoch_ms"] = new_deadline
         # Send branches retain their original input. Pass the same adjusted
         # deadline to those branches while updating the parent checkpoint.
         config.setdefault("configurable", {})["resumed_dispatch_deadline"] = {
-            "dispatch_id": state.get("dispatch_id"), "deadline_epoch_ms": deadline + paused_ms,
+            "dispatch_id": dispatch_id,
+            "deadline_epoch_ms": new_deadline,
         }
     return Command(resume={str(interrupt["interrupt_id"]): interrupt.get("decision") or {}}, update=update or None)
 
@@ -523,7 +573,50 @@ async def _handle_compiled_rag_chat(
     agent_run_id = agent_run_context.get("agent_run_id")
     question = req.question
     llm_model = req.llm_model
-    use_web_search = bool(getattr(req, "use_web_search", False))
+    def _request_bool(name: str, default: bool = False) -> bool:
+        value = getattr(req, name, None)
+        if value is not None:
+            return bool(value)
+        options = getattr(req, "options", None)
+        if isinstance(options, dict) and name in options:
+            return bool(options[name])
+        return default
+
+    workflow_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
+    use_web_search = _request_bool("use_web_search", bool(workflow_config.get("use_web_search")))
+    use_browser_access = _request_bool(
+        "use_browser_access",
+        bool(workflow_config.get("use_browser_access")),
+    )
+    req_options = getattr(req, "options", None) if isinstance(getattr(req, "options", None), dict) else {}
+    hitl_web_approval = getattr(req, "hitl_web_approval", None)
+    if hitl_web_approval is None and req_options:
+        hitl_web_approval = req_options.get("hitl_web_approval")
+    if hitl_web_approval is None:
+        hitl_web_approval = workflow_config.get("hitl_web_approval")
+    explicit_web_mode = getattr(req, "web_search_mode", None) or req_options.get("web_search_mode")
+    web_search_mode = derive_web_search_mode(
+        web_search_mode=explicit_web_mode,
+        hitl_web_approval=hitl_web_approval,
+        use_web_search=use_web_search,
+        config=workflow_config,
+    )
+    if web_search_mode in {"ask", "on"}:
+        use_web_search = True
+    hitl_browser_approval = getattr(req, "hitl_browser_approval", None)
+    if hitl_browser_approval is None and req_options:
+        hitl_browser_approval = req_options.get("hitl_browser_approval")
+    if hitl_browser_approval is None:
+        hitl_browser_approval = workflow_config.get("hitl_browser_approval")
+    explicit_browser_mode = getattr(req, "browser_access_mode", None) or req_options.get("browser_access_mode")
+    browser_mode = derive_browser_access_mode(
+        browser_access_mode=explicit_browser_mode,
+        hitl_browser_approval=hitl_browser_approval,
+        use_browser_access=use_browser_access,
+        config=workflow_config,
+    )
+    if browser_mode in {"ask", "on"}:
+        use_browser_access = True
     use_reranker = getattr(req, "use_reranker", None)
     if use_reranker is None:
         use_reranker = True
@@ -571,6 +664,7 @@ async def _handle_compiled_rag_chat(
         embedding_model=embedding_model,
         context_window=context_window,
         use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
         use_reranker=use_reranker,
         telemetry_sink=telemetry_sink,
         trace_recorder=trace_recorder,
@@ -596,6 +690,7 @@ async def _handle_compiled_rag_chat(
         "context_window": context_window,
         "context_budget": context_budget,
         "use_web_search": use_web_search,
+        "use_browser_access": use_browser_access,
         "use_reranker": use_reranker,
         "bypass_clarification": bool(getattr(req, "bypass_clarification", False)),
         "system_role": system_role,
@@ -605,6 +700,7 @@ async def _handle_compiled_rag_chat(
         "available_worker_nodes": worker_nodes_from_spec(resolved_spec),
         "hitl_policy": hitl_policy,
         "loop_policy": loop_policy,
+        "auto_policy": dict(workflow_config.get("auto_policy") or {}),
         "context_policy": context_policy,
         "prefetch_policy": prefetch_policy,
         "parallel_enabled": parallel_enabled,
@@ -654,7 +750,10 @@ async def _handle_compiled_rag_chat(
         # Durable deep-research fields are opt-in. Ordinary workflows ignore
         # them, which keeps the established chat execution contract unchanged.
         "agent_task_id": getattr(req, "agent_task_id", None),
-        "web_search_mode": str(getattr(req, "web_search_mode", "on" if use_web_search else "off")),
+        "web_search_mode": web_search_mode,
+        "hitl_web_approval": bool(web_search_mode == "ask"),
+        "browser_access_mode": browser_mode,
+        "hitl_browser_approval": bool(browser_mode == "ask"),
         "task_version": getattr(req, "agent_task_version", None),
         "task_observed_plan_revision": int(getattr(req, "task_plan_revision", 0) or 0),
         "task_enabled_profiles": list(getattr(req, "task_enabled_profiles", None) or []),
@@ -841,11 +940,20 @@ async def _handle_compiled_rag_chat(
             agent_run_context=agent_run_context,
             answer="",
         )
+    except AutoLimitExceeded as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial = getattr(exc, "agent_workflow_state", None) or state
+        return _auto_limit_runtime_result(partial, exc, duration_ms=duration_ms, agent_run_context=agent_run_context)
     except WorkflowBudgetExceeded as exc:
-        partial = _without_runtime_keys(getattr(exc, "agent_workflow_state", None) or snapshot_values)
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial = getattr(exc, "agent_workflow_state", None) or state
+        auto_exc = workflow_budget_as_auto_limit(exc, partial)
+        if auto_exc is not None:
+            return _auto_limit_runtime_result(partial, auto_exc, duration_ms=duration_ms, agent_run_context=agent_run_context)
+        partial = _without_runtime_keys(partial)
         partial["workflow_budget"] = exc.as_dict()
         partial["agent_error"] = {"code": "workflow_budget_exhausted", "retryable": False, "partial": True, "workflow_budget": exc.as_dict()}
-        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": round((time.perf_counter() - started) * 1000, 2), **_public_agent_context(agent_run_context)}
+        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": duration_ms, **_public_agent_context(agent_run_context)}
     except Exception as exc:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         exception_state = getattr(exc, "agent_workflow_state", None)
@@ -857,7 +965,20 @@ async def _handle_compiled_rag_chat(
             else state
         )
         budget_exhausted = isinstance(exc, WorkflowBudgetExceeded)
-        if budget_exhausted:
+        auto_limit_exc = exc if isinstance(exc, AutoLimitExceeded) else (
+            workflow_budget_as_auto_limit(exc, partial_result) if budget_exhausted else None
+        )
+        if auto_limit_exc is not None:
+            logger.warning(
+                "%s run hit Auto limit | run_id=%s thread_id=%s kind=%s limit=%s elapsed_ms=%.1f",
+                runtime_label,
+                agent_run_id,
+                thread_id,
+                auto_limit_exc.kind,
+                auto_limit_exc.limit,
+                duration_ms,
+            )
+        elif budget_exhausted:
             logger.warning(
                 "%s run bounded by workflow visit budget | run_id=%s thread_id=%s limit=%s node=%s elapsed_ms=%.1f",
                 runtime_label, agent_run_id, thread_id, exc.limit, exc.node_id, duration_ms,
@@ -869,7 +990,9 @@ async def _handle_compiled_rag_chat(
             )
         parallel_unauthorized = str(exc) == "parallel runtime is not authorized for this workflow"
         classified = classify_model_error_message(str(exc))
-        if budget_exhausted:
+        if auto_limit_exc is not None:
+            error_payload = auto_limit_exc.as_agent_error()
+        elif budget_exhausted:
             error_payload = {
                 "code": "workflow_budget_exhausted",
                 "safe_message": "The workflow exceeded its visit budget.",
@@ -918,6 +1041,7 @@ async def _handle_compiled_rag_chat(
             *(partial_result.get("errors") or partial_result.get("parallel_error_deltas") or []),
             error_payload,
         ]
+        limit_answer = auto_limit_exc.user_message if auto_limit_exc is not None else None
         failure_result = {
             **partial_result,
             "node_events": node_events,
@@ -926,11 +1050,12 @@ async def _handle_compiled_rag_chat(
             "route_reason": route_reason,
             "errors": errors,
             "agent_error": error_payload,
-            **({"workflow_budget": exc.as_dict()} if budget_exhausted else {}),
+            **({"workflow_budget": exc.as_dict()} if budget_exhausted and auto_limit_exc is None else {}),
         }
         return {
             **failure_result,
-            "answer": None,
+            "answer": limit_answer,
+            "final_answer": limit_answer,
             "used_chat_ids": [],
             "document_sources": [],
             "web_sources": [],
@@ -1044,11 +1169,20 @@ async def continue_compiled_rag_chat(
             agent_run_context=agent_run_context,
             answer="",
         )
+    except AutoLimitExceeded as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial = getattr(exc, "agent_workflow_state", None) or snapshot_values
+        return _auto_limit_runtime_result(partial, exc, duration_ms=duration_ms, agent_run_context=agent_run_context)
     except WorkflowBudgetExceeded as exc:
-        partial = _without_runtime_keys(getattr(exc, "agent_workflow_state", None) or snapshot_values)
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial = getattr(exc, "agent_workflow_state", None) or snapshot_values
+        auto_exc = workflow_budget_as_auto_limit(exc, partial)
+        if auto_exc is not None:
+            return _auto_limit_runtime_result(partial, auto_exc, duration_ms=duration_ms, agent_run_context=agent_run_context)
+        partial = _without_runtime_keys(partial)
         partial["workflow_budget"] = exc.as_dict()
         partial["agent_error"] = {"code": "workflow_budget_exhausted", "retryable": False, "partial": True, "workflow_budget": exc.as_dict()}
-        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": round((time.perf_counter() - started) * 1000, 2), **_public_agent_context(agent_run_context)}
+        return {**partial, "status": AgentRunStatus.FAILED.value, "duration_ms": duration_ms, **_public_agent_context(agent_run_context)}
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
     pending_interrupt = _pending_interrupt_from_result(result, checkpoint_thread_id=checkpoint_thread_id)
     if pending_interrupt:

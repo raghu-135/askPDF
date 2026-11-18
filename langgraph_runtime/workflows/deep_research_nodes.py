@@ -42,7 +42,7 @@ from langgraph_runtime.models.deep_research import (
 from langgraph_runtime.models.llm import execution_model_client, get_llm
 from langgraph_runtime.models.retry import is_retryable_model_error
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
-from runtime_protocol.evidence import usable_context_chars
+from runtime_protocol.prompt_assembly import workflow_char_limit
 from langgraph_runtime.runtime_support.evidence import inherited_evidence_packets, tool_result_evidence
 from langgraph_runtime.runtime_support.task_results import (
     RuntimeTaskResultValidationError,
@@ -709,9 +709,8 @@ def _proposal_work_signature(proposal: DeepResearchPlanProposal) -> str:
 
 def _planning_context(state: Mapping[str, Any]) -> str:
     bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
-    budget = state.get("context_budget")
-    section_limit = usable_context_chars(state.get("context_window"), ratio_key="plan_section_ratio", budget=budget)
-    total_limit = usable_context_chars(state.get("context_window"), ratio_key="plan_total_ratio", budget=budget)
+    section_limit = workflow_char_limit(state.get("context_window"), ratio_key="plan_section_ratio")
+    total_limit = workflow_char_limit(state.get("context_window"), ratio_key="plan_total_ratio")
     inventory_cap = min(section_limit, _THREAD_CONTEXT_CHAR_CAP)
     sections = [
         str(bundle.get("recent_history_text") or ""),
@@ -949,7 +948,7 @@ async def deep_task_planner(state: Dict[str, Any], config: RunnableConfig) -> Di
         [value for value in effective_memory.get("memories") or [] if isinstance(value, dict)],
         key=lambda value: (rank.get(str(value.get("scope_type")), 9), str(value.get("id") or "")),
     )
-    memory_budget = usable_context_chars(state.get("context_window"), ratio_key="plan_memory_ratio", budget=state.get("context_budget"))
+    memory_budget = workflow_char_limit(state.get("context_window"), ratio_key="plan_memory_ratio")
     per_memory = max(1, memory_budget // 8)
     bounded_memory: list[Dict[str, Any]] = []
     memory_chars = 0

@@ -34,6 +34,7 @@ agent:
     - terminal
     - skills
     - file
+    - browser
 
 # MCP servers are registered only by isolated generated run profiles, where a
 # signed execution-context header is available.

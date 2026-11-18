@@ -11,6 +11,7 @@ import {
 } from '../../lib/document-tabs';
 import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
 import ResearchCanvasWorkspace from './ResearchCanvasWorkspace';
+import type { CanvasRunTab } from './useCanvasTabs';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 import MemoryWorkspace from './MemoryWorkspace';
 import HomeInstructions from './HomeInstructions';
@@ -41,6 +42,7 @@ export default function ThreadWorkspaceContent({
   activeTraceId,
   onActiveTraceChange,
   onCloseTrace,
+  onOpenDelegatedRun,
   onCloseDocument,
   onDocumentRemove,
   onDocumentPromote,
@@ -70,8 +72,11 @@ export default function ThreadWorkspaceContent({
   onRequestUpload,
   isBrowserCapturing = false,
   documentCount = 0,
+  canvasTabs = [],
   activeCanvasId = null,
   onActiveCanvasChange,
+  onCloseCanvas,
+  onCanvasTabUpdate,
   onOpenDocumentCitation,
   canvasRefreshVersion = 0,
   documents = [],
@@ -100,6 +105,7 @@ export default function ThreadWorkspaceContent({
   activeTraceId: string | null;
   onActiveTraceChange: (runId: string) => void;
   onCloseTrace: (runId: string) => void;
+  onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
   onCloseDocument?: (documentId: string) => void;
   onDocumentRemove?: (documentId: string) => void;
   onDocumentPromote?: (documentId: string) => void;
@@ -129,8 +135,11 @@ export default function ThreadWorkspaceContent({
   onRequestUpload?: () => void;
   isBrowserCapturing?: boolean;
   documentCount?: number;
+  canvasTabs?: CanvasRunTab[];
   activeCanvasId?: string | null;
   onActiveCanvasChange?: (canvasId: string) => void;
+  onCloseCanvas?: (canvasId: string) => void;
+  onCanvasTabUpdate?: (canvasId: string, patch: Partial<CanvasRunTab>) => void;
   onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
   canvasRefreshVersion?: number;
   documents?: readonly PdfTab[];
@@ -243,8 +252,12 @@ export default function ThreadWorkspaceContent({
       ) : activeTabId === RESEARCH_CANVAS_TAB_ID ? (
         <ResearchCanvasWorkspace
           threadId={threadId ?? null}
+          projectId={activeThread?.project_id ?? threadProject?.id ?? activeProject?.id ?? null}
+          canvasTabs={canvasTabs}
           activeCanvasId={activeCanvasId}
           onActiveCanvasChange={onActiveCanvasChange || (() => undefined)}
+          onCloseCanvas={onCloseCanvas || (() => undefined)}
+          onCanvasTabUpdate={onCanvasTabUpdate || (() => undefined)}
           onOpenDocumentCitation={onOpenDocumentCitation}
           refreshVersion={canvasRefreshVersion}
         />
@@ -266,6 +279,7 @@ export default function ThreadWorkspaceContent({
           activeRunId={activeTraceId}
           onActiveRunChange={onActiveTraceChange}
           onClose={onCloseTrace}
+          onOpenDelegatedRun={onOpenDelegatedRun}
           suspendHeavyContent={isResizing}
         />
       ) : activeTabId === 'memory-tab' ? (

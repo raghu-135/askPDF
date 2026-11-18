@@ -45,10 +45,15 @@ async def delegate_sync(
     config: RunnableConfig,
     llm_model: str | None = None,
     use_web_search: bool | None = None,
+    use_browser_access: bool | None = None,
+    browser_access_mode: str | None = None,
     use_reranker: bool | None = None,
     system_role: str | None = None,
     custom_instructions: str | None = None,
     tool_instructions: Mapping[str, str] | None = None,
+    context_window: int | None = None,
+    context_budget: Mapping[str, Any] | None = None,
+    inherited_tool_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a child workflow synchronously via the control plane."""
 
@@ -65,10 +70,15 @@ async def delegate_sync(
         "pre_fetch_bundle": dict(pre_fetch_bundle or {}),
         "llm_model": llm_model,
         "use_web_search": use_web_search,
+        "use_browser_access": use_browser_access,
+        "browser_access_mode": browser_access_mode,
         "use_reranker": use_reranker,
         "system_role": system_role or "",
         "custom_instructions": custom_instructions or "",
         "tool_instructions": dict(tool_instructions or {}),
+        "context_window": context_window,
+        "context_budget": dict(context_budget or {}) if isinstance(context_budget, Mapping) else None,
+        "inherited_tool_settings": dict(inherited_tool_settings or {}),
     }
     timeout = httpx.Timeout(connect=10.0, read=600.0, write=60.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -84,4 +94,56 @@ async def delegate_sync(
     data = response.json()
     if not isinstance(data, dict):
         raise AgentRuntimeError("delegate_sync_invalid", "Delegate sync returned a non-object", retryable=False)
+    return data
+
+
+async def delegate_child_resume_sync(
+    *,
+    parent_run_id: str,
+    thread_id: str,
+    child_run_id: str,
+    interrupt_id: str,
+    action: str,
+    config: RunnableConfig,
+    approval_scope: str | None = None,
+    approval_feedback: str | None = None,
+    approval_modifications: Mapping[str, Any] | None = None,
+    edited_payload: Mapping[str, Any] | None = None,
+    selected_option_ids: list[str] | None = None,
+    client_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resume a paused child run after the parent delegate gate receives a decision."""
+
+    url = f"{control_plane_base_url()}/internal/agent-runs/delegate/resume-child"
+    headers = {
+        "Content-Type": "application/json",
+        "X-AskPDF-Execution-Context": _execution_token(config),
+    }
+    payload: dict[str, Any] = {
+        "parent_run_id": parent_run_id,
+        "thread_id": thread_id,
+        "child_run_id": child_run_id,
+        "interrupt_id": interrupt_id,
+        "action": action,
+        "approval_scope": approval_scope,
+        "approval_feedback": approval_feedback,
+        "approval_modifications": dict(approval_modifications or {}),
+        "edited_payload": dict(edited_payload or {}) if isinstance(edited_payload, Mapping) else None,
+        "selected_option_ids": list(selected_option_ids or []),
+        "client_metadata": dict(client_metadata or {}) if isinstance(client_metadata, Mapping) else {},
+    }
+    timeout = httpx.Timeout(connect=10.0, read=600.0, write=60.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url, json=payload, headers=headers)
+    if response.status_code >= 400:
+        detail = response.text[:2000]
+        raise AgentRuntimeError(
+            "delegate_child_resume_failed",
+            f"Delegated child resume failed ({response.status_code})",
+            retryable=response.status_code >= 500,
+            details={"body": detail, "child_run_id": child_run_id},
+        )
+    data = response.json()
+    if not isinstance(data, dict):
+        raise AgentRuntimeError("delegate_child_resume_invalid", "Child resume returned a non-object", retryable=False)
     return data

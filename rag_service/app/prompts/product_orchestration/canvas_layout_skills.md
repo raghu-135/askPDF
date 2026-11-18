@@ -8,7 +8,7 @@ Pick exactly one layout skill. Every claim must use `source_id` values from the 
 
 After a successful publish, mention the canvas title in the answer.
 
-Use `supersedes_id` only when replacing a canvas listed under **Current canvases on this thread**. Never use `file_hash` or document names as `supersedes_id`.
+Use `supersedes_id` when revising a canvas listed under **Current canvases on this thread**, or when the user quotes that canvas id or `?canvas=` share link. Never use `file_hash` or document names as `supersedes_id`.
 
 ## canvas_compare_papers
 

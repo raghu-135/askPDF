@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
-from app.db import ChatTurnStatus, ReasoningFormat, create_chat_turn, increment_qa_stats
+from app.db import ChatTurnStatus, ReasoningFormat, create_chat_turn, increment_qa_stats, update_chat_turn_result
 from app.services.embedding_model_service import (
     EmbeddingModelResolutionError,
     EmbeddingModelUnavailableError,
@@ -13,6 +13,45 @@ from app.services.embedding_model_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DELEGATE_PLACEHOLDER_MARKERS = (
+    "waiting for your approval to continue the delegated workflow",
+)
+
+
+async def read_terminal_chat_answer_for_run(run: Any) -> str:
+    """Return the best persisted assistant answer for a chat or delegated child run."""
+
+    from app.product_orchestration.repository import AgentWorkflowRepository
+
+    repository = AgentWorkflowRepository()
+    candidate_run_ids: list[str] = []
+    parent_run_id = str(getattr(run, "parent_run_id", "") or "").strip()
+    if parent_run_id:
+        candidate_run_ids.append(parent_run_id)
+    run_id = str(getattr(run, "id", "") or "").strip()
+    if run_id:
+        candidate_run_ids.append(run_id)
+    for candidate_id in candidate_run_ids:
+        turns = await repository.list_chat_turns_for_run(candidate_id)
+        turn = next(
+            (
+                item for item in turns
+                if item.agent_run_turn_kind == "assistant_final" and item.agent_run_sequence == 0
+            ),
+            None,
+        )
+        if turn is None:
+            continue
+        payload = turn.payload if isinstance(turn.payload, dict) else {}
+        answer = str(payload.get("answer") or "").strip()
+        if not answer:
+            continue
+        lowered = answer.casefold()
+        if any(marker in lowered for marker in _DELEGATE_PLACEHOLDER_MARKERS):
+            continue
+        return answer
+    return ""
 
 
 class AgentRuntimeProjection:
@@ -74,6 +113,12 @@ class AgentRuntimeProjection:
         projected = dict(result)
         run_context = run_context or agent_run_context or {}
         status = str(projected.get("status") or "completed")
+        agent_error = projected.get("agent_error")
+        if status == "failed" and isinstance(agent_error, dict):
+            safe = str(agent_error.get("safe_message") or "").strip()
+            if safe and not str(projected.get("answer") or projected.get("final_answer") or "").strip():
+                projected["answer"] = safe
+                projected["final_answer"] = safe
         if status not in {ChatTurnStatus.COMPLETED.value, "failed"}:
             return projected
         from app.services.agent_runtime_reconciliation import result_hash
@@ -83,6 +128,7 @@ class AgentRuntimeProjection:
         existing = None
         repository = None
         projection: dict[str, Any] = {}
+        delegated_parent_run_id: str | None = None
         if run_id:
             from app.product_orchestration.repository import AgentWorkflowRepository
 
@@ -128,6 +174,16 @@ class AgentRuntimeProjection:
                 ),
                 None,
             )
+            delegated_parent_run_id = str(getattr(fresh_run, "parent_run_id", "") or "").strip() or None
+            if delegated_parent_run_id and existing is None:
+                parent_turns = await repository.list_chat_turns_for_run(delegated_parent_run_id)
+                existing = next(
+                    (
+                        turn for turn in parent_turns
+                        if turn.agent_run_turn_kind == "assistant_final" and turn.agent_run_sequence == 0
+                    ),
+                    None,
+                )
         if existing is None:
             answer = str(
                 projected.get("final_answer")
@@ -152,13 +208,39 @@ class AgentRuntimeProjection:
                     "agent_route": projected.get("route"),
                     "agent_route_reason": projected.get("route_reason"),
                 },
-                agent_run_id=run_id,
+                agent_run_id=delegated_parent_run_id or run_id,
                 agent_run_turn_kind="assistant_final",
                 agent_run_sequence=0,
                 agent_trace_refs_json=projected.get("agent_trace_refs"),
             )
         else:
-            turn = existing
+            answer = str(
+                projected.get("final_answer")
+                or projected.get("answer")
+                or (getattr(existing, "payload", None) or {}).get("answer")
+                or ""
+            )
+            if str(getattr(existing, "id", "") or ""):
+                updated = await update_chat_turn_result(
+                    str(existing.id),
+                    answer=answer,
+                    status=ChatTurnStatus.COMPLETED.value if status == ChatTurnStatus.COMPLETED.value else "failed",
+                    reasoning=projected.get("reasoning") or "",
+                    reasoning_available=bool(projected.get("reasoning_available")),
+                    reasoning_format=projected.get("reasoning_format") or ReasoningFormat.NONE.value,
+                    web_sources=projected.get("web_sources") or [],
+                    document_sources=projected.get("document_sources") or [],
+                    used_chat_ids=projected.get("used_chat_ids") or [],
+                    metadata={
+                        "agent_workflow_id": run_context.get("agent_workflow_id"),
+                        "agent_route": projected.get("route"),
+                        "agent_route_reason": projected.get("route_reason"),
+                    },
+                    agent_trace_refs_json=projected.get("agent_trace_refs"),
+                )
+                turn = updated or existing
+            else:
+                turn = existing
         embedding_model = await _resolve_chat_memory_embedding_model(thread_id, projected)
         llm_name = str(projected.get("llm_model") or run_context.get("llm_model") or "").strip() or None
         if embedding_model:
@@ -198,6 +280,22 @@ class AgentRuntimeProjection:
                 "duration_ms": duration_ms,
             }
         )
+        if run_id:
+            try:
+                from app.services.canvas_service import CanvasService
+
+                await CanvasService().link_published_canvases_to_turn(
+                    thread_id,
+                    agent_run_id=str(run_id),
+                    chat_turn_id=turn.id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "link_published_canvases_to_turn failed for thread %s run %s: %s",
+                    thread_id,
+                    run_id,
+                    exc,
+                )
         if run_id and repository is not None:
             if hasattr(repository, "update_runtime_projection"):
                 await repository.update_runtime_projection(

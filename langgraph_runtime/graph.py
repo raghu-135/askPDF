@@ -43,8 +43,10 @@ from langgraph_runtime.workflows.decision_nodes import (
 from langgraph_runtime.workflows.evidence import (
     append_evidence_packet as _append_evidence_packet,
     combine_evidence as _combine_evidence,
+    evidence_packets,
     evidence_text_limit as _evidence_text_limit,
     format_prefetch_summary as _format_prefetch_summary,
+    prefetch_trace_summary as _prefetch_trace_summary,
     prefetch_refs as _prefetch_refs,
     state_evidence_refs as _state_evidence_refs,
 )
@@ -63,6 +65,7 @@ from langgraph_runtime.workflows.corrective_nodes import (
     normalize_retrieval_quality_report,
     retrieval_quality_contract_errors,
 )
+from langgraph_runtime.workflows.document_scope import thread_has_attached_documents
 from langgraph_runtime.workflows.router_scope import router_attachment_scope_decline
 from langgraph_runtime.workflows.corrective_contracts import (
     CORRECTIVE_BUDGET_REASONS,
@@ -123,7 +126,11 @@ from langgraph_runtime.workflows.runtime_invocation import (
     tool_config as _tool_config,
     tool_config_for_node as _tool_config_for_node,
 )
-from langgraph_runtime.workflows.workers import run_tool_worker, tool_worker_spec
+from langgraph_runtime.workflows.workers import (
+    _evidence_packet_scores_for_trace,
+    run_tool_worker,
+    tool_worker_spec,
+)
 from langgraph_runtime.workflows.routes import (
     evaluator_route,
     hitl_gate_route,
@@ -140,6 +147,7 @@ from langgraph_runtime.workflows.trace import (
     refs_from_artifacts,
     selected_and_skipped_workers,
 )
+from langgraph_runtime.workflows.auto_limit_errors import AutoLimitExceeded
 from langgraph_runtime.workflows.state import (
     RouterRagState,
     check_visit_budget as _check_visit_budget,
@@ -188,7 +196,13 @@ def web_prefetch_allowed(state: Mapping[str, Any]) -> bool:
 
     if not bool(state.get("use_web_search")):
         return False
-    mode = str(state.get("web_search_mode") or "on")
+    from runtime_protocol.permission_modes import derive_web_search_mode
+
+    mode = derive_web_search_mode(
+        web_search_mode=state.get("web_search_mode"),
+        hitl_web_approval=state.get("hitl_web_approval"),
+        use_web_search=state.get("use_web_search"),
+    )
     policy = state.get("hitl_policy")
     tools = policy.get("tools") if isinstance(policy, Mapping) else None
     web_policy = tools.get(ToolName.SEARCH_WEB.value) if isinstance(tools, Mapping) else None
@@ -361,6 +375,36 @@ class NodeRegistry:
                 # interrupt is returned as __interrupt__, not recorded as a
                 # failed node.
                 raise
+            except AutoLimitExceeded as exc:
+                exc.agent_workflow_state = {
+                    **state,
+                    **(exc.agent_workflow_state or {}),
+                    "node_events": [
+                        *(state.get("node_events") or []),
+                        {
+                            "node": node_id,
+                            "node_type": node_type,
+                            "status": "failed",
+                            "event": "auto_limit_exceeded",
+                            "auto_limit_kind": exc.kind,
+                            "limit": exc.limit,
+                        },
+                    ],
+                }
+                failure_data = {
+                    "node_id": node_id,
+                    "node_type": node_type,
+                    "visit_index": visit_index,
+                    "event": "auto_limit_exceeded",
+                    "auto_limit_kind": exc.kind,
+                    "limit": exc.limit,
+                    "error": exc.as_agent_error(),
+                }
+                if execution_event_sink is not None:
+                    await execution_event_sink.emit("node.failed", failure_data)
+                elif queue is not None:
+                    await queue.put({"event": "node.failed", "data": failure_data})
+                raise
             except WorkflowBudgetExceeded as exc:
                 exc.agent_workflow_state = {
                     **state,
@@ -453,6 +497,13 @@ class NodeRegistry:
                 "elapsed_ms": latest_node_event.get("elapsed_ms"),
                 "warnings": latest_node_event.get("warnings") or latest_node_event.get("warning_codes"),
                 "detail": detail,
+                "evidence_packet_scores": latest_node_event.get("evidence_packet_scores"),
+                "evidence_packet_count": latest_node_event.get("evidence_packet_count"),
+                "output_summary": {
+                    **(latest_node_event.get("output_preview") if isinstance(latest_node_event.get("output_preview"), dict) else {}),
+                    "evidence_packet_scores": latest_node_event.get("evidence_packet_scores"),
+                    "evidence_packet_count": latest_node_event.get("evidence_packet_count"),
+                },
             }
             if execution_event_sink is not None:
                 await execution_event_sink.emit(event_name, completion_data)
@@ -647,6 +698,14 @@ class NodeRegistry:
         except Exception as exc:
             _append_failed_node_event(state, config, WorkflowNodeType.CONTEXT_LOADER.value, started, exc)
             raise
+        prefetch_packet_scores = _evidence_packet_scores_for_trace(
+            evidence_packets(state) if state.get("evidence_packets") else [],
+            bundle,
+        )
+        prefetch_summary = _prefetch_trace_summary(
+            bundle,
+            context_budget=state.get("context_budget") if isinstance(state.get("context_budget"), dict) else None,
+        )
         data = {
             "status": NodeEventStatus.COMPLETED.value,
             "document_source_count": len(bundle.get("document_sources", [])),
@@ -654,6 +713,8 @@ class NodeRegistry:
             "used_chat_id_count": len(bundle.get("used_chat_ids", [])),
             "used_memory_id_count": len(bundle.get("durable_memory_refs", [])),
             "memory_retrieval": bundle.get("durable_memory_retrieval_debug", {}),
+            "evidence_packet_scores": prefetch_packet_scores,
+            "prefetch_summary": prefetch_summary,
             "input_preview": {
                 "question": compact_preview(state.get("question")),
                 "settings": {
@@ -668,6 +729,7 @@ class NodeRegistry:
                 "semantic_history": compact_preview(bundle.get("semantic_history_text")),
                 "document_evidence": compact_preview(bundle.get("document_evidence_text")),
                 "durable_memory": compact_preview(bundle.get("durable_memory_text")),
+                "evidence_packet_scores": prefetch_packet_scores,
             },
         }
         _log_node_end(state, WorkflowNodeType.CONTEXT_LOADER.value, started, data)
@@ -729,6 +791,7 @@ class NodeRegistry:
                     value,
                     worker_nodes=state.get("available_worker_nodes"),
                     use_web_search=bool(state.get("use_web_search", False)),
+                    use_browser_access=bool(state.get("use_browser_access", False)),
                 ),
                 *clarification_contract_errors(value),
             ],
@@ -737,6 +800,7 @@ class NodeRegistry:
         normalized = normalize_execution_plan(
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
+            use_browser_access=bool(state.get("use_browser_access", False)),
             question=state.get("question"),
             bypass_clarification=bool(state.get("bypass_clarification")),
             worker_nodes=state.get("available_worker_nodes"),
@@ -828,7 +892,7 @@ class NodeRegistry:
             safe_json_object=_safe_json_object,
         )
         allowed_routes = set(ROUTER_ROUTES) - {RouterRoute.WEB.value}
-        if state.get("use_web_search", False):
+        if state.get("use_web_search", False) or state.get("use_browser_access", False):
             allowed_routes.add(RouterRoute.WEB.value)
         if bypass_clarification:
             allowed_routes.discard(RouterRoute.CLARIFY.value)
@@ -861,6 +925,12 @@ class NodeRegistry:
             route = fallback_route
         else:
             route = requested_route
+        if (
+            thread_has_attached_documents(state)
+            and route == RouterRoute.DIRECT.value
+            and RouterRoute.DOCUMENT.value in allowed_routes
+        ):
+            route = RouterRoute.DOCUMENT.value
         clarification_options = parsed.get("clarification_options")
         if route == RouterRoute.CLARIFY.value:
             clarification_options = _normalize_clarification_options(clarification_options)
@@ -872,8 +942,15 @@ class NodeRegistry:
                 )
         attachment_scope_decline = router_attachment_scope_decline(state, route)
         if attachment_scope_decline:
-            route = RouterRoute.DIRECT.value
-            clarification_options = None
+            if route == RouterRoute.CLARIFY.value and len(clarification_options or []) >= 2:
+                attachment_scope_decline = None
+            elif route in {RouterRoute.DOCUMENT.value, RouterRoute.DIRECT.value} and thread_has_attached_documents(state):
+                # Let the document worker retrieve before any attachment scope decline.
+                route = RouterRoute.DOCUMENT.value
+                attachment_scope_decline = None
+            else:
+                route = RouterRoute.DIRECT.value
+                clarification_options = None
         route_reason = str(parsed.get("reason") or "")
         if requested_route != route:
             route_reason = (
@@ -1162,12 +1239,16 @@ class NodeRegistry:
             "web_source_count": len(output.get("web_sources") or []),
         })
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        worker_event = (output.get("node_events") or [{}])[-1] if isinstance(output.get("node_events"), list) else {}
+        packet_scores = worker_event.get("evidence_packet_scores") if isinstance(worker_event, dict) else None
         await emit(f"worker.{status}", {
             "attempt": attempt,
             "elapsed_ms": elapsed_ms,
             "evidence_packet_count": len(output.get("evidence_packets") or []),
             "document_source_count": len(output.get("document_sources") or []),
             "web_source_count": len(output.get("web_sources") or []),
+            "evidence_packet_scores": packet_scores,
+            "visit_index": int(item.get("ordinal") or 0) + 1,
         })
         return worker_terminal_delta(
             {**item, "dispatch_node_id": state.get("dispatch_node_id")},
@@ -1487,8 +1568,36 @@ class NodeRegistry:
             canvas_absence_limitations_suppressed,
             filter_false_canvas_absence_limitations,
         )
+        from langgraph_runtime.workflows.answer_numeric_grounding import answer_numeric_grounding_issues
 
         revision_count = max(0, int(state.get("answer_revision_count") or 0))
+        numeric_issues = answer_numeric_grounding_issues(state)
+        if numeric_issues:
+            route = (
+                AnswerQualityRoute.REVISE.value
+                if revision_count < MAX_ANSWER_REVISIONS
+                else AnswerQualityRoute.FINALIZE_CAUTIOUS.value
+            )
+            report = {
+                "passed": False,
+                "reason": "numeric_grounding_violation",
+                "issues": numeric_issues,
+                "revision_count": revision_count,
+                "contract_repair": False,
+            }
+            data = {
+                "status": NodeEventStatus.COMPLETED.value,
+                "answer_quality_route": route,
+                "answer_quality_report": report,
+                "event_name": "numeric_grounding_violation",
+            }
+            _log_node_end(state, WorkflowNodeType.ANSWER_EVALUATOR.value, started, data)
+            return {
+                "answer_quality_route": route,
+                "answer_quality_report": report,
+                "answer_revision_count": revision_count + (1 if route == AnswerQualityRoute.REVISE.value else 0),
+                "node_events": _append_event(state, WorkflowNodeType.ANSWER_EVALUATOR.value, data, started=started, config=config),
+            }
         scope_decline = document_scope_decline(state)
         if state.get("document_scope_declined") and scope_decline and str(state.get("final_answer") or "") == scope_decline:
             report = {
@@ -1533,6 +1642,11 @@ class NodeRegistry:
             "Evaluate completeness, factual grounding, citation/source alignment, uncertainty, and instruction following. "
             "Do not rewrite the answer. Return only JSON with pass (boolean), reason (string), and "
             "issues (array of concise strings).\n\n"
+            "Evaluation rules:\n"
+            "- List only substantive issues: unsupported claims, wrong facts, or missing required content relative to the question.\n"
+            "- Do not list issues about brevity, sentence count, answer length, formatting, quotation style, or citation layout when the answer is factually grounded.\n"
+            "- Do not criticize title-only vs body evidence when the answer content matches body text in the evidence.\n"
+            "- When the answer satisfies the question using the evidence, set pass to true and return an empty issues array.\n\n"
             f"Question:\n{compact_preview(state.get('question'), limit=3000)}\n\n"
             f"Draft answer:\n{compact_preview(state.get('final_answer'), limit=10000)}\n\n"
             f"Evidence:\n{compact_preview(state.get('evidence') or _format_prefetch_summary(state.get('pre_fetch_bundle') or {}), limit=12000)}"
@@ -1579,12 +1693,6 @@ class NodeRegistry:
             "contract_repair": contract_repair,
         }
         final_answer = str(state.get("final_answer") or "")
-        if (
-            route == AnswerQualityRoute.FINALIZE_CAUTIOUS.value
-            and report["issues"]
-            and not canvas_absence_limitations_suppressed(state)
-        ):
-            final_answer = final_answer.rstrip() + "\n\nLimitations: " + "; ".join(report["issues"])
         data = {
             "status": NodeEventStatus.COMPLETED.value,
             "answer_quality_route": route,
@@ -1859,6 +1967,7 @@ class NodeRegistry:
                 value,
                 worker_nodes=state.get("available_worker_nodes"),
                 use_web_search=bool(state.get("use_web_search", False)),
+                use_browser_access=bool(state.get("use_browser_access", False)),
                 require_route=False,
             ),
             review_when=lambda value: worker_decisions_need_coverage_review(value, require_route=False),
@@ -1866,6 +1975,7 @@ class NodeRegistry:
         normalized = _normalize_replanner_execution_plan(
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
+            use_browser_access=bool(state.get("use_browser_access", False)),
             allowed_tool_ids=state.get("allowed_tool_ids"),
             worker_nodes=state.get("available_worker_nodes"),
         )

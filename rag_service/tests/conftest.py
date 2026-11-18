@@ -57,7 +57,7 @@ os.environ.setdefault("POSTGRES_MAX_OVERFLOW", "10")
 os.environ.setdefault("LLM_API_URL", "http://127.0.0.1:1234/v1")
 # Control-plane pytest invokes first-party tools in-process. CI copies
 # `.env.ci` into the test runner, and that file uses loopback HTTP against
-# `rag-service`, which is not part of docker-compose.test.yml.
+# `rag-service`, which is not part of the `test` Compose profile.
 os.environ["MCP_TRANSPORT"] = "in_process"
 os.environ.setdefault("MCP_LOOPBACK_URL", "http://127.0.0.1:8000/internal/mcp/")
 for _budget_name, _budget_value in {
@@ -78,6 +78,23 @@ for _budget_name, _budget_value in {
     "DEEP_AGENT_HERMES_MAX_ACTIVE_RUNTIME_MS": "7200000",
 }.items():
     os.environ.setdefault(_budget_name, _budget_value)
+
+AUTO_LIMIT_TEST_ENV = {
+    "AUTO_MAX_TOTAL_VISITS": "12",
+    "AUTO_MAX_INTERRUPTS_PER_RUN": "4",
+    "AUTO_MAX_DELEGATES_PER_TURN": "1",
+    "AUTO_REQUIRE_PLAN_APPROVAL_ON_COMPLEX": "false",
+    "AUTO_REQUIRE_PLAN_APPROVAL_ALL": "false",
+}
+for _auto_name, _auto_value in AUTO_LIMIT_TEST_ENV.items():
+    os.environ.setdefault(_auto_name, _auto_value)
+
+
+@pytest.fixture(autouse=True)
+def _auto_limit_test_env(monkeypatch):
+    """Keep AUTO_* defaults stable across tests that temporarily clear env vars."""
+    for name, value in AUTO_LIMIT_TEST_ENV.items():
+        monkeypatch.setenv(name, value)
 
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,
@@ -278,6 +295,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         canvas_repo_sqlmodel,
     )
     from app.services import (
+        agent_task_canvas_chat,
         agent_task_chat_publish,
         agent_task_repository,
         agent_task_research_canvases,
@@ -326,6 +344,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         agent_task_research_canvases,
         agent_task_runtime_projection,
         agent_task_chat_publish,
+        agent_task_canvas_chat,
         tool_approval,
     ):
         monkeypatch.setattr(module, "async_session_maker", session_maker)

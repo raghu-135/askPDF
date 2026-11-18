@@ -7,11 +7,47 @@ from langchain_core.runnables import RunnableConfig
 
 from langgraph_runtime.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from langgraph_runtime.workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
+from langgraph_runtime.workflows.external_research import BROWSER_TOOL_CONTRACT_IDS
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID
 from langgraph_runtime.workflows.parallel_contracts import PARALLEL_REFERENCE_WORKFLOW_ID
 from langgraph_runtime.workflows.evidence import append_corrective_evidence_packets
 from langgraph_runtime.workflows.state import runtime_node_id
 from langgraph_runtime.workflows.trace import refs_from_timeline
+
+
+def _retrieval_score_from_source(source: Dict[str, Any]) -> float | None:
+    for key in ("raw_retriever_score", "rerank_score", "score", "raw_score"):
+        value = source.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def _evidence_packet_scores_for_trace(
+    evidence_packets: list[Dict[str, Any]],
+    artifacts: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    scores = [
+        {
+            "id": packet.get("id"),
+            "raw_retriever_score": packet.get("raw_retriever_score"),
+        }
+        for packet in evidence_packets
+        if isinstance(packet, dict) and packet.get("raw_retriever_score") is not None
+    ]
+    if scores:
+        return scores
+    for idx, source in enumerate(artifacts.get("document_sources") or []):
+        if not isinstance(source, dict):
+            continue
+        raw_score = _retrieval_score_from_source(source)
+        if raw_score is None:
+            continue
+        scores.append({
+            "id": str(source.get("chunk_id") or source.get("file_hash") or f"document_source:{idx}"),
+            "raw_retriever_score": raw_score,
+        })
+    return scores[:50]
 
 
 @dataclass(frozen=True)
@@ -90,7 +126,9 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
         tool_input=lambda current: current["question"],
         skip_reason=lambda current: (
             "web_search_disabled"
-            if isinstance(current.get("execution_plan"), list) and not current.get("use_web_search", False)
+            if isinstance(current.get("execution_plan"), list)
+            and not current.get("use_web_search", False)
+            and not current.get("use_browser_access", False)
             else None
         ),
         state_update=lambda current, _payload, artifacts, _evidence, _packets: {
@@ -146,7 +184,20 @@ async def run_tool_worker(
     )
     if selected_tool_name:
         tool_name = selected_tool_name
-        tool_input = {"query": str(state.get("question") or "")}
+        question_text = str(state.get("question") or "")
+        if tool_name == ToolName.BROWSER_NAVIGATE.value:
+            tool_input = {"url": question_text}
+        elif tool_name in BROWSER_TOOL_CONTRACT_IDS:
+            tool_input = {}
+        else:
+            tool_input = {"query": question_text}
+    elif (
+        spec.node_name == WorkflowNodeType.WEB_WORKER.value
+        and state.get("use_browser_access")
+        and not state.get("use_web_search")
+    ):
+        tool_name = ToolName.BROWSER_NAVIGATE.value
+        tool_input = {"url": str(state.get("question") or "")}
     elif spec.node_name == WorkflowNodeType.RETRIEVAL_WORKER.value and work_item.get("file_hash"):
         tool_name = ToolName.SEARCH_KNOWLEDGE.value
         tool_input = {
@@ -186,21 +237,43 @@ async def run_tool_worker(
         label=spec.evidence_label,
         limit=evidence_text_limit(state),
     )
-    evidence_packets = (
-        append_corrective_evidence_packets(
+    segments = artifacts.get("evidence_segments")
+    if isinstance(segments, list) and segments:
+        evidence_packets = append_corrective_evidence_packets(
             state,
             config,
-            segments=artifacts.get("evidence_segments"),
+            segments=segments,
         )
-        if state.get("workflow_id") in {CORRECTIVE_WORKFLOW_ID, PARALLEL_REFERENCE_WORKFLOW_ID}
-        else append_evidence_packet(
+    elif state.get("workflow_id") in {CORRECTIVE_WORKFLOW_ID, PARALLEL_REFERENCE_WORKFLOW_ID}:
+        evidence_packets = append_corrective_evidence_packets(
+            state,
+            config,
+            segments=segments,
+        )
+    else:
+        packet_refs = refs_from_artifacts(artifacts)
+        sources = artifacts.get("document_sources") if isinstance(artifacts, dict) else []
+        if isinstance(sources, list) and sources and isinstance(sources[0], dict):
+            packet_refs = {**packet_refs, "source": sources[0]}
+        evidence_packets = append_evidence_packet(
             state,
             config,
             kind=spec.evidence_kind,
             content=payload.get("content", ""),
-            refs=refs_from_artifacts(artifacts),
+            refs=packet_refs,
         )
-    )
+        if evidence_packets and isinstance(sources, list):
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                raw_score = _retrieval_score_from_source(source)
+                if raw_score is None:
+                    continue
+                tail = dict(evidence_packets[-1])
+                if tail.get("raw_retriever_score") is None:
+                    tail["raw_retriever_score"] = raw_score
+                    evidence_packets = [*evidence_packets[:-1], tail]
+                break
 
     update = spec.state_update(state, payload, artifacts, evidence, evidence_packets) if spec.state_update else {}
     output_state = {**state, **update, "evidence": evidence, "evidence_packets": evidence_packets}
@@ -214,6 +287,10 @@ async def run_tool_worker(
         },
         "evidence_chars": len(str(evidence or "")),
         "evidence_packet_count": len(evidence_packets),
+        "evidence_packet_scores": _evidence_packet_scores_for_trace(
+            evidence_packets,
+            artifacts if isinstance(artifacts, dict) else {},
+        ),
     }
     if "document_sources" in update:
         data["document_source_count"] = len(update["document_sources"])

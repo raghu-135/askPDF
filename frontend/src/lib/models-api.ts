@@ -12,6 +12,20 @@ export {
   type LlmModelHealth,
 } from './llm-model-health-cache';
 
+export type EmbeddingModelConfig = {
+  tier: 'exact' | 'generic' | 'local' | string;
+  tokenizer: string | null;
+  tokenizer_revision: string | null;
+  effective_input_limit: number;
+  pack_margin_ratio: number | null;
+  encoding: string | null;
+  prefix: string;
+  suffix: string;
+  query_prefix: string | null;
+  query_suffix: string | null;
+  hf_prefetched: boolean;
+};
+
 /**
  * Fetches available embedding models from the backend RAG API.
  * @returns A promise resolving to a map with embedding model categories.
@@ -20,6 +34,7 @@ export const fetchAvailableEmbeddingModels = async (): Promise<{
   embedding_models: string[];
   local_embedding_models: string[];
   not_embedding_models: string[];
+  embedding_model_configs: Record<string, EmbeddingModelConfig>;
 }> => {
   try {
     const res = await fetch(`${API_BASE}/api/models`);
@@ -28,6 +43,7 @@ export const fetchAvailableEmbeddingModels = async (): Promise<{
       embedding_models: data.embedding_models || [],
       local_embedding_models: data.local_embedding_models || [],
       not_embedding_models: data.not_embedding_models || [],
+      embedding_model_configs: data.embedding_model_configs || {},
     };
   } catch (err) {
     console.warn("Failed to fetch embedding models", err);
@@ -35,9 +51,23 @@ export const fetchAvailableEmbeddingModels = async (): Promise<{
       embedding_models: [],
       local_embedding_models: [],
       not_embedding_models: [],
+      embedding_model_configs: {},
     };
   }
 };
+
+export function formatEmbeddingTierLabel(tier: string): string {
+  switch (tier) {
+    case 'exact':
+      return 'Exact (Hugging Face tokenizer)';
+    case 'generic':
+      return 'Generic (tiktoken estimate)';
+    case 'local':
+      return 'Local (SentenceTransformer)';
+    default:
+      return tier;
+  }
+}
 
 /**
  * Fetches available LLM models from the backend RAG API.

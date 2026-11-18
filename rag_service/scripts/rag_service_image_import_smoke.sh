@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# Build the production rag-service image and verify projection imports work without langgraph_runtime.
+# Build the production rag-service image and verify required offline imports (projection + spaCy).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IMAGE="${ASKPDF_RAG_IMAGE_SMOKE_TAG:-askpdf-rag-service-smoke:local}"
 
-echo "Building rag-service image: ${IMAGE}"
-docker build -f "${ROOT}/rag_service/Dockerfile" -t "${IMAGE}" "${ROOT}"
+if [ "${ASKPDF_SKIP_RUNTIME_COMPOSE_BUILD:-}" = "1" ] && docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+  echo "Using existing rag-service image for smoke: ${IMAGE}"
+else
+  echo "Building rag-service image: ${IMAGE}"
+  docker build -f "${ROOT}/rag_service/Dockerfile" \
+    --build-arg "DOWNLOAD_LOCAL_MODELS=false" \
+    -t "${IMAGE}" "${ROOT}"
+fi
 
 ENV_FILE_ARGS=()
 if [ -f "${ROOT}/.env" ]; then
@@ -49,4 +55,13 @@ scrubbed = _scrub_review_warnings(warnings, gaps)
 issues = scrubbed[0]['details']['issues']
 assert issues == ['Unique finding'], issues
 print('rag_service_projection_import_smoke: ok')
+"
+
+echo "Running sentence pipeline smoke inside image (network isolated)..."
+docker run --rm --network none "${ENV_FILE_ARGS[@]}" "${SMOKE_ENV[@]}" "${IMAGE}" python -c "
+from app.services.document_pipeline import sentence_pipeline_identity
+
+identity = sentence_pipeline_identity()
+assert identity == 'en_core_web_sm:loaded', identity
+print('rag_service_sentence_pipeline_smoke: ok')
 "

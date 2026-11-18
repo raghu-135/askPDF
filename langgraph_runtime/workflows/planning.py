@@ -6,6 +6,10 @@ from typing import Any, Dict, List, Optional
 from runtime_protocol.errors import RuntimeError as AgentRuntimeError
 from langgraph_runtime.workflows.enums import PlannerRiskLevel, PlannerRoute, PLANNER_ROUTES, ToolContractId, WorkflowNodeType
 from langgraph_runtime.workflows.trace import compact_preview
+from langgraph_runtime.workflows.external_research import (
+    BROWSER_TOOL_CONTRACT_IDS,
+    web_worker_enabled_flags,
+)
 
 
 WORKER_NODE_ORDER = [
@@ -134,6 +138,7 @@ def worker_decision_contract_errors(
     *,
     worker_nodes: Any,
     use_web_search: bool,
+    use_browser_access: bool = False,
     require_route: bool = True,
 ) -> List[str]:
     """Validate exhaustive typed worker selection without making semantic choices."""
@@ -150,6 +155,10 @@ def worker_decision_contract_errors(
     selected = 0
     by_type = _worker_nodes_by_type(worker_nodes)
     web_ids = {str(node["id"]) for node in by_type.get(WorkflowNodeType.WEB_WORKER.value, [])}
+    allow_web_worker = web_worker_enabled_flags(
+        use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
+    )
     for index, decision in enumerate(decisions):
         if not isinstance(decision, dict):
             errors.append(f"worker_decisions[{index}] must be an object")
@@ -168,8 +177,8 @@ def worker_decision_contract_errors(
             selected += 1
             if not str(decision.get("query") or "").strip():
                 errors.append(f"selected worker {worker_id} must contain a non-empty query")
-            if worker_id in web_ids and not use_web_search:
-                errors.append(f"worker {worker_id} cannot be selected while live web search is disabled")
+            if worker_id in web_ids and not allow_web_worker:
+                errors.append(f"worker {worker_id} cannot be selected while web search and browser access are disabled")
         if not str(decision.get("reason") or "").strip():
             errors.append(f"worker decision for {worker_id} must contain a reason")
 
@@ -269,6 +278,7 @@ def normalize_execution_plan(
     parsed: Dict[str, Any],
     *,
     use_web_search: bool,
+    use_browser_access: bool = False,
     question: Optional[str] = None,
     bypass_clarification: bool = False,
     worker_nodes: Any = None,
@@ -298,7 +308,11 @@ def normalize_execution_plan(
             if node_id and node_id not in steps:
                 steps.append(node_id)
     web_node_ids = {str(node["id"]) for node in by_type.get(WorkflowNodeType.WEB_WORKER.value, [])}
-    if not use_web_search and any(step in web_node_ids for step in steps):
+    allow_web_worker = web_worker_enabled_flags(
+        use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
+    )
+    if not allow_web_worker and any(step in web_node_ids for step in steps):
         steps = [step for step in steps if step not in web_node_ids]
         normalization_notes.append("web_worker_removed_when_web_search_disabled")
     if route == PlannerRoute.EXECUTE.value:
@@ -398,6 +412,7 @@ def normalize_replanner_execution_plan(
     parsed: Dict[str, Any],
     *,
     use_web_search: bool,
+    use_browser_access: bool = False,
     allowed_tool_ids: Any,
     worker_nodes: Any = None,
 ) -> Dict[str, Any]:
@@ -417,11 +432,18 @@ def normalize_replanner_execution_plan(
             if node_id and node_id not in steps:
                 steps.append(node_id)
     web_node_ids = {str(node["id"]) for node in by_type.get(WorkflowNodeType.WEB_WORKER.value, [])}
-    if not use_web_search and any(step in web_node_ids for step in steps):
+    allow_web_worker = web_worker_enabled_flags(
+        use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
+    )
+    if not allow_web_worker and any(step in web_node_ids for step in steps):
         steps = [step for step in steps if step not in web_node_ids]
         normalization_notes.append("web_worker_removed_when_web_search_disabled")
     allowed_ids = set(allowed_tool_ids if isinstance(allowed_tool_ids, list) else [])
-    if ToolContractId.LIVE_WEB_RECON.value not in allowed_ids and any(step in web_node_ids for step in steps):
+    web_tools_allowed = ToolContractId.LIVE_WEB_RECON.value in allowed_ids or bool(
+        allowed_ids & BROWSER_TOOL_CONTRACT_IDS
+    )
+    if not web_tools_allowed and any(step in web_node_ids for step in steps):
         steps = [step for step in steps if step not in web_node_ids]
         normalization_notes.append("web_worker_removed_when_tool_disallowed")
     return {

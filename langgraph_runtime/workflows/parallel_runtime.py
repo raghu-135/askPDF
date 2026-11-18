@@ -37,6 +37,12 @@ from langgraph_runtime.workflows.parallel_contracts import (
     normalized_parallel_policy,
     parallel_timeout_watchdog_seconds,
 )
+from langgraph_runtime.workflows.source_dedupe import (
+    document_source_key,
+    merge_unique_source_dicts,
+    unique_strings,
+    web_source_key,
+)
 from langgraph_runtime.models.retry import is_retryable_model_error
 
 
@@ -228,7 +234,11 @@ def normalize_work_items(
         key = (worker_type, f"{file_hash}|{query.casefold()}")
         if not query or key in seen:
             continue
-        if worker_type == WorkflowNodeType.WEB_WORKER.value and not state.get("use_web_search", False):
+        if (
+            worker_type == WorkflowNodeType.WEB_WORKER.value
+            and not state.get("use_web_search", False)
+            and not state.get("use_browser_access", False)
+        ):
             continue
         if is_corrective and worker_type == WorkflowNodeType.WEB_WORKER.value and not corrective_policy["allow_web_fallback"]:
             continue
@@ -470,23 +480,9 @@ def _sanitize_corrective_urls(value: Any) -> Any:
     return result
 
 
-def _document_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
-    identity = item.get("document_id") or item.get("file_id") or item.get("file_hash")
-    page = next((item.get(key) for key in ("page_number", "page", "page_start") if item.get(key) not in (None, "")), None)
-    locator = next((item.get(key) for key in ("section_id", "chunk_id", "section") if item.get(key) not in (None, "")), None)
-    if identity:
-        return (str(identity), page, str(locator or ""))
-    return (str(item.get("title") or item.get("file_name") or "").casefold(), page, _content_hash(item.get("content") or item.get("text")))
-
-
-def _web_key(item: Mapping[str, Any]) -> tuple[Any, ...]:
-    url = normalized_source_url(item.get("url") or item.get("source_url") or item.get("link"))
-    if url:
-        return (url,)
-    return (str(item.get("title") or "").casefold(), _content_hash(item.get("content") or item.get("text") or item.get("snippet")))
-
-
 def _merge_unique_dicts(items: Iterable[Any], key_fn, *, enrich_provenance: bool = False) -> List[Dict[str, Any]]:
+    if not enrich_provenance:
+        return merge_unique_source_dicts(items, key_fn, enrich_provenance=False)
     merged: Dict[Any, Dict[str, Any]] = {}
     order: List[Any] = []
     for raw in items:
@@ -616,17 +612,6 @@ def _dedupe_dicts(items: Iterable[Any], key_fn) -> List[Dict[str, Any]]:
         seen.add(key)
         result.append(dict(item))
     return result
-
-
-def _unique_strings(items: Iterable[Any]) -> List[str]:
-    values: List[str] = []
-    seen: set[str] = set()
-    for item in items:
-        value = str(item or "")
-        if value and value not in seen:
-            seen.add(value)
-            values.append(value)
-    return values
 
 
 def worker_terminal_delta(
@@ -968,16 +953,16 @@ def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
 
     document_sources = _merge_unique_dicts(
         [*state.get("document_sources", []), *(_current(state.get("parallel_document_source_deltas") or []) or (item for packet in successful for item in packet.get("document_sources", [])))],
-        _document_key,
+        document_source_key,
         enrich_provenance=enrich_provenance,
     )
     web_sources = _merge_unique_dicts(
         [*state.get("web_sources", []), *(_current(state.get("parallel_web_source_deltas") or []) or (item for packet in successful for item in packet.get("web_sources", [])))],
-        _web_key,
+        web_source_key,
         enrich_provenance=enrich_provenance,
     )
     current_chat_deltas = _current(state.get("parallel_chat_id_deltas") or [])
-    chat_ids = _unique_strings([
+    chat_ids = unique_strings([
         *state.get("used_chat_ids", []),
         *((item.get("message_id") if isinstance(item, Mapping) else item) for item in current_chat_deltas),
         *((item for packet in successful for item in packet.get("chat_ids", [])) if not current_chat_deltas else []),
@@ -987,7 +972,7 @@ def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
         lambda item: str(item.get("memory_id") or item.get("id") or _stable_hash(item)),
         enrich_provenance=enrich_provenance,
     )
-    memory_ids = _unique_strings([
+    memory_ids = unique_strings([
         *state.get("used_memory_ids", []),
         *(item.get("memory_id") or item.get("id") for item in memory_refs),
     ])
@@ -1103,7 +1088,7 @@ def aggregate_parallel_results(state: Mapping[str, Any]) -> Dict[str, Any]:
         "node_events": node_events,
         "tool_events": tool_events,
         "errors": errors,
-        "skipped_nodes": _unique_strings(skipped_nodes),
+        "skipped_nodes": unique_strings(skipped_nodes),
         "node_visit_counts": counts,
         "node_visit_sequence": visits,
         "parallel_summary": summary,

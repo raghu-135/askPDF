@@ -84,6 +84,20 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
             or data.get("context_window")
             or 32_768
         )
+        user_question = str((dict(request.input or {})).get("question") or data.get("question") or "").strip()
+        extensions = {
+            "task_id": approval_task_id,
+            "approval_task_id": approval_task_id,
+            "runtime": "hermes",
+            "tool_approval_policy": approval_policy,
+            "llm_model": model_policy.get("model") or (None if has_managed_profile else config.get("llm_model")),
+            "correction_context_sha256": hashlib.sha256(json.dumps(
+                data.get("active_corrections") or [], sort_keys=True,
+                separators=(",", ":"), ensure_ascii=True,
+            ).encode()).hexdigest(),
+        }
+        if user_question:
+            extensions["user_question"] = user_question
         token = issue_execution_context_token(
             ToolInvocationContext(
                 thread_id=request.thread_id,
@@ -91,18 +105,9 @@ class HermesRuntimeAdapter(AgentRuntimeAdapter):
                 embedding_model=context.embedding_model,
                 context_window=context_window,
                 use_web_search=mcp.get("runtime_profile") == "askpdf-deep-external",
+                use_browser_access=bool(config.get("use_browser_access")),
                 use_reranker=True,
-                extensions={
-                    "task_id": approval_task_id,
-                    "approval_task_id": approval_task_id,
-                    "runtime": "hermes",
-                    "tool_approval_policy": approval_policy,
-                    "llm_model": model_policy.get("model") or (None if has_managed_profile else config.get("llm_model")),
-                    "correction_context_sha256": hashlib.sha256(json.dumps(
-                        data.get("active_corrections") or [], sort_keys=True,
-                        separators=(",", ":"), ensure_ascii=True,
-                    ).encode()).hexdigest(),
-                },
+                extensions=extensions,
             ),
             task_id=approval_task_id,
             allowed_tools=allowed_tools,

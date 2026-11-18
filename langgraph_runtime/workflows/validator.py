@@ -17,7 +17,9 @@ from langgraph_runtime.workflows.workflow_runtime import (
     RUNTIME_TEXT_FIELDS,
     SUPPORTED_RUNTIME_KINDS,
     normalize_runtime_for_validation,
+    apply_auto_limits_to_config,
     replan_loop_policy,
+    workflow_allows_auto_limits_override,
     workflow_allows_replans_override,
     workflow_supports_replans,
 )
@@ -216,9 +218,8 @@ class WorkflowResolver:
             for key, value in source.items()
             if value is not None
         }
-        unknown_overrides = sorted(
-            set(explicit_overrides) - ALLOWED_WORKFLOW_CONFIG_KEYS
-        )
+        allowed_override_keys = set(ALLOWED_WORKFLOW_CONFIG_KEYS) | {"auto_limits"}
+        unknown_overrides = sorted(set(explicit_overrides) - allowed_override_keys)
         if unknown_overrides:
             raise WorkflowValidationError(
                 "unsupported runtime configuration overrides: "
@@ -233,6 +234,13 @@ class WorkflowResolver:
                     config[key] = source[key]
         if not workflow_supports_replans(resolved):
             config.pop("replans", None)
+
+        auto_limits = None
+        for source in (thread_settings or {}, request_overrides or {}):
+            if isinstance(source.get("auto_limits"), dict):
+                auto_limits = source.get("auto_limits")
+        if workflow_allows_auto_limits_override(resolved) and isinstance(auto_limits, dict):
+            config = apply_auto_limits_to_config(config, auto_limits)
 
         resolved["config"] = config
         if workflow_supports_replans(resolved):

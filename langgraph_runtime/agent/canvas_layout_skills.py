@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 from langgraph_runtime.prompts.loaders import load_runtime_prompt
+from runtime_protocol.canvas_reference import extract_canvas_references
 
 
 CANVAS_LAYOUT_SKILL_IDS = (
@@ -37,6 +38,11 @@ def canvas_publish_synthesis_enabled(state: Mapping[str, Any]) -> bool:
     if orchestration.get("publish_canvas") is True:
         return True
     text = str(state.get("question") or state.get("objective") or "").lower()
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), Mapping) else {}
+    if bundle.get("quoted_canvas_revisions"):
+        return True
+    if extract_canvas_references(text):
+        return True
     markers = (
         "canvas",
         "comparison",

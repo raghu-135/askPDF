@@ -7,7 +7,10 @@ the same service topology.
 
     ./run_tests.sh
 
-The runner starts an isolated Compose project with its own PostgreSQL,
+The runner uses `COMPOSE_PROFILES=test` with `docker-compose.yml` and
+`docker-compose.integration.yml` (plus `docker-compose.cloud-agent.override.yml`
+only when `.askpdf-cloud-agent.env` sets `ASKPDF_USE_CLOUD_AGENT_OVERRIDE=1`).
+It starts an isolated Compose project with its own PostgreSQL,
 Weaviate, network, and volumes. The normal application stack can remain
 running because test services do not publish the same host ports.
 
@@ -18,7 +21,8 @@ running because test services do not publish the same host ports.
 - API tests (`--api`)
 - model-aware integration tests (`--integration`)
 - schema and migration guardrails (`--schema`)
-- frontend Node tests (`--frontend`), including canvas-spec and document-tab coverage
+- frontend Node tests (`--frontend`), including TypeScript (`tsc --noEmit`), production
+  `next build`, canvas-spec and document-tab coverage
 - LangGraph runtime integration and recovery (`--langgraph-runtime`;
   `--external-runtime` is an alias)
 - LangGraph against a configured real provider (`--langgraph-runtime-real`)

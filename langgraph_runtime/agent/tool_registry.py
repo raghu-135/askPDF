@@ -41,6 +41,7 @@ CAT_THREAD_CONVERSATION_HISTORY = NodeCategory.THREAD_CONVERSATION_HISTORY.value
 CAT_DURABLE_MEMORY = NodeCategory.DURABLE_MEMORY.value
 CAT_THREAD_EVENTS = NodeCategory.THREAD_EVENTS.value
 CAT_WEB = NodeCategory.WEB.value
+CAT_BROWSER = NodeCategory.BROWSER.value
 CAT_EXTERNAL_RESEARCH = NodeCategory.EXTERNAL_RESEARCH.value
 CAT_ANSWER = NodeCategory.ANSWER.value
 
@@ -72,6 +73,11 @@ TOOL_STACKEXCHANGE_REFERENCE = ToolContractId.STACKEXCHANGE_REFERENCE.value
 TOOL_YAHOO_FINANCE_NEWS = ToolContractId.YAHOO_FINANCE_NEWS.value
 TOOL_CLARIFY_INTENT = ToolContractId.CLARIFY_INTENT.value
 TOOL_RESEARCH_CANVAS_PUBLISH = ToolContractId.RESEARCH_CANVAS_PUBLISH.value
+TOOL_BROWSER_NAVIGATE = ToolContractId.BROWSER_NAVIGATE.value
+TOOL_BROWSER_SNAPSHOT = ToolContractId.BROWSER_SNAPSHOT.value
+TOOL_BROWSER_ACT = ToolContractId.BROWSER_ACT.value
+TOOL_BROWSER_READ = ToolContractId.BROWSER_READ.value
+TOOL_BROWSER_SAVE_TO_THREAD = ToolContractId.BROWSER_SAVE_TO_THREAD.value
 
 TOOL_NAME_GET_THREAD_SHAPE = ToolName.GET_THREAD_SHAPE.value
 TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY = ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value
@@ -89,6 +95,11 @@ TOOL_NAME_STACK_EXCHANGE = ToolName.STACK_EXCHANGE.value
 TOOL_NAME_YAHOO_FINANCE_NEWS = ToolName.YAHOO_FINANCE_NEWS.value
 TOOL_NAME_ASK_FOR_CLARIFICATION = ToolName.ASK_FOR_CLARIFICATION.value
 TOOL_NAME_PUBLISH_CANVAS = ToolName.PUBLISH_CANVAS.value
+TOOL_NAME_BROWSER_NAVIGATE = ToolName.BROWSER_NAVIGATE.value
+TOOL_NAME_BROWSER_SNAPSHOT = ToolName.BROWSER_SNAPSHOT.value
+TOOL_NAME_BROWSER_ACT = ToolName.BROWSER_ACT.value
+TOOL_NAME_BROWSER_READ = ToolName.BROWSER_READ.value
+TOOL_NAME_BROWSER_SAVE_TO_THREAD = ToolName.BROWSER_SAVE_TO_THREAD.value
 
 
 TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
@@ -102,7 +113,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "warning_codes": [ToolWarningCode.MISSING_THREAD_ID],
     },
     "search_knowledge": {
-        "id": "document_search_knowledge", "category": CAT_RETRIEVAL,
+        "id": "document_search_knowledge",
+        "category": CAT_RETRIEVAL,
         "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
         "allowed_node_types": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
         "required_node_capabilities": [CAP_RETRIEVAL_DOCUMENT],
@@ -110,7 +122,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_THREAD_DOCUMENTS, ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.NO_RELEVANT_CONTENT, ToolWarningCode.RESPONSE_TRUNCATED],
     },
     "inspect_document": {
-        "id": "document_inspection", "category": CAT_RETRIEVAL,
+        "id": "document_inspection",
+        "category": CAT_RETRIEVAL,
         "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
         "allowed_node_types": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
         "required_node_capabilities": [CAP_RETRIEVAL_DOCUMENT],
@@ -118,7 +131,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.MISSING_DOCUMENT_VECTORS],
     },
     "read_context": {
-        "id": "document_context", "category": CAT_RETRIEVAL,
+        "id": "document_context",
+        "category": CAT_RETRIEVAL,
         "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
         "allowed_node_types": [NODE_RETRIEVAL_WORKER, NODE_DEEP_RESEARCH_SUBAGENT],
         "required_node_capabilities": [CAP_RETRIEVAL_DOCUMENT],
@@ -160,6 +174,57 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "required_node_capabilities": [CAP_RETRIEVAL_WEB],
         "artifact_keys": ["web_sources"],
         "warning_codes": [ToolWarningCode.WEB_SEARCH_DISABLED, ToolWarningCode.NO_USABLE_WEB_RESULTS],
+    },
+    TOOL_NAME_BROWSER_NAVIGATE: {
+        "id": TOOL_BROWSER_NAVIGATE,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_page"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+    },
+    TOOL_NAME_BROWSER_SNAPSHOT: {
+        "id": TOOL_BROWSER_SNAPSHOT,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_state", "browser_screenshot_b64", "browser_page_text"],
+        "warning_codes": [
+            ToolWarningCode.BROWSER_ACCESS_DISABLED,
+            ToolWarningCode.BROWSER_DESKTOP_CONTROL_UNAVAILABLE,
+        ],
+    },
+    TOOL_NAME_BROWSER_ACT: {
+        "id": TOOL_BROWSER_ACT,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_control_result"],
+        "warning_codes": [
+            ToolWarningCode.BROWSER_ACCESS_DISABLED,
+            ToolWarningCode.BROWSER_DESKTOP_CONTROL_UNAVAILABLE,
+        ],
+    },
+    TOOL_NAME_BROWSER_READ: {
+        "id": TOOL_BROWSER_READ,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_page_text"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED],
+    },
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD: {
+        "id": TOOL_BROWSER_SAVE_TO_THREAD,
+        "category": CAT_BROWSER,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
+        "artifact_keys": ["browser_capture"],
+        "warning_codes": [ToolWarningCode.BROWSER_ACCESS_DISABLED, ToolWarningCode.INDEXING_IN_PROGRESS],
     },
     TOOL_NAME_WIKIPEDIA: {
         "id": TOOL_WIKIPEDIA_REFERENCE,
@@ -293,6 +358,27 @@ for _deep_tool_name in (
         NODE_DEEP_RESEARCH_SUBAGENT,
     ]))
 
+# Context loader prefetches bounded evidence via MCP before routing (langgraph_runtime graph.context_loader).
+for _prefetch_tool_name in (
+    "search_knowledge",
+    TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY,
+    TOOL_NAME_SEARCH_DURABLE_MEMORY,
+    TOOL_NAME_SEARCH_WEB,
+):
+    _prefetch_contract = TOOL_CONTRACT_METADATA[_prefetch_tool_name]
+    _prefetch_contract["allowed_caller_nodes"] = list(dict.fromkeys([
+        *(_prefetch_contract.get("allowed_caller_nodes") or []),
+        NODE_CONTEXT_LOADER,
+    ]))
+    _prefetch_contract["allowed_node_types"] = list(dict.fromkeys([
+        *(_prefetch_contract.get("allowed_node_types") or []),
+        NODE_CONTEXT_LOADER,
+    ]))
+    _prefetch_contract["required_node_capabilities"] = list(dict.fromkeys([
+        *(_prefetch_contract.get("required_node_capabilities") or []),
+        CAP_CONTEXT_PREFETCH,
+    ]))
+
 
 def get_tool_contract_metadata(tool_name: str) -> Dict[str, Any]:
     """Return contract metadata for a canonical tool name."""
@@ -415,21 +501,24 @@ def validate_tool_call_allowed(
 
 TOOL_FRIENDLY_CONFIG = {
     "search_knowledge": {
-        "id": "document_search_knowledge", "display_name": "Search Knowledge",
+        "id": "document_search_knowledge",
+        "display_name": "Search Knowledge",
         "description": "Search attached PDFs at document, section, or precise chunk level. Use chunk for direct evidence, document or section for structural discovery, then read_context to expand a returned source.",
         "default_prompt": "Search attached documents directly. Use level=chunk for precise evidence, level=section or document for discovery, and pass document_id or typed filters only when they are relevant. Do not treat outline entries or tags as evidence. Ranked results include a source catalog; after tool_response_truncated, call read_context on omitted or tabular source_ids (expansion=table for tables, otherwise expansion=section). Do not repeat a similar search_knowledge query.",
         "mcp_server": "first_party_context", "mcp_tool": "search_knowledge", "mcp_enabled": True, "contract_version": "1",
     },
     "inspect_document": {
-        "id": "document_inspection", "display_name": "Inspect Document",
+        "id": "document_inspection",
+        "display_name": "Inspect Document",
         "description": "Inspect the heading outline, structural tags, pages, and valid section/table expansion targets of an attached PDF.",
         "default_prompt": "Use for broad document discovery or when the user names a section. Treat the returned outline and tags as navigation metadata, not supporting evidence; call read_context for evidence.",
         "mcp_server": "first_party_context", "mcp_tool": "inspect_document", "mcp_enabled": True, "contract_version": "1",
     },
     "read_context": {
-        "id": "document_context", "display_name": "Read Context",
+        "id": "document_context",
+        "display_name": "Read Context",
         "description": "Read the original body text for a returned document source with bounded chunk, section, or table expansion and continuation.",
-        "default_prompt": "Use with a source_id from search_knowledge, including omitted catalog ids. Prefer expansion=table when the source has a table_id and expansion=section otherwise. Keep within the requested token budget, and cite source IDs/pages from the returned evidence.",
+        "default_prompt": "Use with a source_id from search_knowledge, including omitted catalog ids. Prefer expansion=table when the source has a table_id and expansion=section otherwise. Keep within the requested token budget, and cite source IDs/pages from the returned evidence. Omit cursor on the first read; when artifacts.continuation is present, pass that opaque token verbatim as cursor (never page_size, start, offset, or bare numbers).",
         "mcp_server": "first_party_context", "mcp_tool": "read_context", "mcp_enabled": True, "contract_version": "1",
     },
     TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY: {
@@ -455,6 +544,56 @@ TOOL_FRIENDLY_CONFIG = {
         "display_name": "Internet Search",
         "description": "Live web search for external or time-sensitive information; cached to the thread.",
         "default_prompt": "Use when information is outside the uploaded documents or likely time-sensitive. Run in parallel with document search when enabled.",
+    },
+    TOOL_NAME_BROWSER_NAVIGATE: {
+        "id": TOOL_BROWSER_NAVIGATE,
+        "display_name": "Browser Navigate",
+        "description": "Open a URL in the shared workbench browser.",
+        "default_prompt": "Use to open or follow a specific http(s) page in the workbench browser. Do not use for REST search when search_web is enough.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_navigate",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_SNAPSHOT: {
+        "id": TOOL_BROWSER_SNAPSHOT,
+        "display_name": "Browser Snapshot",
+        "description": "Capture visible page text and a desktop screenshot from the workbench browser.",
+        "default_prompt": "Use after navigation to inspect the visible page and desktop state before acting.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_snapshot",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_ACT: {
+        "id": TOOL_BROWSER_ACT,
+        "display_name": "Browser Act",
+        "description": "Click, type, scroll, or send keys on the shared workbench browser.",
+        "default_prompt": "Use for interactive steps after browser_snapshot. Prefer precise coordinates when known.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_act",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_READ: {
+        "id": TOOL_BROWSER_READ,
+        "display_name": "Browser Read",
+        "description": "Read plain text from the active workbench browser page.",
+        "default_prompt": "Use for lightweight text extraction from the active tab.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_read",
+        "mcp_enabled": True,
+        "contract_version": "1",
+    },
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD: {
+        "id": TOOL_BROWSER_SAVE_TO_THREAD,
+        "display_name": "Browser Save To Thread",
+        "description": "Capture the active browser page as PDF and attach it to the thread.",
+        "default_prompt": "Use when the active browser page should become durable thread evidence.",
+        "mcp_server": "first_party_browser",
+        "mcp_tool": "browser_save_to_thread",
+        "mcp_enabled": True,
+        "contract_version": "1",
     },
     TOOL_NAME_WIKIPEDIA: {
         "id": TOOL_WIKIPEDIA_REFERENCE,
@@ -636,22 +775,195 @@ for _tool_name in (
 
 TOOL_FRIENDLY_CONFIG[TOOL_NAME_ASK_FOR_CLARIFICATION]["mcp_enabled"] = False
 
+# Tools used by the memory curator only — not shown in AI Prompt Settings.
+INTERNAL_TOOL_NAMES = frozenset({
+    "memory_search",
+    "memory_get",
+    "memory_prepare_change",
+    "internet_search",
+})
 
-def _grant_context_loader_prefetch_tools_from_node_catalog() -> None:
-    """Mirror node-catalog prefetch contracts so registry validation cannot drift."""
+_CATALOG_DEDUPED_TOOL_NAMES = frozenset({
+    TOOL_NAME_PUB_MED,
+    TOOL_NAME_SEMANTIC_SCHOLAR_LEGACY,
+})
 
-    from langgraph_runtime.workflows.node_catalog import CONTEXT_LOADER_PREFETCH_TOOL_CONTRACT_IDS
+BROWSER_TOOL_NAMES = frozenset({
+    TOOL_NAME_BROWSER_NAVIGATE,
+    TOOL_NAME_BROWSER_SNAPSHOT,
+    TOOL_NAME_BROWSER_ACT,
+    TOOL_NAME_BROWSER_READ,
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD,
+})
 
-    wanted = set(CONTEXT_LOADER_PREFETCH_TOOL_CONTRACT_IDS)
-    for metadata in TOOL_CONTRACT_METADATA.values():
-        contract_id = metadata.get("id")
-        if not isinstance(contract_id, str) or contract_id not in wanted:
-            continue
-        for key in ("allowed_node_types", "allowed_caller_nodes"):
-            values = list(metadata.get(key) or [])
-            if NODE_CONTEXT_LOADER not in values:
-                values.append(NODE_CONTEXT_LOADER)
-                metadata[key] = values
+_CATEGORY_SORT_ORDER = (
+    CAT_CONTEXT,
+    CAT_RETRIEVAL,
+    CAT_THREAD_CONVERSATION_HISTORY,
+    CAT_DURABLE_MEMORY,
+    CAT_THREAD_EVENTS,
+    CAT_WEB,
+    CAT_BROWSER,
+    CAT_EXTERNAL_RESEARCH,
+    CAT_CONTROL,
+    CAT_ANSWER,
+)
+
+CATEGORY_GROUP_LABELS: Dict[str, str] = {
+    CAT_CONTEXT: "Context",
+    CAT_RETRIEVAL: "Documents",
+    CAT_THREAD_CONVERSATION_HISTORY: "Conversation",
+    CAT_DURABLE_MEMORY: "Durable memory",
+    CAT_THREAD_EVENTS: "Timeline",
+    CAT_WEB: "Web",
+    CAT_BROWSER: "Browser workbench",
+    CAT_EXTERNAL_RESEARCH: "Research sources",
+    CAT_CONTROL: "Control",
+    CAT_ANSWER: "Answer",
+}
+
+TOOL_INSTRUCTION_KEY_ALIASES: Dict[str, str] = {}
+for _alias_tool_name, _alias_cfg in TOOL_FRIENDLY_CONFIG.items():
+    if not isinstance(_alias_cfg, dict):
+        continue
+    _alias_id = str(_alias_cfg.get("id", _alias_tool_name))
+    TOOL_INSTRUCTION_KEY_ALIASES[_alias_tool_name] = _alias_id
+    TOOL_INSTRUCTION_KEY_ALIASES[_alias_id] = _alias_id
 
 
-_grant_context_loader_prefetch_tools_from_node_catalog()
+def is_internal_tool(tool_name: str) -> bool:
+    return tool_name in INTERNAL_TOOL_NAMES
+
+
+def is_user_configurable_tool(tool_name: str) -> bool:
+    if tool_name in _CATALOG_DEDUPED_TOOL_NAMES or is_internal_tool(tool_name):
+        return False
+    if tool_name not in TOOL_FRIENDLY_CONFIG or tool_name not in TOOL_CONTRACT_METADATA:
+        return False
+    allowed_nodes = TOOL_CONTRACT_METADATA[tool_name].get("allowed_caller_nodes") or []
+    if allowed_nodes == ["memory_manager"]:
+        return False
+    return True
+
+
+def _catalog_sort_key(tool_name: str) -> tuple:
+    category = str(TOOL_CONTRACT_METADATA.get(tool_name, {}).get("category", ""))
+    try:
+        category_index = _CATEGORY_SORT_ORDER.index(category)
+    except ValueError:
+        category_index = len(_CATEGORY_SORT_ORDER)
+    display = str(TOOL_FRIENDLY_CONFIG.get(tool_name, {}).get("display_name", tool_name))
+    return (category_index, display.lower(), tool_name)
+
+
+def iter_user_configurable_tool_names() -> List[str]:
+    return sorted(
+        (name for name in TOOL_CONTRACT_METADATA if is_user_configurable_tool(name)),
+        key=_catalog_sort_key,
+    )
+
+
+def iter_workflow_prompt_tool_names() -> List[str]:
+    """Workflow- and chat-facing tools before web/browser gating."""
+    return list(iter_user_configurable_tool_names())
+
+
+def get_workflow_prompt_tool_names(
+    *,
+    use_web_search: bool = True,
+    use_browser_access: bool = False,
+) -> List[str]:
+    names = iter_workflow_prompt_tool_names()
+    if not use_web_search:
+        names = [name for name in names if name != TOOL_NAME_SEARCH_WEB]
+    if use_browser_access:
+        for name in BROWSER_TOOL_NAMES:
+            if name not in names:
+                names.append(name)
+    else:
+        names = [name for name in names if name not in BROWSER_TOOL_NAMES]
+    return names
+
+
+def tool_names_for_contract_id(contract_id: str) -> List[str]:
+    return sorted(
+        name
+        for name, metadata in TOOL_CONTRACT_METADATA.items()
+        if isinstance(metadata, dict) and metadata.get("id") == contract_id
+    )
+
+
+# Builtin workflow specs and Hermes exports may use MCP ids that differ from registry keys.
+WORKFLOW_TOOL_IDENTIFIER_ALIASES: Dict[str, str] = {
+    "pub_med": "pubmed",
+    "semanticscholar": "semantic_scholar",
+}
+
+
+def normalize_workflow_tool_identifier(identifier: str) -> str:
+    step = WORKFLOW_TOOL_IDENTIFIER_ALIASES.get(identifier, identifier)
+    return TOOL_INSTRUCTION_KEY_ALIASES.get(step, step)
+
+
+def is_accounted_callable_tool_identifier(identifier: str) -> bool:
+    """True when a workflow allowed_tool id maps to catalog, internal, or contract tools."""
+    name = normalize_workflow_tool_identifier(identifier)
+    if is_internal_tool(name) or is_user_configurable_tool(name):
+        return True
+    contracted = tool_names_for_contract_id(name)
+    if contracted:
+        return any(
+            is_user_configurable_tool(tool_name) or is_internal_tool(tool_name)
+            for tool_name in contracted
+        )
+    catalog_names = {entry["tool_name"] for entry in get_settings_tool_catalog_entries()}
+    return name in catalog_names
+
+
+def build_tool_catalog_entry(tool_name: str) -> Dict[str, str]:
+    cfg = TOOL_FRIENDLY_CONFIG.get(tool_name, {})
+    contract = TOOL_CONTRACT_METADATA.get(tool_name, {})
+    alias_id = str(cfg.get("id", tool_name))
+    category = str(contract.get("category", "") or "")
+    return {
+        "tool_name": tool_name,
+        "id": alias_id,
+        "display_name": str(cfg.get("display_name", alias_id.replace("_", " ").title())),
+        "description": str(cfg.get("description", "")),
+        "default_prompt": str(
+            cfg.get("default_prompt", "Use this tool when it is the most relevant retrieval path.")
+        ),
+        "category": category,
+        "group_label": CATEGORY_GROUP_LABELS.get(category, category.replace("_", " ").title()),
+    }
+
+
+def get_settings_tool_catalog_entries() -> List[Dict[str, str]]:
+    return [build_tool_catalog_entry(name) for name in iter_user_configurable_tool_names()]
+
+
+def apply_tool_instruction_key_aliases(raw: Dict[str, str]) -> Dict[str, str]:
+    merged = dict(raw)
+    for key, value in list(raw.items()):
+        canonical = TOOL_INSTRUCTION_KEY_ALIASES.get(key)
+        if canonical and canonical not in merged:
+            merged[canonical] = value
+    return merged
+
+
+def format_model_tool_inventory_section(catalog_entries: List[Dict[str, str]]) -> str:
+    lines = [
+        "## Tool Inventory",
+        "",
+        "These are the retrieval and clarification tools available in this runtime:",
+    ]
+    current_group = ""
+    for item in catalog_entries:
+        group = str(item.get("group_label") or "")
+        if group and group != current_group:
+            current_group = group
+            lines.extend(["", f"### {group}", ""])
+        lines.append(
+            f"- {item['display_name']} (tool name: `{item['tool_name']}`): {item['description']}"
+        )
+    return "\n".join(lines).strip()

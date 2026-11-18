@@ -17,6 +17,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["internal-agent-runs"])
 
 
+class DelegateChildResumeRequest(BaseModel):
+    parent_run_id: str = Field(min_length=1)
+    thread_id: str = Field(min_length=1)
+    child_run_id: str = Field(min_length=1)
+    interrupt_id: str = Field(min_length=1)
+    action: str = Field(min_length=1)
+    approval_scope: Optional[str] = None
+    approval_feedback: Optional[str] = None
+    approval_modifications: Dict[str, Any] = Field(default_factory=dict)
+    edited_payload: Optional[Dict[str, Any]] = None
+    selected_option_ids: list[str] = Field(default_factory=list)
+    client_metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class DelegateSyncRequest(BaseModel):
     parent_run_id: str = Field(min_length=1)
     thread_id: str = Field(min_length=1)
@@ -25,10 +39,15 @@ class DelegateSyncRequest(BaseModel):
     pre_fetch_bundle: Dict[str, Any] = Field(default_factory=dict)
     llm_model: Optional[str] = None
     use_web_search: Optional[bool] = None
+    use_browser_access: Optional[bool] = None
+    browser_access_mode: Optional[str] = None
     use_reranker: Optional[bool] = None
     system_role: str = ""
     custom_instructions: str = ""
     tool_instructions: Dict[str, str] = Field(default_factory=dict)
+    context_window: Optional[int] = Field(default=None, ge=256, le=2_000_000)
+    context_budget: Optional[Dict[str, float]] = None
+    inherited_tool_settings: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _validate_execution_context(
@@ -50,6 +69,7 @@ def _validate_execution_context(
         "embedding_model": context.embedding_model,
         "context_window": context.context_window,
         "use_web_search": context.use_web_search,
+        "use_browser_access": context.use_browser_access,
         "use_reranker": context.use_reranker,
         "llm_model": (context.extensions or {}).get("llm_model"),
     }
@@ -76,13 +96,54 @@ async def delegate_sync(
             llm_model=body.llm_model or context_fields.get("llm_model"),
             embedding_model=str(context_fields.get("embedding_model") or ""),
             use_web_search=body.use_web_search if body.use_web_search is not None else bool(context_fields.get("use_web_search")),
+            use_browser_access=(
+                body.use_browser_access
+                if body.use_browser_access is not None
+                else bool(context_fields.get("use_browser_access"))
+            ),
+            browser_access_mode=body.browser_access_mode,
             use_reranker=body.use_reranker if body.use_reranker is not None else context_fields.get("use_reranker"),
             system_role=body.system_role,
             custom_instructions=body.custom_instructions,
             tool_instructions=body.tool_instructions,
+            context_window=body.context_window or context_fields.get("context_window"),
+            context_budget=body.context_budget,
             mcp_execution_context_token=execution_context.strip() if execution_context else None,
+            inherited_tool_settings=body.inherited_tool_settings,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "delegate_invalid", "message": str(exc)}) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail={"code": "delegate_failed", "message": str(exc)}) from exc
+
+
+@router.post("/agent-runs/delegate/resume-child")
+async def delegate_child_resume(
+    body: DelegateChildResumeRequest,
+    execution_context: str | None = Header(default=None, alias="X-AskPDF-Execution-Context"),
+):
+    _validate_execution_context(
+        execution_context,
+        parent_run_id=body.parent_run_id,
+        thread_id=body.thread_id,
+    )
+    service = AgentRunService()
+    try:
+        return await service.run_delegate_child_resume(
+            parent_run_id=body.parent_run_id,
+            thread_id=body.thread_id,
+            child_run_id=body.child_run_id,
+            interrupt_id=body.interrupt_id,
+            action=body.action,
+            approval_scope=body.approval_scope,
+            approval_feedback=body.approval_feedback,
+            approval_modifications=body.approval_modifications,
+            edited_payload=body.edited_payload,
+            selected_option_ids=body.selected_option_ids,
+            client_metadata=body.client_metadata,
+            mcp_execution_context_token=execution_context.strip() if execution_context else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "delegate_child_resume_invalid", "message": str(exc)}) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail={"code": "delegate_child_resume_failed", "message": str(exc)}) from exc

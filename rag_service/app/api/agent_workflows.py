@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tool_registry import tool_contracts_by_id
+from app.product_orchestration.delegation_context import inherited_context_from_run_metadata
 from app.product_orchestration.repository import (
     AgentWorkflowRepository,
     AgentRunInterruptError,
@@ -23,6 +24,7 @@ from app.product_orchestration.execution_stream import AgentExecutionEventSink, 
 from app.product_orchestration.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
+    workflow_allows_auto_limits_override,
     workflow_is_chat_eligible,
     workflow_supports_replans,
 )
@@ -213,6 +215,9 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
         "is_builtin": workflow.is_builtin,
         "is_default": builtin_key == default_agent_workflow_key(),
         "supports_replans": workflow_supports_replans(spec),
+        "supports_auto_limits_override": workflow_allows_auto_limits_override(
+            {**spec, "workflow_id": spec.get("workflow_id") or workflow.id}
+        ),
         "supports_long_running_tasks": bool(
             ((spec.get("runtime") or {}).get("features") or {}).get("supports_long_running_tasks")
         ),
@@ -375,6 +380,9 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "debug_trace_failure": _debug_trace_failure_for_response(run),
         "run_kind": (run.run_metadata_json or {}).get("run_kind"),
         "builder_session_id": (run.run_metadata_json or {}).get("builder_session_id"),
+        "inherited_context": inherited_context_from_run_metadata(
+            run.run_metadata_json if isinstance(run.run_metadata_json, dict) else None
+        ),
         "final_output": (run.debug_trace_json or {}).get("final_output") if isinstance(run.debug_trace_json, dict) else None,
         "observability": {
             "event_projection_version": 2,
@@ -462,6 +470,9 @@ def _run_summary_payload(run) -> Dict[str, Any]:
         "workflow_id": run.workflow_id,
         "task_id": run.task_id,
         "parent_run_id": run.parent_run_id,
+        "inherited_context": inherited_context_from_run_metadata(
+            run.run_metadata_json if isinstance(run.run_metadata_json, dict) else None
+        ),
         "task_attempt": run.task_attempt,
         "status": run.status,
         "pending_interrupt": _pending_interrupt_payload(run),
@@ -1334,6 +1345,30 @@ async def list_thread_agent_runs(
     }
 
 
+@router.get("/agent-runs/{run_id}/delegations")
+async def list_agent_run_delegations(
+    run_id: str,
+    thread_id: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
+    repo = AgentWorkflowRepository()
+    parent = await repo.get_run(run_id)
+    if not parent or parent.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
+    runs = await repo.list_runs_for_thread(thread_id, limit=limit * 4)
+    children = [run for run in runs if str(getattr(run, "parent_run_id", "") or "") == run_id][:limit]
+    return {
+        "parent_run_id": run_id,
+        "thread_id": thread_id,
+        "delegations": [_run_summary_payload(run) for run in children],
+    }
+
+
 @router.get("/agent-runs/{run_id}")
 async def get_agent_run(
     run_id: str,
@@ -1466,11 +1501,18 @@ async def resume_agent_run(
                 # execution result, but the final resume result must expose
                 # the product-level `agent_run` object so clients do not read
                 # `response.agent_run.status` from an incompatible payload.
+                from app.services.agent_runtime_projection import read_terminal_chat_answer_for_run
+
+                try:
+                    resume_answer = await read_terminal_chat_answer_for_run(result.run)
+                except Exception:
+                    resume_answer = ""
                 resume_response = {
                     "agent_run": compact_run,
                     "interrupt": result.interrupt,
                     "outcome": result.outcome,
                     "duplicate": result.duplicate,
+                    **({"answer": resume_answer} if resume_answer else {}),
                 }
                 await sink.queue.put({
                     "event": "__result__",
@@ -1480,6 +1522,7 @@ async def resume_agent_run(
                         "interrupt": result.interrupt,
                         "outcome": result.outcome,
                         "duplicate": result.duplicate,
+                        **({"answer": resume_answer} if resume_answer else {}),
                     },
                 })
             except AgentRunInterruptError as exc:
@@ -1559,11 +1602,20 @@ async def resume_agent_run(
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
+    from app.services.agent_runtime_projection import read_terminal_chat_answer_for_run
+
     repo = AgentWorkflowRepository()
     turns = await repo.list_chat_turns_for_run(result.run.id)
-    return {
+    try:
+        resume_answer = await read_terminal_chat_answer_for_run(result.run)
+    except Exception:
+        resume_answer = ""
+    payload = {
         "agent_run": await _run_payload_for_read(result.run, turns),
         "interrupt": result.interrupt,
         "outcome": result.outcome,
         "duplicate": result.duplicate,
     }
+    if resume_answer:
+        payload["answer"] = resume_answer
+    return payload

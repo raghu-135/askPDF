@@ -12,8 +12,11 @@ import {
   Chip,
 } from '@mui/material';
 import ReplayIcon from '@mui/icons-material/Replay';
-import { AgentWorkflow, PromptToolDefinition } from '../lib/api';
+import { AgentWorkflow, AutoLimitsSettings, PromptToolDefinition } from '../lib/api';
 import { ConversationMarkdown } from './conversation/ConversationMarkdown';
+import ThreadAdvancedSettingsSection, {
+  type ThreadAdvancedSettingsValue,
+} from './ThreadAdvancedSettingsSection';
 import { selectFieldVariant } from '../theme';
 
 export interface ChatSettingsFormProps {
@@ -36,6 +39,9 @@ export interface ChatSettingsFormProps {
   toolCatalog: PromptToolDefinition[];
   effectiveToolInstructions: Record<string, string>;
   promptPreview: string;
+  autoLimits: AutoLimitsSettings | null;
+  defaultAutoLimits: AutoLimitsSettings | null;
+  onAutoLimitsChange: (value: AutoLimitsSettings) => void;
   onReplansChange: (value: number) => void;
   onRerankerChange: (checked: boolean) => void;
   onHitlCanvasPublishChange: (checked: boolean) => void;
@@ -52,6 +58,12 @@ export interface ChatSettingsFormProps {
   onResetSystemRole: () => void;
   onResetToolInstruction: (toolId: string) => void;
   onResetCustomInstructions: () => void;
+  advancedSettings?: ThreadAdvancedSettingsValue | null;
+  advancedDefaults?: ThreadAdvancedSettingsValue | null;
+  advancedFieldSpecs?: NonNullable<import('../lib/api').PromptDefaults['advanced_field_specs']>;
+  onAdvancedChange?: (value: ThreadAdvancedSettingsValue) => void;
+  onAdvancedResetField?: (fieldKey: string) => void;
+  onAdvancedResetSection?: () => void;
 }
 
 const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
@@ -73,6 +85,9 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
   toolCatalog,
   effectiveToolInstructions,
   promptPreview,
+  autoLimits,
+  defaultAutoLimits,
+  onAutoLimitsChange,
   onReplansChange,
   onRerankerChange,
   onHitlCanvasPublishChange,
@@ -89,8 +104,23 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
   onResetSystemRole,
   onResetToolInstruction,
   onResetCustomInstructions,
+  advancedSettings,
+  advancedDefaults,
+  advancedFieldSpecs,
+  onAdvancedChange,
+  onAdvancedResetField,
+  onAdvancedResetSection,
 }) => {
   const replansEnabled = Boolean(agentWorkflows.find((workflow) => workflow.id === agentWorkflowId)?.supports_replans);
+  const autoLimitsEnabled = Boolean(
+    agentWorkflows.find((workflow) => workflow.id === agentWorkflowId)?.supports_auto_limits_override,
+  );
+  const clampAutoLimits = (next: AutoLimitsSettings): AutoLimitsSettings => ({
+    ...next,
+    max_total_visits: Math.max(4, Math.min(48, next.max_total_visits)),
+    max_interrupts_per_run: Math.max(1, Math.min(20, next.max_interrupts_per_run)),
+    max_delegates_per_turn: Math.max(1, Math.min(3, next.max_delegates_per_turn)),
+  });
   const selectedWorkflowListed = agentWorkflows.some((pattern) => pattern.id === agentWorkflowId);
 
   return (
@@ -165,6 +195,87 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
           />
         ) : (
           <Typography variant="caption" color="error">Replan limit not loaded from server.</Typography>
+        )
+      ) : null}
+      {autoLimitsEnabled ? (
+        defaultAutoLimits && autoLimits ? (
+          <Box>
+            <Typography variant="subtitle2" gutterBottom>Auto orchestrator limits</Typography>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+              Caps visits, interrupts, and child delegations for the Auto workflow on this thread.
+            </Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1fr' }, gap: 1.5 }}>
+              <TextField
+                label="Max visits"
+                type="number"
+                value={autoLimits.max_total_visits}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  onAutoLimitsChange(clampAutoLimits({
+                    ...autoLimits,
+                    max_total_visits: Number.isNaN(parsed) ? autoLimits.max_total_visits : parsed,
+                  }));
+                }}
+                slotProps={{ htmlInput: { min: 4, max: 48 } }}
+                size="small"
+              />
+              <TextField
+                label="Max interrupts"
+                type="number"
+                value={autoLimits.max_interrupts_per_run}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  onAutoLimitsChange(clampAutoLimits({
+                    ...autoLimits,
+                    max_interrupts_per_run: Number.isNaN(parsed) ? autoLimits.max_interrupts_per_run : parsed,
+                  }));
+                }}
+                slotProps={{ htmlInput: { min: 1, max: 20 } }}
+                size="small"
+              />
+              <TextField
+                label="Max delegates / turn"
+                type="number"
+                value={autoLimits.max_delegates_per_turn}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  onAutoLimitsChange(clampAutoLimits({
+                    ...autoLimits,
+                    max_delegates_per_turn: Number.isNaN(parsed) ? autoLimits.max_delegates_per_turn : parsed,
+                  }));
+                }}
+                slotProps={{ htmlInput: { min: 1, max: 3 } }}
+                size="small"
+              />
+            </Box>
+            <FormControlLabel
+              sx={{ mt: 1, display: 'block' }}
+              control={(
+                <Switch
+                  checked={autoLimits.require_plan_approval_on_complex}
+                  onChange={(event) => onAutoLimitsChange({
+                    ...autoLimits,
+                    require_plan_approval_on_complex: event.target.checked,
+                  })}
+                />
+              )}
+              label="Require plan approval for complex delegates"
+            />
+            <FormControlLabel
+              control={(
+                <Switch
+                  checked={autoLimits.require_plan_approval_all}
+                  onChange={(event) => onAutoLimitsChange({
+                    ...autoLimits,
+                    require_plan_approval_all: event.target.checked,
+                  })}
+                />
+              )}
+              label="Require plan approval for every delegate"
+            />
+          </Box>
+        ) : (
+          <Typography variant="caption" color="error">Auto limits defaults not loaded from server.</Typography>
         )
       ) : null}
       <Divider />
@@ -274,31 +385,60 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
       <Typography variant="body2" color="text.secondary">
         These are the tools available in the app. You can configure how the assistant should use each one.
       </Typography>
-      {toolCatalog.map((toolDef) => (
-        <Box key={toolDef.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-          <TextField
-            fullWidth
-            label={toolDef.display_name}
-            value={effectiveToolInstructions[toolDef.id] || ''}
-            onChange={(e) =>
-              onToolInstructionChange(toolDef.id, e.target.value)
-            }
-            multiline
-            minRows={2}
-            maxRows={6}
-            helperText={toolDef.description}
-          />
-          <Tooltip title={`Reset ${toolDef.display_name} to default`}>
-            <IconButton
-              size="small"
-              sx={{ mt: 1 }}
-              onClick={() => onResetToolInstruction(toolDef.id)}
-            >
-              <ReplayIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      ))}
+      {(() => {
+        const groups: { label: string; tools: typeof toolCatalog }[] = [];
+        let current: (typeof groups)[number] | null = null;
+        for (const toolDef of toolCatalog) {
+          const label = toolDef.group_label || 'Tools';
+          if (!current || current.label !== label) {
+            current = { label, tools: [] };
+            groups.push(current);
+          }
+          current.tools.push(toolDef);
+        }
+        return groups.map((group) => (
+          <Box key={group.label}>
+            <Typography variant="subtitle2" sx={{ mt: 1, mb: 0.5 }}>
+              {group.label}
+            </Typography>
+            {group.tools.map((toolDef) => (
+              <Box key={toolDef.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+                <TextField
+                  fullWidth
+                  label={toolDef.display_name}
+                  value={effectiveToolInstructions[toolDef.id] || ''}
+                  onChange={(e) =>
+                    onToolInstructionChange(toolDef.id, e.target.value)
+                  }
+                  multiline
+                  minRows={2}
+                  maxRows={6}
+                  helperText={toolDef.description}
+                />
+                <Tooltip title={`Reset ${toolDef.display_name} to default`}>
+                  <IconButton
+                    size="small"
+                    sx={{ mt: 1 }}
+                    onClick={() => onResetToolInstruction(toolDef.id)}
+                  >
+                    <ReplayIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            ))}
+          </Box>
+        ));
+      })()}
+      {advancedSettings && advancedDefaults && advancedFieldSpecs && onAdvancedChange && onAdvancedResetField && onAdvancedResetSection ? (
+        <ThreadAdvancedSettingsSection
+          defaults={advancedDefaults}
+          value={advancedSettings}
+          fieldSpecs={advancedFieldSpecs}
+          onChange={onAdvancedChange}
+          onResetField={onAdvancedResetField}
+          onResetSection={onAdvancedResetSection}
+        />
+      ) : null}
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
         <TextField
           fullWidth

@@ -22,7 +22,7 @@ import traceback
 from typing import Any, Dict, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from app.db import (
@@ -81,6 +81,15 @@ router = APIRouter(tags=["files"])
 
 INDEXING_IN_PROGRESS = "in_progress"
 FILE_CHUNKS_MAX_LIMIT = 500
+
+
+async def _require_json_body(request: Request) -> None:
+    content_type = (request.headers.get("content-type") or "").lower()
+    if content_type.startswith("multipart/"):
+        raise HTTPException(
+            status_code=422,
+            detail="Use the /files/upload endpoint for PDF uploads; this route expects JSON (file_hash, file_name).",
+        )
 
 
 async def _require_ready_thread(thread_id: str):
@@ -318,7 +327,7 @@ async def upload_pdf_endpoint(
     }
 
 
-@router.post("/threads/{thread_id}/files")
+@router.post("/threads/{thread_id}/files", dependencies=[Depends(_require_json_body)])
 async def add_file_to_thread_endpoint(
     thread_id: str, req: ThreadFileRequest, background_tasks: BackgroundTasks
 ):
@@ -879,7 +888,7 @@ async def upload_project_pdf_endpoint(
     }
 
 
-@router.post("/projects/{project_id}/files")
+@router.post("/projects/{project_id}/files", dependencies=[Depends(_require_json_body)])
 async def promote_file_to_project_endpoint(
     project_id: str,
     req: ThreadFileRequest,

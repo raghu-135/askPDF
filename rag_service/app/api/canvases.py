@@ -41,8 +41,12 @@ async def list_thread_canvases(
 
 
 @router.get("/threads/{thread_id}/canvases/{canvas_id}")
-async def get_thread_canvas(thread_id: str, canvas_id: str):
+async def get_thread_canvas(
+    thread_id: str,
+    canvas_id: str,
+    resolve_current: bool = Query(default=True),
+):
     try:
-        return await _service.get(thread_id, canvas_id)
+        return await _service.get(thread_id, canvas_id, resolve_current=resolve_current)
     except (CanvasNotFoundError, CanvasValidationError) as exc:
         raise _http_error(exc) from exc

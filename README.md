@@ -31,8 +31,8 @@ Set up the environment and start the stack:
 
 Open http://localhost:3000.
 
-`.env.example` sets `COMPOSE_PROFILES=hermes`, so Hermes starts with the
-default stack. Clear that variable to run without Hermes.
+`.env.example` sets `COMPOSE_PROFILES=hermes`, so the product stack and
+Hermes start together. Drop `hermes` from that list to omit Hermes services.
 
 ### LLM provider authentication
 

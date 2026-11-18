@@ -17,7 +17,7 @@ from app.services.memory_policy import (
     DEFAULT_THREAD_MEMORY_SETTINGS,
     normalize_thread_memory_settings,
 )
-from app.services.embedding_tokenizer_registry import is_registered_embedding_model
+from app.services.embedding_model_catalog import embedding_configs_for_ids
 from runtime_protocol.llm_provider import llm_provider_configuration, openai_sdk_default_headers
 
 try:
@@ -168,11 +168,13 @@ RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window
 # Chars per token estimate
 CHARS_PER_TOKEN = 4
 
+from app.models.auto_limits import default_auto_limits, merge_auto_limits
 from runtime_protocol.context_budget import (
     compute_prefetch_budget as _compute_prefetch_budget,
     load_context_budget_settings,
     resolve_context_budget,
 )
+from runtime_protocol.thread_advanced_settings import resolve_thread_advanced_settings
 
 
 def compute_prefetch_budget(context_window: int, budget_overrides: dict | None = None) -> dict:
@@ -199,6 +201,9 @@ def default_thread_settings():
         "use_reranker": False,
         "agent_workflow": {"workflow_id": default_agent_workflow_key()},
         "memory": dict(DEFAULT_THREAD_MEMORY_SETTINGS),
+        "auto_limits": default_auto_limits(),
+        "context_budget": {},
+        "coverage_iterations": {},
     }
 
 
@@ -223,6 +228,13 @@ def merge_thread_settings(overrides=None):
     else:
         merged["agent_workflow"] = {"workflow_id": default_agent_workflow_key()}
     merged["memory"] = normalize_thread_memory_settings(overrides)
+    merged["auto_limits"] = merge_auto_limits(
+        overrides.get("auto_limits") if isinstance(overrides, dict) else None
+    )
+    advanced = resolve_thread_advanced_settings(overrides if isinstance(overrides, dict) else {})
+    merged["context_window"] = advanced["context_window"]
+    merged["context_budget"] = advanced["context_budget"]
+    merged["coverage_iterations"] = advanced["coverage_iterations"]
     return merged
 
 
@@ -271,8 +283,12 @@ async def fetch_available_models():
     try:
         if not llm_api_url:
             # Only local models available
+            configs = embedding_configs_for_ids([], local_ids=LOCAL_EMBEDDING_MODELS)
             return {
-                "embedding_models": LOCAL_EMBEDDING_MODELS,
+                "embedding_models": [],
+                "local_embedding_models": LOCAL_EMBEDDING_MODELS,
+                "all_embedding_models": LOCAL_EMBEDDING_MODELS,
+                "embedding_model_configs": configs,
                 "llm_models": [],
                 "all_models": LOCAL_EMBEDDING_MODELS,
                 "not_embedding_models": [],
@@ -301,7 +317,6 @@ async def fetch_available_models():
                     model_id
                     for model_id in sorted(provider_embedding_ids)
                     if model_id not in LOCAL_EMBEDDING_MODELS
-                    and is_registered_embedding_model(model_id)
                 ]
                 llm_models = [m for m in model_ids if is_llm_model_by_keyword(m)]
                 not_embedding_models = [m for m in model_ids if m not in remote_embedding_models and m not in LOCAL_EMBEDDING_MODELS]
@@ -311,10 +326,15 @@ async def fetch_available_models():
                 all_embedding_models = LOCAL_EMBEDDING_MODELS + remote_embedding_models
                 all_models = LOCAL_EMBEDDING_MODELS + [m for m in model_ids if m not in LOCAL_EMBEDDING_MODELS]
                 
+                configs = embedding_configs_for_ids(
+                    remote_embedding_models,
+                    local_ids=LOCAL_EMBEDDING_MODELS,
+                )
                 result = {
                     "embedding_models": remote_embedding_models,
                     "local_embedding_models": LOCAL_EMBEDDING_MODELS,
                     "all_embedding_models": all_embedding_models,
+                    "embedding_model_configs": configs,
                     "llm_models": llm_models,
                     "all_models": all_models,
                     "not_embedding_models": not_embedding_models,
@@ -330,10 +350,12 @@ async def fetch_available_models():
         error_msg = f"Error fetching models from LLM API/server: {str(e)}"
         logger.error(error_msg)
         # Fall back to local-only list
+        configs = embedding_configs_for_ids([], local_ids=LOCAL_EMBEDDING_MODELS)
         return {
             "embedding_models": [],  # No remote models available
             "local_embedding_models": LOCAL_EMBEDDING_MODELS,
             "all_embedding_models": LOCAL_EMBEDDING_MODELS,
+            "embedding_model_configs": configs,
             "llm_models": [],
             "all_models": LOCAL_EMBEDDING_MODELS,
             "not_embedding_models": [],
@@ -436,6 +458,17 @@ async def embed_query(model_name: str, text: str) -> List[float]:
         from app.services.embedding_tokenizer import resolve_embedding_tokenizer
         tokenizer_config, _ = resolve_embedding_tokenizer(model_name)
         return await model.aembed_query(tokenizer_config.format_query_input(text))
+    finally:
+        await close_model_client(model)
+
+
+async def embed_document(model_name: str, text: str) -> List[float]:
+    """Embed passage-style content using catalog document prefixes."""
+    model = get_embedding_model(model_name, own_async_transport=True)
+    try:
+        from app.services.embedding_tokenizer import resolve_embedding_tokenizer
+        tokenizer_config, _ = resolve_embedding_tokenizer(model_name)
+        return await model.aembed_query(tokenizer_config.format_document_input(text))
     finally:
         await close_model_client(model)
 

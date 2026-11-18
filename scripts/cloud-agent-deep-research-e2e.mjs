@@ -110,14 +110,14 @@ if (hermesRetry && process.env.ASKPDF_E2E_INDUCE_HERMES_FAILURE !== '0') {
   execSync([
     'docker', 'compose',
     '-f', compose('docker-compose.yml'),
-    '-f', compose('docker-compose.vm-hostgateway.override.yml'),
+    '-f', compose('docker-compose.cloud-agent.override.yml'),
     'stop', 'hermes', 'hermes-runtime',
   ].join(' '), { cwd: repoRoot, stdio: 'ignore' });
   task = await pollTask(taskId, thread, { timeoutMs: 120_000 });
   execSync([
     'docker', 'compose',
     '-f', compose('docker-compose.yml'),
-    '-f', compose('docker-compose.vm-hostgateway.override.yml'),
+    '-f', compose('docker-compose.cloud-agent.override.yml'),
     'start', 'hermes', 'hermes-runtime',
   ].join(' '), { cwd: repoRoot, stdio: 'ignore' });
   await new Promise((r) => setTimeout(r, 12_000));

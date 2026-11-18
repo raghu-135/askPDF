@@ -28,7 +28,12 @@ from app.services.agent_task_canvas_chat import (
     ensure_deep_task_canvas_chat_turn,
     resolve_task_canvas_supersedes_id,
 )
-from app.services.canvas_service import CanvasService, CanvasValidationError, resolve_publish_supersedes_id
+from app.services.canvas_service import (
+    CanvasService,
+    CanvasValidationError,
+    resolve_publish_supersedes_id,
+    resolve_quoted_canvas_supersedes_id,
+)
 from app.tools.context import ToolInvocationContext
 
 
@@ -81,6 +86,36 @@ async def _thread_embedding_model(thread_id: str) -> str | None:
     return model or None
 
 
+async def _resolve_supersedes_id_for_publish(
+    service: CanvasService,
+    *,
+    context: ToolInvocationContext,
+    request: PublishCanvasRequest,
+    user_question: str,
+    task_id: str | None,
+) -> tuple[str | None, list[str]]:
+    warnings: list[str] = []
+    resolved = request.supersedes_id
+    quoted: list[str] = []
+    if not resolved and user_question and context.thread_id:
+        resolved, quoted = await resolve_quoted_canvas_supersedes_id(
+            service._canvases,
+            context.thread_id,
+            user_question,
+        )
+        warnings.extend(quoted)
+    if not resolved and task_id and context.thread_id:
+        resolved = await resolve_task_canvas_supersedes_id(context.thread_id, task_id)
+    if context.thread_id:
+        resolved, more = await resolve_publish_supersedes_id(
+            service._canvases,
+            context.thread_id,
+            resolved,
+        )
+        warnings.extend(more)
+    return resolved, warnings
+
+
 async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvocationContext):
     started = tool_started()
     if not context.thread_id:
@@ -96,6 +131,34 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
     thread_file_hashes = await _thread_file_hashes(context.thread_id)
     embedding_model = context.embedding_model or await _thread_embedding_model(context.thread_id)
     spec: CanvasSpec | None = None
+    service = CanvasService()
+    extensions = dict(context.extensions or {})
+    user_question = str(extensions.get("user_question") or "").strip()
+    task_id: str | None = None
+    if context.run_id:
+        async with async_session_maker() as session:
+            run = (
+                await session.execute(select(AgentRun).where(AgentRun.id == context.run_id))
+            ).scalar_one_or_none()
+        if run is not None and run.task_id:
+            task_id = str(run.task_id)
+    try:
+        resolved_supersedes_id, supersedes_warnings = await _resolve_supersedes_id_for_publish(
+            service,
+            context=context,
+            request=request,
+            user_question=user_question,
+            task_id=task_id,
+        )
+    except CanvasValidationError as exc:
+        return make_tool_error_result(
+            tool_name="publish_canvas",
+            error=exc,
+            context=context,
+            started=started,
+            code="publish_canvas_persist_failed",
+            user_message=str(exc),
+        )
 
     if request.spec is not None:
         try:
@@ -155,35 +218,6 @@ async def invoke_publish_canvas(request: PublishCanvasRequest, context: ToolInvo
             user_message=str(exc),
         )
 
-    service = CanvasService()
-    supersedes_warnings: list[str] = []
-    task_id: str | None = None
-    if context.run_id:
-        async with async_session_maker() as session:
-            async with session.begin():
-                run = (
-                    await session.execute(select(AgentRun).where(AgentRun.id == context.run_id))
-                ).scalar_one_or_none()
-        if run is not None and run.task_id:
-            task_id = str(run.task_id)
-    resolved_supersedes_id = request.supersedes_id
-    if not resolved_supersedes_id and task_id and context.thread_id:
-        resolved_supersedes_id = await resolve_task_canvas_supersedes_id(context.thread_id, task_id)
-    try:
-        resolved_supersedes_id, supersedes_warnings = await resolve_publish_supersedes_id(
-            service._canvases,
-            context.thread_id,
-            resolved_supersedes_id,
-        )
-    except CanvasValidationError as exc:
-        return make_tool_error_result(
-            tool_name="publish_canvas",
-            error=exc,
-            context=context,
-            started=started,
-            code="publish_canvas_persist_failed",
-            user_message=str(exc),
-        )
     try:
         created = await service.create(
             context.thread_id,

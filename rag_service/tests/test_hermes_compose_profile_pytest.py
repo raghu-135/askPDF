@@ -14,7 +14,19 @@ def _compose(name: str) -> dict:
         pass
 
     ComposeLoader.add_constructor("!reset", lambda loader, node: loader.construct_sequence(node))
-    return yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
+    def _compose_override(loader, node):
+        if node.id == "sequence":
+            return loader.construct_sequence(node)
+        return loader.construct_mapping(node)
+
+    ComposeLoader.add_constructor("!override", _compose_override)
+    doc = yaml.load((REPOSITORY_ROOT / name).read_text(), Loader=ComposeLoader)
+    if name == "docker-compose.yml":
+        integration = REPOSITORY_ROOT / "docker-compose.integration.yml"
+        if integration.exists():
+            integration_doc = yaml.load(integration.read_text(), Loader=ComposeLoader)
+            doc.setdefault("services", {}).update(integration_doc.get("services", {}))
+    return doc
 
 
 def test_example_environment_enables_hermes_with_distinct_placeholder_tokens():
@@ -49,8 +61,26 @@ def test_gateway_overlay_dockerfile_installs_patch_via_site_packages_pth():
     assert "/opt/askpdf-pylib" in dockerfile
 
 
+def test_real_hermes_gateway_uses_built_upstream_service():
+    services = _compose("docker-compose.yml")["services"]
+    assert services["hermes-real"]["build"]["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream-real"
+    assert (
+        services["hermes-real"]["depends_on"]["hermes-upstream-real"]["condition"] == "service_completed_successfully"
+    )
+
+
 def test_main_compose_keeps_pinned_real_hermes_opt_in():
     services = _compose("docker-compose.yml")["services"]
+    for name in (
+        "frontend",
+        "rag-service",
+        "langgraph-runtime",
+        "env-secrets",
+        "postgresql",
+        "weaviate",
+        "browser-capture",
+    ):
+        assert "profiles" not in services[name]
     hermes = services["hermes"]
     adapter = services["hermes-runtime"]
     assert hermes["profiles"] == ["hermes"]
@@ -59,7 +89,11 @@ def test_main_compose_keeps_pinned_real_hermes_opt_in():
     assert services["hermes-config-init"]["profiles"] == ["hermes"]
     assert hermes["build"]["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
     assert hermes["build"]["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream"
-    assert "${HERMES_UPSTREAM_REVISION:?" in services["hermes-upstream"]["build"]["context"]
+    upstream = services["hermes-upstream"]
+    assert upstream["build"]["context"].startswith("https://github.com/NousResearch/hermes-agent.git#")
+    assert "${HERMES_UPSTREAM_REVISION:?" in upstream["build"]["context"]
+    assert upstream["entrypoint"] == ["/bin/true"]
+    assert hermes["depends_on"]["hermes-upstream"]["condition"] == "service_completed_successfully"
     assert hermes["healthcheck"]["test"][-1].endswith("/health")
     assert "ASKPDF_HERMES_COMPAT_ENABLED=1" in set(hermes["environment"])
     assert "LLM_API_URL=${LLM_API_URL:?LLM_API_URL must be set in .env}" in set(hermes["environment"])
@@ -113,7 +147,7 @@ def test_main_compose_generates_service_secrets_before_app_start():
 
 
 def test_dev_hermes_runtime_does_not_inherit_control_plane_mcp_transport():
-    services = _compose("docker-compose.dev.yml")["services"]
+    services = _compose("docker-compose.cloud-agent.override.yml")["services"]
     assert services["hermes-runtime"]["environment"]["MCP_TRANSPORT"] == "loopback_http"
     assert services["hermes-runtime"]["environment"]["MCP_LOOPBACK_URL"] == "http://rag-service:8000/internal/mcp/"
 
@@ -131,7 +165,7 @@ def test_hermes_bootstrap_has_explicit_complete_environment():
 
 
 def test_runtime_integration_bootstrap_allowlists_provider_credential():
-    bootstrap = _compose("docker-compose.runtime-integration.yml")["services"]["hermes-config-init"]
+    bootstrap = _compose("docker-compose.yml")["services"]["integration-hermes-config-init"]
     assert "OPENAI_API_KEY" in bootstrap["environment"]
     assert "LLM_API_URL" in bootstrap["environment"]
 
@@ -141,7 +175,10 @@ def test_pinned_contract_copies_match_authoritative_module():
 
     root = REPOSITORY_ROOT
     assert HERMES_REVISION in (root / "docker-compose.yml").read_text()
-    assert HERMES_REVISION in (root / "docker-compose.hermes-smoke.yml").read_text()
+    assert HERMES_REVISION in (root / "docker-compose.yml").read_text()
+    assert 'profiles: ["real-hermes"]' in (root / "docker-compose.yml").read_text() or "real-hermes" in (
+        root / "docker-compose.yml"
+    ).read_text()
     assert HERMES_REVISION in (root / "hermes_fake/fixtures/run_events.json").read_text()
     assert f"_config_version: {HERMES_CONFIG_SCHEMA_VERSION}" in (root / "hermes_runtime/config.yaml").read_text()
 
@@ -158,33 +195,34 @@ def test_control_plane_and_gateway_use_one_pinned_contract():
 
 
 def test_runtime_integration_compose_uses_the_same_pinned_real_hermes():
-    compose = _compose("docker-compose.runtime-integration.yml")
+    compose = _compose("docker-compose.yml")
     assert "hermes-fake" not in compose["services"]
-    hermes_build = compose["services"]["hermes"]["build"]
+    hermes_build = compose["services"]["integration-hermes"]["build"]
     assert hermes_build["dockerfile"] == "hermes_runtime/Dockerfile.gateway"
     assert hermes_build["additional_contexts"]["hermes-upstream"] == "service:hermes-upstream"
-    assert compose["services"]["hermes-upstream"]["build"]["context"].endswith(
-        "#2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
+    assert (
+        compose["services"]["integration-hermes"]["depends_on"]["hermes-upstream"]["condition"]
+        == "service_completed_successfully"
     )
-    assert compose["services"]["hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"
-    assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["hermes"]["volumes"]
-    assert "./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro" in compose["services"]["hermes"]["volumes"]
-    assert compose["services"]["hermes"]["environment"]["PYTHONPATH"] == "/opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib"
-    assert compose["services"]["hermes"]["depends_on"]["rag-service"]["condition"] == "service_healthy"
-    control_plane = compose["services"]["rag-service"]
+    assert compose["services"]["integration-hermes"]["environment"]["ASKPDF_HERMES_COMPAT_ENABLED"] == "1"
+    assert "./hermes_runtime/hermes_pinned_patch:/opt/askpdf-hermes-pinned-patch:ro" in compose["services"]["integration-hermes"]["volumes"]
+    assert "./runtime_protocol:/opt/askpdf-pylib/runtime_protocol:ro" in compose["services"]["integration-hermes"]["volumes"]
+    assert compose["services"]["integration-hermes"]["environment"]["PYTHONPATH"] == "/opt/askpdf-hermes-pinned-patch:/opt/askpdf-pylib"
+    assert compose["services"]["integration-hermes"]["depends_on"]["integration-rag-service"]["condition"] == "service_started"
+    control_plane = compose["services"]["integration-rag-service"]
     assert control_plane["environment"]["HERMES_RUNTIME_URL"] == "http://hermes-runtime:8200"
     assert control_plane["environment"]["ASKPDF_MCP_REQUIRED"] == "true"
-    service = compose["services"]["hermes-runtime"]
+    service = compose["services"]["integration-hermes-runtime"]
     assert service["environment"]["HERMES_API_URL"] == "http://hermes:8642"
     assert service["environment"]["ASKPDF_MCP_REQUIRED"] == "true"
-    assert service["depends_on"]["rag-service"]["condition"] == "service_healthy"
+    assert service["depends_on"]["integration-rag-service"]["condition"] == "service_started"
     assert service["healthcheck"]["test"][-1].endswith("/readyz")
     assert "HERMES_RUNTIME_TOKEN" in service["environment"]
     assert "API_SERVER_KEY" not in service["environment"]
 
 
 def test_control_plane_test_runner_does_not_inherit_ci_loopback_mcp():
-    environment = _compose("docker-compose.test.yml")["services"]["test-runner"]["environment"]
+    environment = _compose("docker-compose.yml")["services"]["test-runner"]["environment"]
     assert "MCP_TRANSPORT=in_process" in environment
     assert "PYTHONPATH=/workspace:/app" in environment
     assert "MCP_LOOPBACK_URL=http://127.0.0.1:8000/internal/mcp/" in environment
@@ -220,6 +258,32 @@ def test_ci_environment_includes_control_plane_startup_settings():
         "MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE": "4",
         "WEB_SEARCH_ITERATION_BONUS": "2",
     }.items() <= values.items()
+
+
+def _compose_services_for_profiles(active_profiles: set[str]) -> list[str]:
+    """Mirror Compose profile selection without invoking the Docker CLI in test-runner."""
+    services = _compose("docker-compose.yml")["services"]
+    enabled: list[str] = []
+    for name, service in services.items():
+        profiles = service.get("profiles")
+        if not profiles:
+            enabled.append(name)
+        elif active_profiles.intersection(profiles):
+            enabled.append(name)
+    return enabled
+
+
+def test_compose_service_counts_by_profile():
+    assert len(_compose_services_for_profiles(set())) == 7
+    assert len(_compose_services_for_profiles({"hermes"})) == 11
+    assert len(_compose_services_for_profiles({"test"})) == 12
+    assert len(_compose_services_for_profiles({"integration"})) == 18
+
+
+def test_rag_service_image_is_shared_across_compose_builds():
+    services = _compose("docker-compose.yml")["services"]
+    assert services["rag-service"]["image"] == "askpdf-rag-service"
+    assert services["integration-rag-service"]["image"] == "askpdf-rag-service"
 
 
 def test_main_compose_does_not_mount_the_project_environment_into_hermes():

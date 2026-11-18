@@ -180,6 +180,7 @@ const PdfUploader = React.memo(function PdfUploader({
     <>
       <input
         id={inputId}
+        data-testid="pdf-upload-input"
         type="file"
         accept="application/pdf"
         onChange={handleChange}

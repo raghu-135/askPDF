@@ -11,18 +11,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY rag_service/requirements.txt requirements.txt
 COPY rag_service/requirements-dev.txt requirements-dev.txt
 RUN pip install -r requirements-dev.txt
-RUN python -m spacy download en_core_web_sm
 RUN mkdir -p /models/hf
-ARG DOWNLOAD_LOCAL_MODELS=true
-RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
-      python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); print('Downloaded local embedding + reranker models for tests')"; \
-    fi
 COPY runtime_protocol /tmp/runtime_protocol
 RUN pip install --no-deps /tmp/runtime_protocol
 
+COPY rag_service/config config
 COPY rag_service/alembic alembic
 COPY rag_service/scripts scripts
 COPY rag_service/app app
+ARG DOWNLOAD_LOCAL_MODELS=true
+ENV EMBEDDING_MODELS_CONFIG=/app/config/embedding_models.json
+RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
+      python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); print('Downloaded local embedding + reranker models for tests')"; \
+      python scripts/download_embedding_tokenizers.py; \
+    fi
 COPY rag_service/tests tests
 COPY rag_service/alembic.ini rag_service/main.py ./
 COPY hermes_runtime /workspace/hermes_runtime

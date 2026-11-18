@@ -1,12 +1,12 @@
 import React from 'react';
-import { Box, Chip, IconButton, Tooltip, Typography } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import { Box, Chip, IconButton, Tooltip } from '@mui/material';
 import BugReportIcon from '@mui/icons-material/BugReport';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AgentRunDebugPanel from '../agent-debug/AgentRunDebugPanel';
 import type { AgentRunDetails, AgentRunResumeAction, AgentTraceRefs } from '../../lib/api';
 import type { TraceRunView } from '../agent-debug/agent-trace-projection';
 import NestedInstanceTabs from './NestedInstanceTabs';
+import InstanceTabCloseLabel from './InstanceTabCloseLabel';
 import WorkspaceEmptyState from './WorkspaceEmptyState';
 import { isTraceTabLive } from '../../lib/trace-tab-live';
 
@@ -34,6 +34,7 @@ export default function TraceWorkspace({
   onClose,
   onBackToMessage,
   suspendHeavyContent = false,
+  onOpenDelegatedRun,
 }: {
   tabs: TraceRunTab[];
   activeRunId: string | null;
@@ -41,6 +42,7 @@ export default function TraceWorkspace({
   onClose: (runId: string) => void;
   onBackToMessage?: (messageId: string) => void;
   suspendHeavyContent?: boolean;
+  onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
 }) {
   const activeTab = tabs.find((tab) => tab.id === activeRunId) || tabs[0];
   if (!activeTab) {
@@ -56,23 +58,17 @@ export default function TraceWorkspace({
   const nestedTabs = tabs.map((tab) => ({
     id: tab.id,
     label: (
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
-        <Typography variant="body2" noWrap sx={{ maxWidth: 170 }}>{tab.label}</Typography>
-        {isTraceTabLive(tab) && <Chip size="small" color="primary" label="Live" sx={{ height: 20 }} />}
-        {tab.error && <Chip size="small" color="error" label="Failed" sx={{ height: 20 }} />}
-        <Tooltip title="Close trace">
-          <IconButton
-            size="small"
-            onClick={(event) => {
-              event.stopPropagation();
-              onClose(tab.id);
-            }}
-            sx={{ p: 0.2 }}
-          >
-            <CloseIcon sx={{ fontSize: 15 }} />
-          </IconButton>
-        </Tooltip>
-      </Box>
+      <InstanceTabCloseLabel
+        title={tab.label}
+        onClose={() => onClose(tab.id)}
+        closeTooltip="Close trace"
+        adornment={(
+          <>
+            {isTraceTabLive(tab) && <Chip size="small" color="primary" label="Live" sx={{ height: 20 }} />}
+            {tab.error && <Chip size="small" color="error" label="Failed" sx={{ height: 20 }} />}
+          </>
+        )}
+      />
     ),
   }));
 
@@ -107,6 +103,7 @@ export default function TraceWorkspace({
           suspendHeavyContent={suspendHeavyContent}
           onRunDetailsChange={activeTab.onRunDetailsChange}
           onResumeAction={activeTab.onResumeAction}
+          onOpenDelegatedRun={onOpenDelegatedRun}
         />
       </Box>
     </Box>

@@ -31,6 +31,7 @@ from app.product_orchestration.repository import AgentWorkflowRepository
 from app.product_orchestration.builtin_workflows import builtin_workflow_keys
 from app.product_orchestration.workflow_runtime import (
     default_agent_workflow_key,
+    workflow_allows_auto_limits_override,
     workflow_is_chat_eligible,
     workflow_supports_replans,
 )
@@ -114,6 +115,18 @@ async def _settings_workflow_supports_replans(settings: dict) -> bool:
     workflow = await AgentWorkflowRepository().get_workflow(workflow_id, include_custom=True)
     spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
     return workflow_supports_replans(spec)
+
+
+async def _settings_workflow_allows_auto_limits(settings: dict) -> bool:
+    agent_workflow = settings.get("agent_workflow")
+    workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
+    if not isinstance(workflow_id, str) or not workflow_id:
+        return False
+    workflow = await AgentWorkflowRepository().get_workflow(workflow_id, include_custom=True)
+    spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
+    if isinstance(spec, dict) and not spec.get("workflow_id"):
+        spec = {**spec, "workflow_id": workflow_id}
+    return workflow_allows_auto_limits_override(spec)
 
 
 async def _resolve_chat_workflow(workflow_id: str):
@@ -247,15 +260,22 @@ async def prompt_tools_endpoint():
     """Return user-facing tool aliases and default prompts for prompt customization UI."""
     try:
         from runtime_protocol.context_budget import load_context_budget_settings
+        from runtime_protocol.coverage_iterations import load_coverage_iteration_settings
+        from runtime_protocol.thread_advanced_settings import advanced_settings_field_specs
 
         defaults = merge_thread_settings({})
         defaults["tool_instructions"] = normalize_tool_instructions(
             defaults.get("tool_instructions", {})
         )
         defaults["context_budget"] = load_context_budget_settings().to_dict()
+        defaults["coverage_iterations"] = load_coverage_iteration_settings().to_dict()
+        defaults["advanced_field_specs"] = advanced_settings_field_specs()
         payload = PromptDefaults(**defaults).model_dump(mode="json")
         return {
-            "tools": [ToolCatalogEntry(**t).model_dump(mode="json") for t in get_tool_catalog()],
+            "tools": [
+                ToolCatalogEntry(**t).model_dump(mode="json")
+                for t in get_tool_catalog(for_settings=True)
+            ],
             "defaults": payload,
         }
     except Exception as e:
@@ -690,9 +710,20 @@ async def update_thread_settings_endpoint(
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        current = merge_thread_settings(await get_thread_settings(thread_id))
-        updates = req.model_dump(exclude_none=True)
-        next_settings = {**current, **updates}
+        from runtime_protocol.thread_advanced_settings import merge_thread_advanced_storage
+
+        raw = await get_thread_settings(thread_id) or {}
+        current = merge_thread_settings(raw)
+        updates = req.model_dump(exclude_unset=True)
+        advanced_patch = {}
+        for advanced_key in ("context_window", "context_budget", "coverage_iterations"):
+            if advanced_key in updates:
+                advanced_patch[advanced_key] = updates.pop(advanced_key)
+        raw_next = dict(raw)
+        raw_next.update(updates)
+        if advanced_patch:
+            raw_next.update(merge_thread_advanced_storage(raw, advanced_patch))
+        next_settings = merge_thread_settings(raw_next)
         requested_agent_workflow = next_settings.get("agent_workflow")
         requested_workflow_id = (
             requested_agent_workflow.get("workflow_id")
@@ -705,10 +736,12 @@ async def update_thread_settings_endpoint(
             raise HTTPException(status_code=400, detail="Agent workflow is not available for chat")
         if not await _settings_workflow_supports_replans(next_settings):
             next_settings.pop("replans", None)
+        if not await _settings_workflow_allows_auto_limits(next_settings):
+            next_settings.pop("auto_limits", None)
         next_settings["tool_instructions"] = normalize_tool_instructions(
             next_settings.get("tool_instructions", {})
         )
-        persisted = await update_thread_settings(thread_id, next_settings)
+        persisted = await update_thread_settings(thread_id, raw_next)
         if persisted is None:
             raise HTTPException(status_code=404, detail="Thread not found")
         merged = merge_thread_settings(persisted)

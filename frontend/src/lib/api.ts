@@ -259,8 +259,20 @@ export interface ThreadMetadata {
   [key: string]: any;
 }
 
+export interface AutoLimitsSettings {
+  max_total_visits: number;
+  max_interrupts_per_run: number;
+  max_delegates_per_turn: number;
+  require_plan_approval_on_complex: boolean;
+  require_plan_approval_all: boolean;
+}
+
 export interface ThreadSettings {
   replans: number;
+  context_window?: number;
+  context_budget?: ContextBudgetDefaults;
+  coverage_iterations?: Record<string, number>;
+  auto_limits?: AutoLimitsSettings;
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
@@ -813,6 +825,7 @@ export interface AgentWorkflow {
   framework?: string;
   builder_id?: string;
   supports_replans?: boolean;
+  supports_auto_limits_override?: boolean;
   supports_long_running_tasks?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
@@ -898,6 +911,8 @@ export interface PromptToolDefinition {
   display_name: string;
   description: string;
   default_prompt: string;
+  category?: string;
+  group_label?: string;
 }
 
 export interface ContextBudgetDefaults {
@@ -914,10 +929,37 @@ export interface ContextBudgetDefaults {
   plan_memory_ratio?: number;
 }
 
+/** Window + packing budget inherited by a delegated child agent run. */
+export interface InheritedAgentContext {
+  context_window?: number;
+  context_budget?: Partial<ContextBudgetDefaults> & Record<string, number>;
+}
+
+export interface AgentRunDelegationDetail {
+  child_run_id?: string;
+  child_workflow_id?: string;
+  question?: string;
+  inherited_context_window?: number;
+  inherited_context_budget?: Partial<ContextBudgetDefaults> & Record<string, number>;
+  [key: string]: unknown;
+}
+
+export type AgentRunPrefetchSummary = Record<string, unknown>;
+
 export interface PromptDefaults {
   replans_limit: number;
+  auto_limits?: AutoLimitsSettings;
   context_window: number;
   context_budget: ContextBudgetDefaults;
+  coverage_iterations?: Record<string, number>;
+  advanced_field_specs?: Array<{
+    key: string;
+    type: 'ratio' | 'integer';
+    minimum?: number;
+    maximum?: number;
+    default?: number;
+    env_var?: string;
+  }>;
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
@@ -1106,6 +1148,7 @@ export interface AgentRunDebug {
   detail_manifest?: AgentRunOperationDetailManifest[];
   detail_safety?: Record<string, any>;
   final_output?: AgentRunFinalOutput;
+  technical_details?: Record<string, unknown>;
   topology?: {
     available?: boolean;
     kind?: string | null;
@@ -1326,6 +1369,8 @@ export interface AgentRunOperationDetail {
   checkpoint_after?: Record<string, any>;
   output?: Record<string, any>;
   event?: Record<string, any>;
+  prefetch_summary?: AgentRunPrefetchSummary | null;
+  delegation?: AgentRunDelegationDetail | null;
   llm?: {
     prompt?: { role?: string; content?: unknown }[];
     response?: unknown;
@@ -1385,6 +1430,7 @@ export interface AgentRunDetails {
   workflow_id: string;
   task_id?: string | null;
   parent_run_id?: string | null;
+  inherited_context?: InheritedAgentContext | null;
   task_attempt?: number;
   resolved_spec_json?: Record<string, any>;
   runtime_binding_status?: string;
@@ -1434,6 +1480,7 @@ export interface AgentRunSummary {
   workflow_id: string;
   task_id?: string | null;
   parent_run_id?: string | null;
+  inherited_context?: InheritedAgentContext | null;
   task_attempt?: number;
   status: string;
   started_at?: string | null;
@@ -1775,6 +1822,7 @@ export async function planMemoryManager(input: {
   review_id?: string | null;
   memory_review_cursor?: MemoryConsistencyReviewCursor | null;
   web_search_mode: 'off' | 'ask' | 'on';
+  browser_access_mode?: 'off' | 'ask' | 'on';
   web_search_decision?: { query: string; approved: boolean };
 }): Promise<MemoryManagerPlan> {
   const res = await fetch(`${API_BASE}/api/memory-manager/plan`, {
@@ -2307,6 +2355,18 @@ export async function listThreadAgentRuns(
   return res.json();
 }
 
+export async function listAgentRunDelegations(
+  runId: string,
+  threadId: string,
+  options: { limit?: number } = {},
+): Promise<{ parent_run_id: string; thread_id: string; delegations: AgentRunSummary[] }> {
+  const params = new URLSearchParams({ thread_id: threadId });
+  if (options.limit) params.set('limit', String(options.limit));
+  const res = await fetch(`${API_BASE}/api/agent-runs/${runId}/delegations?${params.toString()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function getAgentRun(runId: string, threadId: string): Promise<AgentRunDetails> {
   const params = new URLSearchParams({ thread_id: threadId });
   const res = await fetch(`${API_BASE}/api/agent-runs/${runId}?${params.toString()}`);
@@ -2601,6 +2661,7 @@ export async function createAgentTask(threadId: string, payload: {
   context_window: number;
   context_budget?: ContextBudgetDefaults;
   web_search_mode: 'off' | 'ask' | 'on';
+  browser_access_mode?: 'off' | 'ask' | 'on';
 }): Promise<AgentTaskSummary> {
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/agent-tasks`, {
     method: 'POST',
@@ -2905,6 +2966,8 @@ const threadChatPayload = (
   bypassClarification: boolean = false,
   hitlWebApproval?: boolean,
   contextBudget?: ContextBudgetDefaults,
+  browserAccessMode: 'off' | 'ask' | 'on' = 'off',
+  webSearchMode?: 'off' | 'ask' | 'on',
 ): Record<string, any> => {
   const payload: any = {
     thread_id: threadId,
@@ -2913,8 +2976,12 @@ const threadChatPayload = (
     use_web_search: useWebSearch,
     use_reranker: useReranker,
     context_window: contextWindowSize,
-    ...getBrowserRuntimeContext()
+    browser_access_mode: browserAccessMode,
+    ...getBrowserRuntimeContext(),
   };
+  if (webSearchMode === 'off' || webSearchMode === 'ask' || webSearchMode === 'on') {
+    payload.web_search_mode = webSearchMode;
+  }
   if (contextBudget) {
     payload.context_budget = contextBudget;
   }
@@ -2953,8 +3020,10 @@ export async function threadChat(
   bypassClarification: boolean = false,
   hitlWebApproval?: boolean,
   contextBudget?: ContextBudgetDefaults,
+  browserAccessMode: 'off' | 'ask' | 'on' = 'off',
+  webSearchMode?: 'off' | 'ask' | 'on',
 ): Promise<ThreadChatResponse> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget, browserAccessMode, webSearchMode);
   const maxRetries = 2;
   let attempt = 0;
 
@@ -3003,8 +3072,10 @@ export async function streamThreadChat(
   onEvent: (event: AgentExecutionStreamEnvelope) => void,
   signal?: AbortSignal,
   contextBudget?: ContextBudgetDefaults,
+  browserAccessMode: 'off' | 'ask' | 'on' = 'off',
+  webSearchMode?: 'off' | 'ask' | 'on',
 ): Promise<void> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget, browserAccessMode, webSearchMode);
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },

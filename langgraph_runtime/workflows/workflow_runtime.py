@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from copy import deepcopy
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 from langgraph_runtime.workflows.enums import RouteFunctionId, WorkflowNodeType, WorkflowRuntimeKind
 
@@ -20,9 +20,12 @@ ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "llm_model",
     "context_window",
     "web_search_mode",
+    "browser_access_mode",
     "hitl_web_approval",
+    "hitl_browser_approval",
     "hitl_canvas_publish",
     "use_web_search",
+    "use_browser_access",
     "use_reranker",
     "system_role",
     "tool_instructions",
@@ -40,6 +43,7 @@ ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "task_policy",
     "auto_policy",
     "available_delegate_workflows",
+    "coverage_iterations",
 }
 
 
@@ -69,6 +73,54 @@ def workflow_is_chat_eligible(spec: Dict[str, Any]) -> bool:
     """Return whether a workflow may be selected for ordinary thread chat."""
 
     return not workflow_supports_long_running_tasks(spec)
+
+
+def workflow_supports_child_delegation(spec: Dict[str, Any]) -> bool:
+    return bool(workflow_runtime_features(spec).get("supports_child_delegation"))
+
+
+AUTO_WORKFLOW_ID = "auto_rag_agent"
+
+
+def workflow_allows_auto_limits_override(spec: Dict[str, Any]) -> bool:
+    features = workflow_runtime_features(spec)
+    return str(spec.get("workflow_id") or "") == AUTO_WORKFLOW_ID or (
+        workflow_supports_child_delegation(spec)
+        and features.get("allows_auto_limits_override", True) is not False
+    )
+
+
+def apply_auto_limits_to_config(config: Dict[str, Any], auto_limits: Mapping[str, Any]) -> Dict[str, Any]:
+    """Merge thread Auto limits into auto_policy, loop_policy, and hitl_policy."""
+
+    limits = dict(auto_limits or {})
+    if not limits:
+        return config
+    auto_policy = dict(config.get("auto_policy") or {})
+    loop_policy = dict(config.get("loop_policy") or {})
+    hitl_policy = dict(config.get("hitl_policy") or {})
+
+    max_delegates = max(1, min(3, int(limits["max_delegates_per_turn"])))
+    auto_policy["max_delegates_per_turn"] = max_delegates
+    auto_policy["require_plan_approval_on_complex"] = bool(limits["require_plan_approval_on_complex"])
+    auto_policy["require_plan_approval_all"] = bool(limits["require_plan_approval_all"])
+
+    node_limits = dict(loop_policy.get("node_visit_limits") or {})
+    max_total = max(4, min(48, int(limits["max_total_visits"])))
+    loop_policy["max_total_visits"] = max_total
+    node_limits["workflow_delegate"] = max_delegates
+    loop_policy["node_visit_limits"] = node_limits
+
+    max_interrupts = max(1, min(20, int(limits["max_interrupts_per_run"])))
+    hitl_policy["max_interrupts_per_run"] = max_interrupts
+    node_limits["plan_approval_gate"] = max(2, max_interrupts)
+
+    return {
+        **config,
+        "auto_policy": auto_policy,
+        "loop_policy": loop_policy,
+        "hitl_policy": hitl_policy,
+    }
 
 
 def workflow_allows_replans_override(spec: Dict[str, Any]) -> bool:
@@ -138,6 +190,11 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
     except (TypeError, ValueError):
         max_todos, max_attempts, max_interrupts = 50, 2, 16
     deep_control_visits = max_todos + replans + 1
+    coverage = config.get("coverage_iterations") if isinstance(config.get("coverage_iterations"), dict) else {}
+    try:
+        web_search_bonus = max(0, min(32, int(coverage.get("web_search_iteration_bonus", 0))))
+    except (TypeError, ValueError):
+        web_search_bonus = 0
     for node_id, node_type in node_types.items():
         if node_type == WorkflowNodeType.REPLANNER.value:
             node_visit_limits[node_id] = replans
@@ -178,6 +235,8 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
             node_visit_limits[node_id] = node_type_max_visits(node_type) if repeatable_budget_intervention else max_todos * max_attempts
         elif node_type == WorkflowNodeType.HITL_GATE.value and workflow_runtime_features(spec).get("supports_long_running_tasks"):
             node_visit_limits[node_id] = max_interrupts
+        elif node_type == WorkflowNodeType.WEB_WORKER.value and web_search_bonus:
+            node_visit_limits[node_id] = node_visit_limits.get(node_id, replans + 1) + web_search_bonus
     max_total_visits = sum(node_visit_limits.get(node_id, 1) for node_id in node_types)
     return {
         "max_total_visits": max_total_visits,

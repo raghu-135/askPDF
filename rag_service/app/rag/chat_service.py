@@ -74,8 +74,9 @@ async def prefetch_context(
     budget = compute_prefetch_budget(context_window, overrides)
 
     # Embed the raw question ONCE and share the vector across parallel tasks
-    embedding_client = get_embedding_model(embedding_model)
-    shared_query_vector = await invoke_with_retry(embedding_client.aembed_query, raw_question)
+    from app.models.llm_server_client import embed_query
+
+    shared_query_vector = await invoke_with_retry(embed_query, embedding_model, raw_question)
 
     def _message_ref(msg: Any) -> Dict[str, Any]:
         text = (getattr(msg, "context_compact", None) or getattr(msg, "content", None) or "").strip()
@@ -214,6 +215,15 @@ async def prefetch_context(
             logger.warning("Prefetch current canvases failed: %s", exc)
             return []
 
+    async def _fetch_quoted_canvas_revisions() -> list[dict[str, Any]]:
+        try:
+            from app.services.canvas_service import load_quoted_canvas_revisions
+
+            return await load_quoted_canvas_revisions(thread_id, raw_question)
+        except Exception as exc:
+            logger.warning("Prefetch quoted canvas revisions failed: %s", exc)
+            return []
+
     async def _fetch_durable_memory() -> Dict[str, Any]:
         try:
             from app.services.memory_service import search_thread_memory
@@ -242,6 +252,7 @@ async def prefetch_context(
         _fetch_documents(),
         _fetch_durable_memory(),
         _fetch_current_canvases(),
+        _fetch_quoted_canvas_revisions(),
         return_exceptions=True,
     )
 
@@ -252,6 +263,9 @@ async def prefetch_context(
     document_result = results[3] if not isinstance(results[3], Exception) else ("", [])
     durable_result = results[4] if not isinstance(results[4], Exception) and isinstance(results[4], dict) else {}
     canvas_result = results[5] if not isinstance(results[5], Exception) and isinstance(results[5], list) else []
+    quoted_canvas_result = (
+        results[6] if not isinstance(results[6], Exception) and isinstance(results[6], list) else []
+    )
     web_result = ("", [])
 
     if isinstance(semantic_result, tuple) and len(semantic_result) >= 3:
@@ -305,5 +319,6 @@ async def prefetch_context(
         "web_sources":           web_sources,
         "used_chat_ids":         used_chat_ids,
         "current_canvases":      canvas_result,
+        "quoted_canvas_revisions": quoted_canvas_result,
         "budget":                budget,
     }

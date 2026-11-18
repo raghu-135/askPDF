@@ -1,4 +1,4 @@
-import { MessageRole } from './enums';
+import { MessageRole } from './enums.ts';
 
 const TOOL_APPROVAL_TITLE = /^Approve\s+.+\?$/i;
 
@@ -29,4 +29,18 @@ export function shouldHideChatInterruptPlaceholder(
   message: InterruptPlaceholderMessage,
 ): boolean {
   return isChatInterruptPlaceholderMessage(message);
+}
+
+/** After HITL approval, show the assistant row like a normal in-flight run (trace + stop). */
+export function clearInterruptPlaceholderForLiveRun<T extends InterruptPlaceholderMessage>(message: T): T {
+  if (!isChatInterruptPlaceholderMessage(message)) return message;
+  const placeholderContent = isToolApprovalPlaceholderContent(message.content)
+    || message.agent_run_turn_kind === 'assistant_pending_review'
+    || Boolean(message.pending_human_review);
+  return {
+    ...message,
+    pending_human_review: false,
+    agent_run_turn_kind: 'assistant_final',
+    content: placeholderContent ? '' : message.content,
+  };
 }

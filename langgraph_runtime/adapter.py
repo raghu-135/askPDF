@@ -168,7 +168,9 @@ def _result_from_graph(
     attempt_id: str = "",
     boundary_event_id: str = "",
 ) -> AgentRuntimeResult:
-    status = str(result.get("status") or ("clarification" if result.get("clarification_options") else "completed"))
+    status = str(result.get("status") or "completed")
+    if status == "clarification" or result.get("clarification_options"):
+        status = "clarification_required"
     if str(result.get("task_controller_route") or "") == "fail":
         status = "failed"
     interruption = result.get("pending_interrupt") if isinstance(result.get("pending_interrupt"), Mapping) else None
@@ -481,6 +483,8 @@ class LangGraphRuntimeAdapter(AgentRuntimeAdapter):
             context_window=metadata.get("context_window"),
             use_web_search=bool(permissions.get("use_web_search")),
             web_search_mode=str(permissions.get("web_search_mode") or "off"),
+            use_browser_access=bool(permissions.get("use_browser_access")),
+            browser_access_mode=str(permissions.get("browser_access_mode") or "off"),
             use_reranker=bool(metadata.get("use_reranker", True)),
             bypass_clarification=True,
             system_role_override="",

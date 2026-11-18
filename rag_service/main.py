@@ -350,6 +350,25 @@ app = FastAPI(
 
 
 @app.middleware("http")
+async def reject_multipart_json_file_routes(request, call_next):
+    """POST .../files (not /upload) expects JSON; reject multipart before body parsing."""
+    path = request.url.path
+    if (
+        request.method == "POST"
+        and path.endswith("/files")
+        and not path.endswith("/files/upload")
+        and (request.headers.get("content-type") or "").lower().startswith("multipart/")
+    ):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": "Use the /files/upload endpoint for PDF uploads; this route expects JSON (file_hash, file_name)."
+            },
+        )
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def control_plane_authentication(request, call_next):
     """Protect product APIs while leaving health and internal MCP boundaries independent."""
     path = request.url.path

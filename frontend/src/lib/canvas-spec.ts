@@ -119,6 +119,7 @@ export type CanvasSpec = {
 
 export type ThreadCanvasRecord = {
   id: string;
+  requested_id?: string | null;
   thread_id: string;
   chat_turn_id?: string | null;
   title: string;

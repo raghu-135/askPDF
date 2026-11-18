@@ -12,12 +12,16 @@ from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphBubbleUp
 
-from langgraph_runtime.agent.canvas_layout_skills import canvas_emit_enabled
+from langgraph_runtime.agent.canvas_layout_skills import (
+    canvas_emit_enabled,
+    canvas_publish_synthesis_enabled,
+)
 from langgraph_runtime.canvas_draft_contract import CANVAS_PUBLISH_DRAFT_HINT
 from langgraph_runtime.agent.reasoning import normalize_ai_response
 from langgraph_runtime.agent.tool_contract import normalize_tool_result
 from langgraph_runtime.mcp_client import create_mcp_langchain_tool
 from langgraph_runtime.workflows.cancellation import ChatRunCancellationRequested
+from runtime_protocol.canvas_reference import extract_canvas_references
 from langgraph_runtime.workflows.enums import ToolName
 from langgraph_runtime.workflows.runtime_invocation import (
     append_tool_event_for_node,
@@ -58,6 +62,15 @@ _CANVAS_ARTIFACT_ID_RE = re.compile(
     re.IGNORECASE,
 )
 _FILE_HASH_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
+
+
+def resolve_supersedes_id_from_state(state: Mapping[str, Any], explicit: Any) -> str | None:
+    sanitized = sanitize_supersedes_id_for_publish(explicit)
+    if sanitized:
+        return sanitized
+    question = str(state.get("question") or state.get("user_message") or "").strip()
+    refs = extract_canvas_references(question)
+    return sanitize_supersedes_id_for_publish(refs[-1]) if refs else None
 
 
 def sanitize_supersedes_id_for_publish(value: Any) -> str | None:
@@ -205,7 +218,7 @@ async def synthesize_with_canvas_publish(
 
     conversation = list(messages)
     retry_attempts, retry_observer = llm_retry_observer()
-    emit_enabled = canvas_emit_enabled(state.get("allowed_tool_ids")) and hasattr(llm, "bind_tools")
+    emit_enabled = canvas_publish_synthesis_enabled(state) and hasattr(llm, "bind_tools")
     published = False
     failed_attempts = 0
     publish_calls = 0
@@ -290,7 +303,7 @@ async def synthesize_with_canvas_publish(
                 conversation.append(ToolMessage(content=tool_body, tool_call_id=call_id))
                 failed_attempts += 1
                 continue
-            sanitized_supersedes = sanitize_supersedes_id_for_publish(args.get("supersedes_id"))
+            sanitized_supersedes = resolve_supersedes_id_from_state(state, args.get("supersedes_id"))
             if sanitized_supersedes:
                 tool_input["supersedes_id"] = sanitized_supersedes
             key = canvas_idempotency_key(state, supersedes_id=sanitized_supersedes)
@@ -483,8 +496,12 @@ async def publish_deep_research_canvas_draft(
         return None
     started = time.perf_counter()
     tool_input = dict(draft)
-    tool_input.pop("supersedes_id", None)
-    key = canvas_idempotency_key(state, supersedes_id=None)
+    sanitized_supersedes = resolve_supersedes_id_from_state(state, tool_input.get("supersedes_id"))
+    if sanitized_supersedes:
+        tool_input["supersedes_id"] = sanitized_supersedes
+    else:
+        tool_input.pop("supersedes_id", None)
+    key = canvas_idempotency_key(state, supersedes_id=sanitized_supersedes)
     if key:
         tool_input["idempotency_key"] = key
     tool_runtime = tool_config_for_node(

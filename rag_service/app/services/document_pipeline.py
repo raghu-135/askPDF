@@ -279,7 +279,9 @@ def _table_row_render(
         # Treat an implied colspan=2 when scientific notation was split across sibling cells
         combined, label, value, span = _combine_split_scientific_pair(index, labels, values)
         if combined:
-            rendered.append(f"{label}: {value}")
+            rendered.append(f"{labels[index]}: {value}")
+            if index + 1 < width:
+                rendered.append(f"{labels[index + 1]}: {value}")
             covered.update(range(index, min(width, index + span)))
             continue
         # Treat a complete scientific value sitting under the left column with an empty sibling
@@ -292,8 +294,8 @@ def _table_row_render(
             and not values[index + 1]
             and re.match(r"^\s*[0-9]+(?:\.[0-9]+)?\s*[×xX·]\s*10(?:\^\s*)?\d{1,3}\s*$", values[index])
         ):
-            label = " / ".join(labels[index:index + 2])
-            rendered.append(f"{label}: {values[index]}")
+            rendered.append(f"{labels[index]}: {values[index]}")
+            rendered.append(f"{labels[index + 1]}: {values[index]}")
             covered.update(range(index, index + 2))
             continue
         # Fall back to a single-cell value (normalized) when no coalescing applies.

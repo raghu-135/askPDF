@@ -13,7 +13,7 @@ Copy the example environment file:
     cp .env.example .env
 
 `docker compose up` runs a one-shot `env-secrets` job (same pattern as
-`db-migrate`) that replaces the `replace-with-...` service secrets (admin
+`env-secrets`) that replaces the `replace-with-...` service secrets (admin
 token, runtime tokens, MCP context secret) and writes them into the stack.
 It does not invent `OPENAI_API_KEY`. You do not need Python on the host.
 
@@ -59,10 +59,11 @@ image prefetches those tokenizers at build time.
     LLM_API_URL=https://openrouter.ai/api/v1
     OPENAI_API_KEY=sk-or-replace-with-your-key
 
-The control plane lists OpenRouter embedding models that have a registered
-tokenizer (Qwen3, GTE, E5, BGE, MiniLM, LFM, and Nomic aliases). Models without
-a Hugging Face tokenizer, such as OpenAI text-embedding-3-*, stay hidden until
-you add them via EMBEDDING_TOKENIZER_CONFIG_JSON and cache that tokenizer.
+The control plane lists OpenRouter embedding models from the provider catalog.
+Models defined in `rag_service/config/embedding_models.json` use exact Hugging
+Face tokenizers (Qwen3, GTE, E5, BGE, MiniLM, LFM, Nomic, and aliases). Other
+ids use generic tiktoken chunking; add a catalog entry when you need exact
+prefixes or tokenizers, and remove entries you do not want prefetched in the image.
 
 ## Start askPDF
 
@@ -72,7 +73,7 @@ Open http://localhost:3000.
 
 The default Compose stack includes the frontend, control plane, PostgreSQL,
 Weaviate, browser capture, and LangGraph runtime. `.env.example` sets
-`COMPOSE_PROFILES=hermes`, so Hermes starts unless you clear that variable.
+`COMPOSE_PROFILES=hermes`, so Hermes starts with the default product services unless you change it.
 
 ## Stop and restart
 
@@ -83,9 +84,14 @@ Persistent database and content volumes are retained unless explicitly removed.
 
 ## Development frontend
 
-For frontend hot reload, use the development Compose override:
+For frontend hot reload, pass `docker-compose.development.override.yml` (dev bind
+mounts and `npm run dev`). Ports stay in the Compose YAML, not `.env`.
 
-    docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+    docker compose -f docker-compose.yml -f docker-compose.development.override.yml up --build
+
+A second parallel product stack on alternate host ports is not implemented in
+Compose today; use a distinct Compose project name (`-p …`) only for
+experimenting with the default service set.
 
 ## Operational checks
 

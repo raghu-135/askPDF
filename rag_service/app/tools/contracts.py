@@ -140,6 +140,23 @@ class EmptyRequest(BaseModel):
     pass
 
 
+class BrowserNavigateRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=4000)
+
+
+class BrowserActRequest(BaseModel):
+    action: Literal["click", "type", "scroll", "key"]
+    coordinate: list[int] | None = Field(default=None, min_length=2, max_length=2)
+    text: str | None = Field(default=None, max_length=4000)
+    scroll_direction: Literal["up", "down", "left", "right"] | None = None
+    scroll_amount: int | None = Field(default=None, ge=1, le=50)
+    duration: float | None = Field(default=None, ge=0, le=30)
+
+
+class EmptyBrowserRequest(BaseModel):
+    pass
+
+
 class ToolServices(Protocol):
     """Dependency seam; concrete services are supplied by the application."""
 
@@ -152,6 +169,8 @@ ToolHandler = Any
 __all__ = [
     "DocumentSearchRequest", "EmptyRequest",
     "DocumentFilter", "InspectDocumentRequest", "ReadContextRequest", "SearchKnowledgeRequest",
-    "QueryRequest", "TimelineRequest", "InternetSearchRequest", "ToolHandler", "ToolInvocationContext",
+    "QueryRequest", "TimelineRequest", "InternetSearchRequest",
+    "BrowserNavigateRequest", "BrowserActRequest", "EmptyBrowserRequest",
+    "ToolHandler", "ToolInvocationContext",
     "ToolResult", "ToolServices",
 ]

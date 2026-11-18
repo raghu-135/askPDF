@@ -1,60 +1,83 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
-import { listThreadCanvases } from '../../lib/canvas-api';
-import type { DocumentCanvasCitationTarget, ThreadCanvasRecord } from '../../lib/canvas-spec';
+import { getThreadCanvas } from '../../lib/canvas-api';
+import type { DocumentCanvasCitationTarget } from '../../lib/canvas-spec';
+import { buildCanvasWorkspaceDeepLink } from '../../lib/workspace-deep-link.ts';
 import CanvasDocument from '../canvas/CanvasDocument';
 import NestedInstanceTabs from './NestedInstanceTabs';
+import InstanceTabCloseLabel from './InstanceTabCloseLabel';
 import WorkspaceEmptyState from './WorkspaceEmptyState';
+import type { CanvasRunTab } from './useCanvasTabs';
+
+const copyTextToClipboard = async (text: string) => {
+  try {
+    await navigator.clipboard?.writeText(text);
+  } catch {
+    window.prompt('Copy link', text);
+  }
+};
 
 export default function ResearchCanvasWorkspace({
   threadId,
+  projectId = null,
+  canvasTabs,
   activeCanvasId,
   onActiveCanvasChange,
+  onCloseCanvas,
   onOpenDocumentCitation,
+  onCanvasTabUpdate,
   refreshVersion = 0,
 }: {
   threadId: string | null;
+  projectId?: string | null;
+  canvasTabs: CanvasRunTab[];
   activeCanvasId: string | null;
   onActiveCanvasChange: (canvasId: string) => void;
+  onCloseCanvas: (canvasId: string) => void;
   onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
+  onCanvasTabUpdate: (canvasId: string, patch: Partial<CanvasRunTab>) => void;
   refreshVersion?: number;
 }) {
-  const [canvases, setCanvases] = useState<ThreadCanvasRecord[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    if (!threadId) {
-      setCanvases([]);
-      return;
-    }
-    setLoading(true);
-    setError(null);
+  const hydrateTab = useCallback(async (canvasId: string) => {
+    if (!threadId) return;
+    onCanvasTabUpdate(canvasId, { loading: true, error: null });
     try {
-      const response = await listThreadCanvases(threadId);
-      setCanvases(response.canvases);
+      const record = await getThreadCanvas(threadId, canvasId);
+      onCanvasTabUpdate(canvasId, {
+        title: record.title,
+        record,
+        loading: false,
+        error: null,
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load canvases');
-    } finally {
-      setLoading(false);
+      onCanvasTabUpdate(canvasId, {
+        loading: false,
+        error: err instanceof Error ? err.message : 'Unable to load canvas',
+      });
     }
-  }, [threadId]);
+  }, [onCanvasTabUpdate, threadId]);
+
+  const canvasTabsRef = useRef(canvasTabs);
+  canvasTabsRef.current = canvasTabs;
 
   useEffect(() => {
-    void load();
-  }, [load, refreshVersion]);
-
-  const onActiveCanvasChangeRef = useRef(onActiveCanvasChange);
-  onActiveCanvasChangeRef.current = onActiveCanvasChange;
+    if (!threadId) return;
+    for (const tab of canvasTabs) {
+      if (!tab.record && !tab.loading) {
+        void hydrateTab(tab.id);
+      }
+    }
+  }, [canvasTabs, hydrateTab, threadId]);
 
   useEffect(() => {
-    if (!activeCanvasId && canvases[0]) {
-      onActiveCanvasChangeRef.current(canvases[0].id);
+    if (!threadId || refreshVersion <= 0) return;
+    for (const tab of canvasTabsRef.current) {
+      void hydrateTab(tab.id);
     }
-  }, [activeCanvasId, canvases]);
+  }, [hydrateTab, refreshVersion, threadId]);
 
-  const active = canvases.find((canvas) => canvas.id === activeCanvasId) || canvases[0] || null;
+  const activeTab = canvasTabs.find((tab) => tab.id === activeCanvasId) || canvasTabs[0] || null;
 
   if (!threadId) {
     return (
@@ -64,37 +87,52 @@ export default function ResearchCanvasWorkspace({
     );
   }
 
-  const nestedTabs = canvases.map((canvas) => ({
-    id: canvas.id,
-    label: canvas.title,
+  const nestedTabs = canvasTabs.map((tab) => ({
+    id: tab.id,
+    label: (
+      <InstanceTabCloseLabel
+        title={tab.title}
+        copyLinkTooltip="Copy canvas link"
+        onCopyLink={threadId ? async () => {
+          const url = buildCanvasWorkspaceDeepLink({
+            threadId,
+            projectId,
+            canvasId: tab.id,
+          });
+          await copyTextToClipboard(url);
+        } : undefined}
+        onClose={() => onCloseCanvas(tab.id)}
+        closeTooltip="Close canvas"
+      />
+    ),
   }));
 
   return (
-    <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: canvases.length > 1 ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)' }}>
-      {canvases.length > 1 ? (
+    <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: canvasTabs.length > 0 ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)' }}>
+      {canvasTabs.length > 0 ? (
         <NestedInstanceTabs
           tabs={nestedTabs}
-          activeId={active?.id || null}
+          activeId={activeTab?.id || null}
           onActiveChange={onActiveCanvasChange}
-          ariaLabel="Research canvases"
+          ariaLabel="Open canvases"
         />
       ) : null}
       <Box sx={{ minHeight: 0, overflow: 'auto' }}>
-        {loading ? (
-          <Box sx={{ display: 'grid', placeItems: 'center', height: '100%' }}><CircularProgress size={24} /></Box>
-        ) : error ? (
-          <Typography color="error" sx={{ p: 2 }}>{error}</Typography>
-        ) : active ? (
+        {activeTab?.error ? (
+          <Typography color="error" sx={{ p: 2 }}>{activeTab.error}</Typography>
+        ) : activeTab?.record ? (
           <CanvasDocument
-            spec={active.spec}
-            createdAt={active.created_at}
+            spec={activeTab.record.spec}
+            createdAt={activeTab.record.created_at}
             onOpenDocumentCitation={onOpenDocumentCitation}
           />
+        ) : activeTab?.loading ? (
+          <Box sx={{ display: 'grid', placeItems: 'center', height: '100%' }}><CircularProgress size={24} /></Box>
         ) : (
           <WorkspaceEmptyState
             icon={<DashboardOutlinedIcon sx={{ fontSize: 48, opacity: 0.4 }} />}
-            title="No canvas yet"
-            description="When chat publishes a structured research canvas, it will land here as a durable document you can jump back to from sources and citations."
+            title="No canvas open"
+            description="Open a canvas from chat or deep research to inspect it here. Open canvases stay in the tab strip until you close them."
             maxWidth={420}
           />
         )}

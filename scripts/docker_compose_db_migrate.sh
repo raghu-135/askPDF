@@ -4,6 +4,9 @@ set -eu
 
 MODULE="${1:?python module e.g. app.db.migrate}"
 DB_URL_ENV="${2:-DATABASE_URL}"
+if [ "$MODULE" = "langgraph_runtime.migrate" ]; then
+  DB_URL_ENV=AGENT_RUNTIME_EXECUTION_DATABASE_URL
+fi
 
 if ! python -c "import os, sys; sys.exit(0 if os.environ.get('$DB_URL_ENV') else 1)"; then
   echo "Missing required environment variable: $DB_URL_ENV" >&2

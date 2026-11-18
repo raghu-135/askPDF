@@ -105,6 +105,16 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
         raw_budget = request_payload.get("context_budget")
         budget_dict = resolve_context_budget(raw_budget if isinstance(raw_budget, dict) else None).to_dict()
 
+        user_question = str((dict(request.input or {})).get("question") or request_payload.get("question") or "").strip()
+        extensions = {
+            "task_id": token_task_id,
+            "approval_task_id": approval_task_id,
+            "runtime": "langgraph",
+            "llm_model": config.get("llm_model"),
+            "tool_approval_policy": approval_policy,
+        }
+        if user_question:
+            extensions["user_question"] = user_question
         token = issue_execution_context_token(
             ToolInvocationContext(
                 thread_id=request.thread_id,
@@ -117,14 +127,9 @@ class HttpLangGraphRuntimeAdapter(AgentRuntimeAdapter):
                 ),
                 context_budget=budget_dict,
                 use_web_search=bool(config.get("use_web_search")),
+                use_browser_access=bool(config.get("use_browser_access")),
                 use_reranker=use_reranker,
-                extensions={
-                    "task_id": token_task_id,
-                    "approval_task_id": approval_task_id,
-                    "runtime": "langgraph",
-                    "llm_model": config.get("llm_model"),
-                    "tool_approval_policy": approval_policy,
-                },
+                extensions=extensions,
             ),
             task_id=token_task_id,
             allowed_tools=allowed_tools,

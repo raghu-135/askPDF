@@ -10,12 +10,24 @@ import json
 import logging
 import re
 import asyncio
+from contextlib import asynccontextmanager
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any, Mapping
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from url_policy import BrowserUrlPolicyError, validate_navigation_url
+from cdp_desktop import cdp_debug_reachable
+from pelorus_client import (
+    CDP_FALLBACK_NOTE,
+    DESKTOP_CONTROL_UNAVAILABLE_MESSAGE,
+    desktop_screenshot,
+    pelorus_get,
+    pelorus_post,
+    pelorus_ready,
+)
 import requests
 import websockets
 from pypdf import PdfReader, PdfWriter
@@ -25,7 +37,31 @@ from weasyprint import HTML, CSS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Browser Capture Service - Direct CDP")
+@asynccontextmanager
+async def _capture_service_lifespan(_app: FastAPI):
+    for delay in (0, 2, 5):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await navigate_active_tab("https://example.com")
+            logger.info("Browser warmup navigation complete")
+            break
+        except Exception as exc:
+            logger.warning("Browser warmup navigate failed (delay=%ss): %s", delay, exc)
+    yield
+
+
+app = FastAPI(title="Browser Capture Service - Direct CDP", lifespan=_capture_service_lifespan)
+
+
+class NoCapturableBrowserTab(Exception):
+    """Browser CDP is reachable but no http(s) tab is available to capture."""
+
+
+NO_HTTP_TAB_MESSAGE = (
+    "Browser capture did not find a capturable http(s) page. "
+    "Open a normal web page in Brave before capturing."
+)
 
 # Thread pool for CPU-bound operations (WeasyPrint)
 _thread_pool = ThreadPoolExecutor(max_workers=4)
@@ -44,6 +80,59 @@ _cdp_session.headers.update({
     "Accept": "application/json"
 })
 
+_AGENT_TAB_TARGET_ID: str | None = None
+_SYSTEM_URL_PREFIXES = ("chrome://", "chrome-extension://", "brave://", "about:")
+
+
+def _fetch_debug_tabs() -> list[dict[str, Any]]:
+    response = _cdp_session.get(f"http://{BROWSER_DEBUG_URL}/json", timeout=5)
+    if response.status_code != 200:
+        raise Exception("Failed to get tabs from debug interface")
+    tabs = response.json()
+    return tabs if isinstance(tabs, list) else []
+
+
+def _is_http_content_tab(tab: Mapping[str, Any]) -> bool:
+    url = str(tab.get("url") or "")
+    return url.startswith(("http://", "https://"))
+
+
+def _close_debug_tab(target_id: str) -> None:
+    try:
+        _cdp_session.get(f"http://{BROWSER_DEBUG_URL}/json/close/{target_id}", timeout=5)
+    except Exception as exc:
+        logger.warning("Failed to close browser tab %s: %s", target_id, exc)
+
+
+async def ensure_agent_tab() -> dict[str, Any]:
+    """Keep one agent-controlled content tab per capture service process."""
+    global _AGENT_TAB_TARGET_ID
+    tabs = _fetch_debug_tabs()
+    if not tabs:
+        raise Exception("No tabs available")
+    content_tabs = [tab for tab in tabs if _is_http_content_tab(tab)]
+    if _AGENT_TAB_TARGET_ID:
+        if not any(str(tab.get("id")) == _AGENT_TAB_TARGET_ID for tab in tabs):
+            _AGENT_TAB_TARGET_ID = None
+    if _AGENT_TAB_TARGET_ID is None:
+        fallback = next(
+            (tab for tab in tabs if not str(tab.get("url") or "").startswith(_SYSTEM_URL_PREFIXES)),
+            tabs[0],
+        )
+        chosen = content_tabs[0] if content_tabs else fallback
+        _AGENT_TAB_TARGET_ID = str(chosen.get("id"))
+    for tab in content_tabs:
+        tab_id = str(tab.get("id") or "")
+        if tab_id and tab_id != _AGENT_TAB_TARGET_ID:
+            _close_debug_tab(tab_id)
+    tabs = _fetch_debug_tabs()
+    agent = next((tab for tab in tabs if str(tab.get("id")) == _AGENT_TAB_TARGET_ID), None)
+    if agent is None:
+        _AGENT_TAB_TARGET_ID = None
+        return await ensure_agent_tab()
+    logger.info("Agent tab: %s — %s", agent.get("url"), agent.get("title"))
+    return agent
+
 
 class CaptureResponse(BaseModel):
     file_hash: str
@@ -55,6 +144,31 @@ class CaptureResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class NavigateRequest(BaseModel):
+    url: str = Field(min_length=1)
+
+
+class NavigateResponse(BaseModel):
+    url: str
+    title: str
+    text: str = ""
+
+
+class PelorusControlRequest(BaseModel):
+    action: str
+    coordinate: list[int] | None = None
+    text: str | None = None
+    scroll_direction: str | None = None
+    scroll_amount: int | None = None
+    duration: float | None = None
+
+
+class BrowserReadResponse(BaseModel):
+    url: str
+    title: str
+    text: str
 
 
 async def _send_cdp_command(websocket, msg_id, method, params=None):
@@ -73,62 +187,102 @@ async def _send_cdp_command(websocket, msg_id, method, params=None):
 
 
 async def get_active_tab_via_cdp():
-    """Get the currently active tab using direct CDP calls"""
+    """Return the pinned agent tab (reused across navigations in this service)."""
     try:
-        # Get all tabs from debug interface (using pooled session)
-        response = _cdp_session.get(f"http://{BROWSER_DEBUG_URL}/json", timeout=5)
-        if response.status_code != 200:
-            raise Exception("Failed to get tabs from debug interface")
-        
-        tabs = response.json()
-        if not tabs:
-            raise Exception("No tabs available")
-        
-        # Log all available tabs for debugging
-        logger.info(f"Available tabs: {[tab.get('url', 'unknown') for tab in tabs]}")
-        
-        # Find the best tab to capture - prefer content tabs over system panels
-        content_tab = None
-        speedreader_tab = None
-        
-        for tab in tabs:
-            url = tab.get('url', '')
-            title = tab.get('title', '')
-            
-            # Skip system/internal pages
-            if url.startswith(('chrome://', 'chrome-extension://', 'about:')):
-                continue
-                
-            # Look for reader mode content
-            if 'speedreader' in title.lower() or 'reader' in title.lower():
-                if url.startswith('http'):
-                    content_tab = tab
-                    break
-                    
-            # Look for regular web content as fallback
-            if url.startswith(('http://', 'https://')):
-                if not content_tab:  # First content tab
-                    content_tab = tab
-        
-        # If we found a content tab, use it
-        if content_tab:
-            logger.info(f"Selected content tab: {content_tab.get('url')} - {content_tab.get('title')}")
-            return content_tab
-        
-        # Fallback to first non-system tab
-        for tab in tabs:
-            url = tab.get('url', '')
-            if not url.startswith(('chrome://', 'chrome-extension://', 'about:')):
-                logger.info(f"Fallback to tab: {url} - {tab.get('title')}")
-                return tab
-        
-        raise Exception(
-            "No capturable browser tab found. Open an http(s) page in Brave before capturing."
-        )
-        
+        return await ensure_agent_tab()
     except Exception as e:
         logger.error(f"Failed to get active tab: {e}")
         raise
+
+
+async def _dismiss_brave_content_promos(websocket) -> None:
+    """Click in-page Brave consent / promo controls when they appear on a loaded tab."""
+    for msg_id in (80, 81, 82):
+        try:
+            await _send_cdp_command(
+                websocket,
+                msg_id,
+                "Runtime.evaluate",
+                {
+                    "expression": """(() => {
+                      const labels = ['Disable', 'Got it', 'No thanks', 'Block', 'Not now', 'Close'];
+                      for (const node of document.querySelectorAll('button, [role=button], a')) {
+                        const text = (node.textContent || '').trim();
+                        if (labels.some((label) => text === label || text.startsWith(label))) {
+                          node.click();
+                          return text;
+                        }
+                      }
+                      const infobar = document.querySelector('[class*="infobar"], [class*="InfoBar"]');
+                      if (infobar) {
+                        const close = infobar.querySelector('button[aria-label*="Close"], button[aria-label*="close"]');
+                        if (close) {
+                          close.click();
+                          return 'infobar-close';
+                        }
+                      }
+                      return '';
+                    })()""",
+                },
+            )
+        except Exception:
+            break
+
+
+async def _read_page_text_from_websocket(websocket) -> str:
+    await _send_cdp_command(websocket, 90, "Runtime.enable")
+    await _wait_for_content_ready(websocket)
+    result = await _send_cdp_command(
+        websocket,
+        91,
+        "Runtime.evaluate",
+        {
+            "expression": "(() => { const t = document.body ? document.body.innerText : ''; return t.slice(0, 120000); })()",
+            "returnByValue": True,
+        },
+    )
+    value = result.get("result", {}).get("result", {}).get("value")
+    return str(value or "")
+
+
+async def _with_active_tab_websocket():
+    active_tab = await get_active_tab_via_cdp()
+    websocket_url = active_tab.get("webSocketDebuggerUrl")
+    if not websocket_url:
+        raise HTTPException(status_code=500, detail="Could not get WebSocket URL for tab")
+    return active_tab, websocket_url
+
+
+async def navigate_active_tab(url: str) -> tuple[str, str, str]:
+    """Navigate the pinned agent tab via CDP and return url, title, and body text."""
+    validated = validate_navigation_url(url)
+    _active_tab, websocket_url = await _with_active_tab_websocket()
+    async with websockets.connect(websocket_url, max_size=100 * 1024 * 1024) as websocket:
+        await _send_cdp_command(websocket, 1, "Page.enable")
+        await _send_cdp_command(
+            websocket,
+            2,
+            "Page.navigate",
+            {"url": validated},
+        )
+        await _wait_for_content_ready(websocket, max_wait_ms=15000, poll_interval_ms=250)
+        await _dismiss_brave_content_promos(websocket)
+        title_result = await _send_cdp_command(
+            websocket,
+            3,
+            "Runtime.evaluate",
+            {"expression": "JSON.stringify({url: location.href, title: document.title})"},
+        )
+        tab_url = validated
+        tab_title = validated
+        try:
+            payload = json.loads(title_result["result"]["result"]["value"])
+            tab_url = str(payload.get("url") or validated)
+            tab_title = str(payload.get("title") or tab_url)
+        except (KeyError, TypeError, json.JSONDecodeError):
+            pass
+        tab_text = await _read_page_text_from_websocket(websocket)
+        return tab_url, tab_title, tab_text
 
 
 async def _wait_for_content_ready(websocket, max_wait_ms=5000, poll_interval_ms=200):
@@ -483,17 +637,152 @@ async def health():
             browser_version = browser_info.get('Browser', 'unknown')
         
         # Return healthy status with browser info
+        pelorus_ok = await pelorus_ready()
+        pelorus_env = str(os.environ.get("PELORUS") or "").lower() in {"1", "true", "yes"}
+        if pelorus_env and pelorus_ok:
+            control_backend = "pelorus"
+        elif cdp_debug_reachable():
+            control_backend = "cdp"
+        else:
+            control_backend = "unavailable"
         return {
             "status": "healthy", 
             "browser": "cdp_accessible", 
             "version": f"direct_cdp_{browser_version}",
             "tabs_count": len(tabs),
-            "method": "direct_cdp_websocket"
+            "method": "direct_cdp_websocket",
+            "pelorus": "ready" if pelorus_ok else "unavailable",
+            "desktop_control": pelorus_ok,
+            "control_backend": control_backend,
+            **(
+                {"desktop_control_note": CDP_FALLBACK_NOTE}
+                if control_backend == "cdp"
+                else (
+                    {}
+                    if pelorus_ok
+                    else {"desktop_control_reason": DESKTOP_CONTROL_UNAVAILABLE_MESSAGE}
+                )
+            ),
         }
         
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "browser": str(e)}
+
+
+@app.post("/navigate", response_model=NavigateResponse)
+async def navigate_page(body: NavigateRequest):
+    try:
+        url, title, text = await navigate_active_tab(body.url)
+        return NavigateResponse(url=url, title=title, text=text)
+    except BrowserUrlPolicyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Navigate failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Navigate failed: {exc}") from exc
+
+
+@app.get("/pelorus/state")
+async def pelorus_state():
+    if not await pelorus_ready():
+        return await pelorus_get("/api/state")
+    try:
+        return await pelorus_get("/api/state")
+    except Exception as exc:
+        logger.error("Pelorus state failed: %s", exc)
+        return {
+            "desktop_control": False,
+            "code": "desktop_control_unavailable",
+            "message": str(exc),
+        }
+
+
+@app.get("/pelorus/screenshot")
+async def pelorus_screenshot():
+    if not await pelorus_ready():
+        return {
+            "desktop_control": False,
+            "code": "desktop_control_unavailable",
+            "message": DESKTOP_CONTROL_UNAVAILABLE_MESSAGE,
+            "image": None,
+        }
+    try:
+        payload = await desktop_screenshot()
+        if isinstance(payload, dict):
+            payload.setdefault("desktop_control", True)
+        return payload
+    except Exception as exc:
+        logger.error("Pelorus screenshot failed: %s", exc)
+        return {
+            "desktop_control": False,
+            "code": "desktop_control_unavailable",
+            "message": str(exc),
+            "image": None,
+        }
+
+
+@app.post("/pelorus/control")
+async def pelorus_control(body: PelorusControlRequest):
+    if not await pelorus_ready():
+        return {
+            "desktop_control": False,
+            "code": "desktop_control_unavailable",
+            "message": DESKTOP_CONTROL_UNAVAILABLE_MESSAGE,
+        }
+    payload: dict[str, Any] = {"action": body.action}
+    if body.coordinate is not None:
+        payload["coordinate"] = body.coordinate
+    if body.text is not None:
+        payload["text"] = body.text
+    if body.scroll_direction is not None:
+        payload["scroll_direction"] = body.scroll_direction
+    if body.scroll_amount is not None:
+        payload["scroll_amount"] = body.scroll_amount
+    if body.duration is not None:
+        payload["duration"] = body.duration
+    try:
+        return await pelorus_post("/api/desktop/control", payload)
+    except Exception as exc:
+        logger.error("Pelorus control failed: %s", exc)
+        raise HTTPException(status_code=503, detail={"code": "pelorus_control_failed", "message": str(exc)}) from exc
+
+
+@app.get("/read", response_model=BrowserReadResponse)
+async def read_active_page():
+    try:
+        active_tab, websocket_url = await _with_active_tab_websocket()
+        tab_url = str(active_tab.get("url") or "")
+        tab_title = str(active_tab.get("title") or tab_url)
+        async with websockets.connect(websocket_url, max_size=100 * 1024 * 1024) as websocket:
+            await _send_cdp_command(websocket, 1, "Runtime.enable")
+            await _wait_for_content_ready(websocket)
+            await _dismiss_brave_content_promos(websocket)
+            result = await _send_cdp_command(
+                websocket,
+                2,
+                "Runtime.evaluate",
+                {
+                    "expression": "(() => { const t = document.body ? document.body.innerText : ''; return JSON.stringify({url: location.href, title: document.title, text: t.slice(0, 120000)}); })()",
+                    "returnByValue": True,
+                },
+            )
+            raw = result.get("result", {}).get("result", {}).get("value", "{}")
+            payload = json.loads(raw) if isinstance(raw, str) else {}
+            return BrowserReadResponse(
+                url=str(payload.get("url") or tab_url),
+                title=str(payload.get("title") or tab_title),
+                text=str(payload.get("text") or ""),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Read page failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Read failed: {exc}") from exc
 
 
 @app.post("/capture", response_model=CaptureResponse)
@@ -505,8 +794,16 @@ async def capture_page():
     try:
         logger.info(f"Connecting to browser at {BROWSER_DEBUG_URL}")
         
-        # Get active tab
-        active_tab = await get_active_tab_via_cdp()
+        try:
+            active_tab = await get_active_tab_via_cdp()
+        except NoCapturableBrowserTab as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "browser_capture_no_http_tab",
+                    "message": str(exc),
+                },
+            ) from exc
         websocket_url = active_tab.get('webSocketDebuggerUrl')
         logger.info(f"WebSocket URL: {websocket_url}")
         

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from runtime_protocol.context_budget import resolve_context_budget
 
+from app.models.auto_limits import AutoLimitsSettings, default_auto_limits
 from app.product_orchestration.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
     DEFAULT_TOKEN_BUDGET,
@@ -165,6 +166,7 @@ class MemoryManagerConversationRequest(BaseModel):
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
     context_budget: Optional[ContextBudgetOverride] = None
     web_search_mode: Literal["off", "ask", "on"] = "off"
+    browser_access_mode: Literal["off", "ask", "on"] = "off"
     web_search_decision: Optional[MemoryManagerWebSearchDecision] = None
     memory_review_cursor: Optional["MemoryConsistencyReviewCursor"] = None
 
@@ -268,6 +270,7 @@ class MemoryManagerPlanRequest(BaseModel):
     memory_review_cursor: Optional[MemoryConsistencyReviewCursor] = None
     review_id: Optional[str] = None
     web_search_mode: Literal["off", "ask", "on"] = "off"
+    browser_access_mode: Literal["off", "ask", "on"] = "off"
     web_search_decision: Optional[MemoryManagerWebSearchDecision] = None
 
 
@@ -340,11 +343,24 @@ class ContextBudgetOverride(BaseModel):
     durable_memory_ratio: Optional[float] = Field(default=None, gt=0, le=1)
     document_ratio: Optional[float] = Field(default=None, gt=0, le=1)
     memory_expanded_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    evidence_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    draft_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    plan_section_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    plan_total_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    plan_memory_ratio: Optional[float] = Field(default=None, gt=0, le=1)
 
     @model_validator(mode="after")
     def _validate_prefetch_sum(self) -> "ContextBudgetOverride":
         resolve_context_budget(self.model_dump(exclude_none=True))
         return self
+
+
+class CoverageIterationsOverride(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_iterations_sufficient_coverage: Optional[int] = Field(default=None, ge=1, le=64)
+    max_iterations_probably_sufficient_coverage: Optional[int] = Field(default=None, ge=1, le=64)
+    web_search_iteration_bonus: Optional[int] = Field(default=None, ge=0, le=32)
 
 
 class ThreadChatRequest(BaseModel):
@@ -354,7 +370,9 @@ class ThreadChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=20_000)
     llm_model: str = Field(min_length=1, max_length=300)
     use_web_search: bool = False
+    web_search_mode: Optional[Literal["off", "ask", "on"]] = None
     hitl_web_approval: Optional[bool] = None
+    browser_access_mode: Literal["off", "ask", "on"] = "off"
     use_reranker: Optional[bool] = None
     bypass_clarification: bool = False
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
@@ -390,6 +408,9 @@ class ThreadMemorySettings(BaseModel):
 
 class ThreadSettingsResponse(BaseModel):
     replans: int = Field(default=1, ge=1, le=REPLANS_LIMIT)
+    context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
+    context_budget: Dict[str, float] = Field(default_factory=dict)
+    coverage_iterations: Dict[str, int] = Field(default_factory=dict)
     system_role: str = Field(default="", max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Dict[str, str] = Field(default_factory=dict)
     custom_instructions: str = Field(
@@ -401,10 +422,16 @@ class ThreadSettingsResponse(BaseModel):
     agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
     agent_workflow_validation: Optional[Dict[str, Any]] = None
     memory: ThreadMemorySettings = Field(default_factory=ThreadMemorySettings)
+    auto_limits: AutoLimitsSettings = Field(
+        default_factory=lambda: AutoLimitsSettings(**default_auto_limits())
+    )
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
     replans: Optional[int] = Field(default=None, ge=1, le=REPLANS_LIMIT)
+    context_window: Optional[int] = Field(default=None, ge=256, le=2_000_000)
+    context_budget: Optional[Dict[str, Optional[float]]] = None
+    coverage_iterations: Optional[Dict[str, Optional[int]]] = None
     system_role: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Optional[Dict[str, str]] = None
     custom_instructions: Optional[str] = Field(
@@ -415,6 +442,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     use_reranker: Optional[bool] = None
     agent_workflow: Optional[Dict[str, str]] = None
     memory: Optional[ThreadMemorySettings] = None
+    auto_limits: Optional[AutoLimitsSettings] = None
 
 
 class ToolCatalogEntry(BaseModel):
@@ -422,12 +450,17 @@ class ToolCatalogEntry(BaseModel):
     display_name: str
     description: str
     default_prompt: str
+    category: Optional[str] = None
+    group_label: Optional[str] = None
 
 
 class PromptDefaults(BaseModel):
     replans_limit: int
+    auto_limits: AutoLimitsSettings
     context_window: int
     context_budget: Dict[str, float]
+    coverage_iterations: Dict[str, int] = Field(default_factory=dict)
+    advanced_field_specs: List[Dict[str, Any]] = Field(default_factory=list)
     system_role: str
     tool_instructions: Dict[str, str]
     custom_instructions: str

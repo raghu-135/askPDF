@@ -156,6 +156,11 @@ class ToolName(str, Enum):
     YAHOO_FINANCE_NEWS = "yahoo_finance_news"
     ASK_FOR_CLARIFICATION = "ask_for_clarification"
     PUBLISH_CANVAS = "publish_canvas"
+    BROWSER_NAVIGATE = "browser_navigate"
+    BROWSER_SNAPSHOT = "browser_snapshot"
+    BROWSER_ACT = "browser_act"
+    BROWSER_READ = "browser_read"
+    BROWSER_SAVE_TO_THREAD = "browser_save_to_thread"
 
 
 class GraphSentinel(str, Enum):
@@ -171,6 +176,7 @@ class NodeCategory(str, Enum):
     DURABLE_MEMORY = "durable_memory"
     THREAD_EVENTS = "thread_events"
     WEB = "web"
+    BROWSER = "browser"
     ANSWER = "answer"
     HUMAN_REVIEW = "human_review"
     EXTERNAL_RESEARCH = "external_research"
@@ -317,6 +323,11 @@ class ToolContractId(str, Enum):
     YAHOO_FINANCE_NEWS = "yahoo_finance_news"
     CLARIFY_INTENT = "clarify_intent"
     RESEARCH_CANVAS_PUBLISH = "research_canvas_publish"
+    BROWSER_NAVIGATE = "browser_navigate"
+    BROWSER_SNAPSHOT = "browser_snapshot"
+    BROWSER_ACT = "browser_act"
+    BROWSER_READ = "browser_read"
+    BROWSER_SAVE_TO_THREAD = "browser_save_to_thread"
 
 
 ROUTER_ROUTES = {route.value for route in RouterRoute}

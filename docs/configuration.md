@@ -42,15 +42,16 @@ are not operator `.env` entries:
 
 - LOCAL_EMBEDDING_MODEL selects the local embedding model baked into the
   rag-service image.
-- Popular OpenRouter, LM Studio, and Ollama embedding ids are registered in
-  `rag_service/app/services/embedding_tokenizer_registry.py` with matching
-  Hugging Face tokenizers. Create Project lists those ids when the provider
-  catalog includes them. EMBEDDING_TOKENIZER_CONFIG_JSON overrides or adds
-  models.
-- The control plane loads remote-model tokenizers with `local_files_only=True`.
-  `rag_service/scripts/download_embedding_tokenizers.py` prefetches them during
-  image build (`DOWNLOAD_LOCAL_MODELS=true`, the default). HF_TOKEN is optional
-  for authenticated Hugging Face downloads at build time.
+- Remote embedding chunking is configured in
+  `rag_service/config/embedding_models.json` (override with `EMBEDDING_MODELS_CONFIG`).
+  Catalog entries with a `tokenizer` field use Hugging Face tokenizers; other
+  provider ids use generic tiktoken packing (`EMBEDDING_GENERIC_INPUT_LIMIT`,
+  `EMBEDDING_GENERIC_PACK_MARGIN`). Create Project lists all provider embedding
+  models and shows the resolved tier, tokenizer, and limits.
+- The control plane loads exact-tier tokenizers with `local_files_only=True`.
+  `rag_service/scripts/download_embedding_tokenizers.py` prefetches catalog
+  tokenizers during image build (`DOWNLOAD_LOCAL_MODELS=true`, the default).
+  HF_TOKEN is optional for authenticated Hugging Face downloads at build time.
 - LOCAL_RERANKER_MODEL selects the optional local cross-encoder.
 - EMBEDDING_DEVICE and RERANKER_DEVICE select CPU, CUDA, or MPS where supported.
 - LLM_API_URL points to Docker Model Runner, Ollama, LM Studio, OpenRouter, or

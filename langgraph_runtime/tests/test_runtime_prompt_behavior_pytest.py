@@ -125,6 +125,19 @@ def test_runtime_graph_prompt_builders_include_datetime_context():
     assert "RUNTIME DATE/TIME CONTEXT" in build_planner_prompt(state)
 
 
+def test_router_prompt_includes_browser_tools_when_browser_access_enabled():
+    prompt = build_router_prompt(
+        {
+            "question": "What does https://example.com say in the main heading?",
+            "use_web_search": False,
+            "use_browser_access": True,
+            "pre_fetch_bundle": {},
+        }
+    )
+    assert "browser_navigate" in prompt
+    assert "Browser Workbench Mandate" in prompt
+
+
 def test_all_runtime_prompt_builders_resolve_runtime_owned_assets():
     state = {
         "question": "Explain the evidence",

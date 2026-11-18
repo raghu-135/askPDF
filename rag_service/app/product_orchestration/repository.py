@@ -398,6 +398,23 @@ class AgentWorkflowRepository:
         session = await self._get_session()
         return await run_store_delete_run(session, run_id)
 
+    async def stamp_pending_interrupt_resume_guard(self, run_id: str) -> Optional[AgentRun]:
+        """Reconcile resume_guard with the current runtime binding after async event persistence."""
+
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id)
+            if run is None or run.status != RUN_STATUS_AWAITING_HUMAN:
+                return run
+            interrupt = pending_interrupt_from_run(run)
+            if str(interrupt.get("status") or INTERRUPT_STATUS_PENDING) != INTERRUPT_STATUS_PENDING:
+                return run
+            interrupt["resume_guard"] = run_interrupt_resume_guard(run)
+            replace_jsonb_field(run, "pending_interrupt_json", interrupt)
+            await session.flush()
+            await session.refresh(run)
+            return run
+
     async def mark_run_awaiting_human(
         self,
         run_id: str,
