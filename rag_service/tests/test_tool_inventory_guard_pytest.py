@@ -12,6 +12,11 @@ from app.agent.tool_registry import (
 )
 from app.product_orchestration.builtin_workflows import load_builtin_workflows
 
+_WORKFLOW_TOOL_NAME_ALIASES = {
+    "pub_med": "pubmed",
+    "semanticscholar": "semantic_scholar",
+}
+
 
 def _catalog_tool_names() -> set[str]:
     return {entry["tool_name"] for entry in get_tool_catalog(for_settings=True)}
@@ -74,9 +79,10 @@ def test_builtin_workflow_callable_tools_are_cataloged_or_internal():
     for workflow in load_builtin_workflows():
         runtime_kind = str((workflow.get("spec_json") or {}).get("runtime", {}).get("kind", ""))
         allowed = (workflow.get("spec_json") or {}).get("config", {}).get("allowed_tool_ids") or []
-        for item in allowed:
-            item_str = str(item)
-            if item_str in catalog_names:
+            for item in allowed:
+                item_str = str(item)
+                item_str = _WORKFLOW_TOOL_NAME_ALIASES.get(item_str, item_str)
+                if item_str in catalog_names:
                 continue
             resolved = tool_names_for_contract_id(item_str)
             if resolved:
