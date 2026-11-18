@@ -87,7 +87,7 @@ def llm_judge(
         ],
         "temperature": 0,
     }
-    r = client.post(completions_url, json=payload, timeout=120.0)
+    r = client.post(completions_url, json=payload, timeout=180.0)
     if r.status_code >= 400:
         return string_constraints(answer, match) is True
     text = r.json()["choices"][0]["message"]["content"]
