@@ -10,6 +10,14 @@ from runtime_protocol.delegation_inheritance import merge_delegate_inherited_too
 from runtime_protocol.tool_approval import ApprovalMode
 
 
+def test_legacy_parent_knobs_merge_to_ask_web_mode():
+    inherited = merge_delegate_inherited_tool_settings(
+        {"use_web_search": True, "hitl_web_approval": True},
+    )
+    assert inherited["web_search_mode"] == "ask"
+    assert inherited["hitl_web_approval"] is True
+
+
 def test_delegated_child_config_compiles_ask_web_policy():
     inherited = merge_delegate_inherited_tool_settings({"web_search_mode": "ask", "use_web_search": True})
     child_config = {

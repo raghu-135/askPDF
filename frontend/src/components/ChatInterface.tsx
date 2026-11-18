@@ -140,6 +140,10 @@ import {
     WORKBENCH_AUTO_SIDE_MIN_WIDTH,
 } from '../lib/deep-research-review-panel-layout';
 import { clearInterruptPlaceholderForLiveRun, shouldHideChatInterruptPlaceholder } from '../lib/chat-interrupt-placeholders';
+import {
+    isInterruptAlreadyResolvedError,
+    shouldDismissRecoveredHumanReview,
+} from '../lib/human-review-resume-recovery';
 import { startAgentRunResumeIdleGuard } from '../lib/agent-run-resume-idle-guard';
 import {
     isAgentRunResumeProductTerminal,
@@ -1239,7 +1243,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 return;
             }
             const interrupt = run.pending_interrupt || latest.pending_interrupt;
-            if (!interrupt || interrupt.status && interrupt.status !== InterruptStatus.Pending) {
+            if (shouldDismissRecoveredHumanReview(run)) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
+            if (!interrupt || (interrupt.status && interrupt.status !== InterruptStatus.Pending)) {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
                 return;
@@ -1821,11 +1830,24 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setPendingHumanReview(null);
             setHumanReviewEditText('');
         }
-        const restoreToolApprovalUi = () => {
-            if (dismissToolApprovalOnAction) {
-                setPendingHumanReview(reviewSnapshot);
-                setHumanReviewEditText(interrupt.proposed_final_answer || '');
+        const restoreToolApprovalUi = (persistedRun?: AgentRunDetails | null) => {
+            if (!dismissToolApprovalOnAction) return;
+            if (shouldDismissRecoveredHumanReview(persistedRun)) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
             }
+            const pending = persistedRun?.pending_interrupt;
+            if (pending?.interrupt_id) {
+                setPendingHumanReview({
+                    ...reviewSnapshot,
+                    interrupt: pending as AgentRunPendingInterrupt,
+                });
+                setHumanReviewEditText(pending.proposed_final_answer || '');
+                return;
+            }
+            setPendingHumanReview(reviewSnapshot);
+            setHumanReviewEditText(interrupt.proposed_final_answer || '');
         };
         if (!interrupt.interrupt_id) {
             restoreToolApprovalUi();
@@ -2073,6 +2095,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             if (!response) {
                 try {
                     const persisted = await getAgentRun(reviewSnapshot.runId, activeThread.id);
+                    if (shouldDismissRecoveredHumanReview(persisted)) {
+                        await loadMessages();
+                        onThreadUpdate?.();
+                        setPendingHumanReview(null);
+                        setHumanReviewEditText('');
+                        setHumanReviewError(null);
+                        return true;
+                    }
                     if (persisted && isResumeProductTerminalRunStatus(persisted.status)) {
                         await loadMessages();
                         onThreadUpdate?.();
@@ -2117,8 +2147,26 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             onThreadUpdate?.();
             return true;
         } catch (err: any) {
-            setHumanReviewError(err?.message || 'Unable to submit review decision.');
-            restoreToolApprovalUi();
+            const errMessage = err?.message || 'Unable to submit review decision.';
+            let persistedRun: AgentRunDetails | null = null;
+            try {
+                persistedRun = await getAgentRun(reviewSnapshot.runId, activeThread.id);
+            } catch {
+                persistedRun = null;
+            }
+            if (
+                shouldDismissRecoveredHumanReview(persistedRun)
+                || isInterruptAlreadyResolvedError(errMessage)
+            ) {
+                await loadMessages();
+                onThreadUpdate?.();
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                setHumanReviewError(null);
+                return true;
+            }
+            setHumanReviewError(errMessage);
+            restoreToolApprovalUi(persistedRun);
             return false;
         } finally {
             if (humanReviewSubmissionKeyRef.current === submissionKey) {
@@ -2164,6 +2212,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
         setComposerText('');
         setClarificationOptions(null);
+        setPendingHumanReview(null);
+        setHumanReviewEditText('');
+        setHumanReviewError(null);
+        humanReviewSubmissionKeyRef.current = null;
         setLoading(true);
 
         const optimisticStamp = Date.now();
@@ -2302,6 +2354,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 undefined,
                 packingBudgetPayload(contextBudget),
                 browserAccessMode,
+                webSearchMode,
             );
             if (!response) throw new Error(terminalStreamError || 'The chat stream ended before returning a response.');
             const traceWasOpenForTempMessage = workspaceTraceMessageIdRef.current === tempAssistantMsg.id;

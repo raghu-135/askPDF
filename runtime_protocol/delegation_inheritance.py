@@ -58,14 +58,24 @@ def merge_delegate_inherited_tool_settings(*sources: Mapping[str, Any] | None) -
 def _normalize_delegate_tool_derivatives(settings: dict[str, Any]) -> dict[str, Any]:
     if not settings:
         return settings
-    mode = settings.get("web_search_mode")
-    if mode in {"on", "off", "ask"}:
-        settings.setdefault("use_web_search", mode != "off")
-        settings.setdefault("hitl_web_approval", mode == "ask")
-    browser_mode = settings.get("browser_access_mode")
-    if browser_mode in {"on", "off", "ask"}:
-        settings.setdefault("use_browser_access", browser_mode != "off")
-        settings.setdefault("hitl_browser_approval", browser_mode == "ask")
+    from runtime_protocol.permission_modes import derive_browser_access_mode, derive_web_search_mode
+
+    web_mode = derive_web_search_mode(
+        web_search_mode=settings.get("web_search_mode"),
+        hitl_web_approval=settings.get("hitl_web_approval"),
+        use_web_search=settings.get("use_web_search"),
+    )
+    settings["web_search_mode"] = web_mode
+    settings["use_web_search"] = web_mode != "off"
+    settings["hitl_web_approval"] = web_mode == "ask"
+    browser_mode = derive_browser_access_mode(
+        browser_access_mode=settings.get("browser_access_mode"),
+        hitl_browser_approval=settings.get("hitl_browser_approval"),
+        use_browser_access=settings.get("use_browser_access"),
+    )
+    settings["browser_access_mode"] = browser_mode
+    settings["use_browser_access"] = browser_mode != "off"
+    settings["hitl_browser_approval"] = browser_mode == "ask"
     return settings
 
 

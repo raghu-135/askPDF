@@ -2953,6 +2953,7 @@ const threadChatPayload = (
   hitlWebApproval?: boolean,
   contextBudget?: ContextBudgetDefaults,
   browserAccessMode: 'off' | 'ask' | 'on' = 'off',
+  webSearchMode?: 'off' | 'ask' | 'on',
 ): Record<string, any> => {
   const payload: any = {
     thread_id: threadId,
@@ -2962,8 +2963,11 @@ const threadChatPayload = (
     use_reranker: useReranker,
     context_window: contextWindowSize,
     browser_access_mode: browserAccessMode,
-    ...getBrowserRuntimeContext()
+    ...getBrowserRuntimeContext(),
   };
+  if (webSearchMode === 'off' || webSearchMode === 'ask' || webSearchMode === 'on') {
+    payload.web_search_mode = webSearchMode;
+  }
   if (contextBudget) {
     payload.context_budget = contextBudget;
   }
@@ -3003,8 +3007,9 @@ export async function threadChat(
   hitlWebApproval?: boolean,
   contextBudget?: ContextBudgetDefaults,
   browserAccessMode: 'off' | 'ask' | 'on' = 'off',
+  webSearchMode?: 'off' | 'ask' | 'on',
 ): Promise<ThreadChatResponse> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget, browserAccessMode);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget, browserAccessMode, webSearchMode);
   const maxRetries = 2;
   let attempt = 0;
 
@@ -3054,8 +3059,9 @@ export async function streamThreadChat(
   signal?: AbortSignal,
   contextBudget?: ContextBudgetDefaults,
   browserAccessMode: 'off' | 'ask' | 'on' = 'off',
+  webSearchMode?: 'off' | 'ask' | 'on',
 ): Promise<void> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget, browserAccessMode);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval, contextBudget, browserAccessMode, webSearchMode);
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
