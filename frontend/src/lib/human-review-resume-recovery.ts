@@ -1,5 +1,5 @@
 import type { AgentRunDetails } from './api';
-import { InterruptStatus } from './enums';
+import { InterruptStatus } from './enums.ts';
 
 export function isInterruptAlreadyResolvedError(message: unknown): boolean {
   const text = String(message ?? '').toLowerCase();
