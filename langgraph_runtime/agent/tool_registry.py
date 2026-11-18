@@ -872,6 +872,33 @@ def tool_names_for_contract_id(contract_id: str) -> List[str]:
     )
 
 
+# Builtin workflow specs and Hermes exports may use MCP ids that differ from registry keys.
+WORKFLOW_TOOL_IDENTIFIER_ALIASES: Dict[str, str] = {
+    "pub_med": "pubmed",
+    "semanticscholar": "semantic_scholar",
+}
+
+
+def normalize_workflow_tool_identifier(identifier: str) -> str:
+    step = WORKFLOW_TOOL_IDENTIFIER_ALIASES.get(identifier, identifier)
+    return TOOL_INSTRUCTION_KEY_ALIASES.get(step, step)
+
+
+def is_accounted_callable_tool_identifier(identifier: str) -> bool:
+    """True when a workflow allowed_tool id maps to catalog, internal, or contract tools."""
+    name = normalize_workflow_tool_identifier(identifier)
+    if is_internal_tool(name) or is_user_configurable_tool(name):
+        return True
+    contracted = tool_names_for_contract_id(name)
+    if contracted:
+        return any(
+            is_user_configurable_tool(tool_name) or is_internal_tool(tool_name)
+            for tool_name in contracted
+        )
+    catalog_names = {entry["tool_name"] for entry in get_settings_tool_catalog_entries()}
+    return name in catalog_names
+
+
 def build_tool_catalog_entry(tool_name: str) -> Dict[str, str]:
     cfg = TOOL_FRIENDLY_CONFIG.get(tool_name, {})
     contract = TOOL_CONTRACT_METADATA.get(tool_name, {})

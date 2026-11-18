@@ -6,33 +6,11 @@ from app.agent.prompting import build_tool_registry_and_playbook_sections, get_t
 from app.agent.tool_registry import (
     INTERNAL_TOOL_NAMES,
     get_workflow_prompt_tool_names,
+    is_accounted_callable_tool_identifier,
     is_internal_tool,
     is_user_configurable_tool,
-    tool_names_for_contract_id,
 )
 from app.product_orchestration.builtin_workflows import load_builtin_workflows
-
-_WORKFLOW_TOOL_NAME_ALIASES = {
-    "pub_med": "pubmed",
-    "semanticscholar": "semantic_scholar",
-}
-
-
-def _catalog_tool_names() -> set[str]:
-    return {entry["tool_name"] for entry in get_tool_catalog(for_settings=True)}
-
-
-def _is_accounted_callable_tool(identifier: str) -> bool:
-    name = _WORKFLOW_TOOL_NAME_ALIASES.get(identifier, identifier)
-    if is_internal_tool(name) or is_user_configurable_tool(name):
-        return True
-    contracted = tool_names_for_contract_id(name)
-    if contracted:
-        return any(
-            is_user_configurable_tool(tool_name) or is_internal_tool(tool_name)
-            for tool_name in contracted
-        )
-    return name in _catalog_tool_names()
 
 
 def test_settings_catalog_includes_browser_and_wikidata():
@@ -58,7 +36,7 @@ def test_memory_curator_tools_are_internal_only():
 
 
 def test_prompt_inventory_tracks_settings_catalog_for_runtime_flags():
-    settings_names = _catalog_tool_names()
+    settings_names = {entry["tool_name"] for entry in get_tool_catalog(for_settings=True)}
     for use_web in (True, False):
         for use_browser in (True, False):
             prompt_tools = get_workflow_prompt_tool_names(
@@ -92,7 +70,7 @@ def test_builtin_workflow_callable_tools_are_cataloged_or_internal():
         allowed = (workflow.get("spec_json") or {}).get("config", {}).get("allowed_tool_ids") or []
         for item in allowed:
             item_str = str(item)
-            if not _is_accounted_callable_tool(item_str):
+            if not is_accounted_callable_tool_identifier(item_str):
                 unresolved.add(item_str)
     assert unresolved == set(), sorted(unresolved)
 

@@ -9,15 +9,6 @@ from app.product_orchestration.workflow_runtime import workflow_allows_auto_limi
 from app.product_orchestration.builtin_workflows import load_builtin_workflows
 
 
-@pytest.fixture(autouse=True)
-def _auto_env(monkeypatch):
-    monkeypatch.setenv("AUTO_MAX_TOTAL_VISITS", "12")
-    monkeypatch.setenv("AUTO_MAX_INTERRUPTS_PER_RUN", "4")
-    monkeypatch.setenv("AUTO_MAX_DELEGATES_PER_TURN", "1")
-    monkeypatch.setenv("AUTO_REQUIRE_PLAN_APPROVAL_ON_COMPLEX", "false")
-    monkeypatch.setenv("AUTO_REQUIRE_PLAN_APPROVAL_ALL", "false")
-
-
 def test_default_auto_limits_from_env():
     defaults = default_auto_limits()
     assert defaults["max_total_visits"] == 12
