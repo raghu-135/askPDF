@@ -81,7 +81,11 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
     assert "no_relevant_memory" in memory_contract["warning_codes"]
 
     assert web_contract["id"] == "live_web_recon"
-    assert web_contract["allowed_caller_nodes"] == ["web_worker", "deep_research_subagent"]
+    assert web_contract["allowed_caller_nodes"] == [
+        "web_worker",
+        "deep_research_subagent",
+        "context_loader",
+    ]
     assert "web_search_disabled" in web_contract["warning_codes"]
 
     assert any(record["tool_name"] == "search_knowledge" and record["display_name"] == "Search Knowledge" for record in records)
@@ -112,6 +116,7 @@ def test_tool_call_validation_enforces_allowed_caller_nodes():
     validate_tool_call_allowed("search_durable_memory", "context_loader")
     validate_tool_call_allowed("search_thread_events", "thread_events_worker")
     validate_tool_call_allowed("search_web", "web_worker")
+    validate_tool_call_allowed("search_web", "context_loader")
     validate_tool_call_allowed("search_knowledge", "deep_research_subagent")
     validate_tool_call_allowed("publish_canvas", "synthesizer")
     validate_tool_call_allowed("publish_canvas", "direct_answer")
