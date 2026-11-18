@@ -22,6 +22,19 @@ def _catalog_tool_names() -> set[str]:
     return {entry["tool_name"] for entry in get_tool_catalog(for_settings=True)}
 
 
+def _is_accounted_callable_tool(identifier: str) -> bool:
+    name = _WORKFLOW_TOOL_NAME_ALIASES.get(identifier, identifier)
+    if is_internal_tool(name) or is_user_configurable_tool(name):
+        return True
+    contracted = tool_names_for_contract_id(name)
+    if contracted:
+        return any(
+            is_user_configurable_tool(tool_name) or is_internal_tool(tool_name)
+            for tool_name in contracted
+        )
+    return name in _catalog_tool_names()
+
+
 def test_settings_catalog_includes_browser_and_wikidata():
     catalog = {item["tool_name"]: item for item in get_tool_catalog(for_settings=True)}
 
@@ -74,24 +87,12 @@ def test_registry_and_playbook_sections_list_the_same_tools():
 
 
 def test_builtin_workflow_callable_tools_are_cataloged_or_internal():
-    catalog_names = _catalog_tool_names()
     unresolved: set[str] = set()
     for workflow in load_builtin_workflows():
-        runtime_kind = str((workflow.get("spec_json") or {}).get("runtime", {}).get("kind", ""))
         allowed = (workflow.get("spec_json") or {}).get("config", {}).get("allowed_tool_ids") or []
         for item in allowed:
-            item_str = _WORKFLOW_TOOL_NAME_ALIASES.get(str(item), str(item))
-            if item_str in catalog_names:
-                continue
-            resolved = tool_names_for_contract_id(item_str)
-            if resolved:
-                for tool_name in resolved:
-                    if tool_name not in catalog_names and not is_internal_tool(tool_name):
-                        unresolved.add(tool_name)
-                continue
-            if item_str not in catalog_names and not is_internal_tool(item_str):
-                if runtime_kind == "hermes_agent" and item_str in catalog_names:
-                    continue
+            item_str = str(item)
+            if not _is_accounted_callable_tool(item_str):
                 unresolved.add(item_str)
     assert unresolved == set(), sorted(unresolved)
 
