@@ -330,6 +330,8 @@ services:
         condition: service_completed_successfully
       postgresql:
         condition: service_healthy
+    extra_hosts:
+    - host.docker.internal:host-gateway
     healthcheck: *healthcheck-langgraph-startupz
   hermes-config-init:
     profiles:

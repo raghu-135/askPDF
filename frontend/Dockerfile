@@ -12,6 +12,10 @@ WORKDIR /app
 
 FROM base AS deps
 
+# kokoro-js pulls onnxruntime-node; the postinstall script defaults to a GPU
+# binary that 404s in slim CPU-only builders. Skip CUDA EP only — CPU ort still installs.
+ENV ONNXRUNTIME_NODE_INSTALL_CUDA=skip
+
 COPY package.json package-lock.json ./
 
 RUN npm ci
