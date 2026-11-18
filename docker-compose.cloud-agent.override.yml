@@ -254,9 +254,7 @@ services:
       retries: 12
   frontend-test-runner:
     command:
-    - npm test
-    volumes:
-    - ./frontend/node_modules:/workspace/frontend/node_modules:ro
+    - npm ci --ignore-scripts && npm run test:contracts && npm test
   test-runner:
     volumes:
     - ./.askpdf-hf-cache:/models/hf

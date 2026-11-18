@@ -106,7 +106,7 @@ cleanup() {
 trap cleanup EXIT
 
 run_frontend_tests() {
-    echo "Running frontend tests..."
+    echo "Running frontend contract checks (tsc + next build) and Node tests..."
     test_compose run --rm frontend-test-runner
 }
 

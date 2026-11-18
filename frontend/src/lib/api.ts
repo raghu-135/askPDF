@@ -924,8 +924,26 @@ export interface ContextBudgetDefaults {
   plan_memory_ratio?: number;
 }
 
+/** Window + packing budget inherited by a delegated child agent run. */
+export interface InheritedAgentContext {
+  context_window?: number;
+  context_budget?: Partial<ContextBudgetDefaults> & Record<string, number>;
+}
+
+export interface AgentRunDelegationDetail {
+  child_run_id?: string;
+  child_workflow_id?: string;
+  question?: string;
+  inherited_context_window?: number;
+  inherited_context_budget?: Partial<ContextBudgetDefaults> & Record<string, number>;
+  [key: string]: unknown;
+}
+
+export type AgentRunPrefetchSummary = Record<string, unknown>;
+
 export interface PromptDefaults {
   replans_limit: number;
+  auto_limits?: AutoLimitsSettings;
   context_window: number;
   context_budget: ContextBudgetDefaults;
   system_role: string;
@@ -1336,6 +1354,8 @@ export interface AgentRunOperationDetail {
   checkpoint_after?: Record<string, any>;
   output?: Record<string, any>;
   event?: Record<string, any>;
+  prefetch_summary?: AgentRunPrefetchSummary | null;
+  delegation?: AgentRunDelegationDetail | null;
   llm?: {
     prompt?: { role?: string; content?: unknown }[];
     response?: unknown;
@@ -1395,10 +1415,7 @@ export interface AgentRunDetails {
   workflow_id: string;
   task_id?: string | null;
   parent_run_id?: string | null;
-  inherited_context?: {
-    context_window?: number;
-    context_budget?: Record<string, number>;
-  } | null;
+  inherited_context?: InheritedAgentContext | null;
   task_attempt?: number;
   resolved_spec_json?: Record<string, any>;
   runtime_binding_status?: string;
@@ -1448,6 +1465,7 @@ export interface AgentRunSummary {
   workflow_id: string;
   task_id?: string | null;
   parent_run_id?: string | null;
+  inherited_context?: InheritedAgentContext | null;
   task_attempt?: number;
   status: string;
   started_at?: string | null;

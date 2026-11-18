@@ -749,7 +749,7 @@ export interface ChatInterfaceProps {
 export type ChatTraceDescriptor = {
     id: string;
     threadId?: string;
-    messageId: string;
+    messageId?: string;
     label: string;
     status?: string;
     routeReason?: string;
