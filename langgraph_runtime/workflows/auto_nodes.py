@@ -30,6 +30,7 @@ from runtime_protocol.auto_limits import AUTO_LIMIT_MAX_DELEGATES_PER_TURN
 from langgraph_runtime.workflows.state import RouterRagState
 from langgraph_runtime.workflows.trace import compact_preview
 from langgraph_runtime.workflows.auto_handoff_sources import merge_auto_handoff_sources
+from langgraph_runtime.workflows.delegated_child_nodes import await_delegated_child_human_review
 from langgraph_runtime.workflows.clarification_terminal import (
     clarification_options_from_mapping,
     clarification_terminal_active,
@@ -288,6 +289,17 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
     )
     child_result = response.get("result") if isinstance(response.get("result"), dict) else {}
     child_status = response.get("status") or child_result.get("status")
+    if str(child_status or "") == "awaiting_human" and child_run_id:
+        response = await await_delegated_child_human_review(
+            response=response,
+            child_run_id=child_run_id,
+            child_workflow_id=child_workflow_id,
+            parent_run_id=parent_run_id,
+            thread_id=thread_id,
+            config=config,
+        )
+        child_result = response.get("result") if isinstance(response.get("result"), dict) else {}
+        child_status = response.get("status") or child_result.get("status")
     child_options = clarification_options_from_mapping({**child_result, "clarification_options": response.get("clarification_options") or child_result.get("clarification_options")})
     delegation = _delegation_detail(
         child_run_id=child_run_id,
@@ -382,12 +394,6 @@ async def delegate_synthesizer_node(state: RouterRagState, config: RunnableConfi
     answer = str(state.get("child_final_answer") or state.get("final_answer") or "").strip()
     if notice:
         answer = notice if not answer else f"{notice}\n\n{answer}"
-    if (
-        not answer
-        and str(child_output.get("status") or "") == "awaiting_human"
-        and child_output.get("pending_interrupt")
-    ):
-        answer = "Waiting for your approval to continue the delegated workflow."
     if not answer and state.get("agent_task_id"):
         task_id = str(state.get("agent_task_id"))
         answer = f"Deep Research task started. Track progress in task `{task_id}`."

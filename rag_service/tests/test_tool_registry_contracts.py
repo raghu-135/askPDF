@@ -63,7 +63,7 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
 
     assert document_contract["id"] == "document_search_knowledge"
     assert document_contract["category"] == "retrieval"
-    assert document_contract["allowed_caller_nodes"] == ["retrieval_worker", "deep_research_subagent"]
+    assert document_contract["allowed_caller_nodes"] == ["retrieval_worker", "deep_research_subagent", "context_loader"]
     assert document_contract["artifact_keys"] == ["matches", "readiness", "continuation"]
     assert "missing_thread_context" in document_contract["warning_codes"]
 
@@ -101,6 +101,7 @@ def test_tool_contract_records_are_schema_like():
 
 
 def test_tool_call_validation_enforces_allowed_caller_nodes():
+    validate_tool_call_allowed("search_knowledge", "context_loader")
     validate_tool_call_allowed("search_knowledge", "retrieval_worker")
     validate_tool_call_allowed("search_thread_conversation_history", "thread_conversation_history_worker")
     validate_tool_call_allowed("search_durable_memory", "durable_memory_worker")
@@ -152,7 +153,7 @@ def test_tool_contracts_endpoint(api_client):
 
     assert by_name["search_knowledge"]["id"] == "document_search_knowledge"
     assert by_name["search_knowledge"]["display_name"] == "Search Knowledge"
-    assert by_name["search_knowledge"]["allowed_caller_nodes"] == ["retrieval_worker", "deep_research_subagent"]
+    assert by_name["search_knowledge"]["allowed_caller_nodes"] == ["retrieval_worker", "deep_research_subagent", "context_loader"]
     assert by_name["search_knowledge"]["artifact_keys"] == ["matches", "readiness", "continuation"]
     assert "missing_thread_context" in by_name["search_knowledge"]["warning_codes"]
     assert by_name["search_durable_memory"]["id"] == "durable_memory"
