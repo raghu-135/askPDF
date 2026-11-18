@@ -3617,6 +3617,20 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onResetSystemRole={resetSystemRoleToDefault}
                 onResetToolInstruction={resetToolInstructionToDefault}
                 onResetCustomInstructions={resetCustomInstructionsToDefault}
+                advancedSettings={advancedSettings}
+                advancedDefaults={advancedDefaults}
+                advancedFieldSpecs={advancedFieldSpecs}
+                onAdvancedChange={(value) => {
+                    setAdvancedSettings(value);
+                    setContextWindow(value.contextWindow);
+                }}
+                onAdvancedResetField={handleAdvancedResetField}
+                onAdvancedResetSection={() => {
+                    if (advancedDefaults) {
+                        setAdvancedSettings(advancedDefaults);
+                        setContextWindow(advancedDefaults.contextWindow);
+                    }
+                }}
             />
             <ThreadForkDialog
                 open={Boolean(forkDialogMessageId)}
