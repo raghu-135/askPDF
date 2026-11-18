@@ -9,7 +9,11 @@ from typing import Any, Callable
 import httpx
 
 from benchmark_config import chat_request_options, load_benchmark_config
-from benchmark_effective_settings import assert_override_applied, effective_settings_from_run
+from benchmark_effective_settings import (
+    assert_override_applied,
+    effective_settings_from_run,
+    supplement_from_thread_settings,
+)
 from benchmark_scoring import CATEGORY_LABELS, score_answer
 from live_stack_client import (
     answer_from_run,
@@ -131,6 +135,9 @@ def run_turn(
     scoring_case = {**case, **turn}
     scores = score_answer(str(turn.get("question") or ""), answer, scoring_case, judge=judge)
     effective = effective_settings_from_run(detail)
+    thread_settings_row = client.get(f"/threads/{thread_id}/settings").json()
+    persisted = thread_settings_row if isinstance(thread_settings_row, dict) else {}
+    effective = supplement_from_thread_settings(persisted, effective)
     settings_ok, settings_reason = True, "ok"
     if verify_settings:
         settings_ok, settings_reason = assert_override_applied(

@@ -14,6 +14,36 @@ def _dig(data: Any, *keys: str) -> Any:
     return cur
 
 
+def supplement_from_thread_settings(
+    thread_settings: dict[str, Any] | None,
+    effective: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge persisted thread settings when the run trace omits budget ratios."""
+    if not isinstance(thread_settings, dict):
+        return effective
+    out = dict(effective)
+    if out.get("context_budget") is None and isinstance(thread_settings.get("context_budget"), dict):
+        out["context_budget"] = thread_settings["context_budget"]
+    if out.get("context_window") is None and thread_settings.get("context_window") is not None:
+        out["context_window"] = thread_settings["context_window"]
+    cov = dict(out.get("coverage_iterations") or {})
+    for key in (
+        "max_iterations_sufficient_coverage",
+        "max_iterations_probably_sufficient_coverage",
+        "web_search_iteration_bonus",
+    ):
+        if cov.get(key) is None and thread_settings.get(key) is not None:
+            cov[key] = thread_settings[key]
+    thread_cov = thread_settings.get("coverage_iterations")
+    if isinstance(thread_cov, dict):
+        for key, value in thread_cov.items():
+            if cov.get(key) is None and value is not None:
+                cov[key] = value
+    if cov:
+        out["coverage_iterations"] = cov
+    return out
+
+
 def effective_settings_from_run(run: dict[str, Any]) -> dict[str, Any]:
     """Best-effort effective settings from GET /agent-runs trace projection."""
     resolved = run.get("resolved_spec_json") if isinstance(run.get("resolved_spec_json"), dict) else {}

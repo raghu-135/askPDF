@@ -22,6 +22,7 @@ for name in "${SWEEPS[@]}"; do
   "$REPO_ROOT/evals/promptfoo/run_sweep.sh" "$name" --judge --limit 1 --workflows router_rag_agent --label "$label" 2>&1 | tee "$log"
   rc=${PIPESTATUS[0]}
   set -e
+  # Keep going when a sweep fails verification (recorded below).
   python3 - "$name" "$label" "$rc" "$log" >>"$OUT" <<'PY'
 import json, sys
 from pathlib import Path
