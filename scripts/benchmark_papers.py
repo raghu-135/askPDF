@@ -44,7 +44,7 @@ def ensure_paper(paper: dict[str, Any], *, force: bool = False) -> Path:
     expected = str(paper["sha256"]).lower()
     pdf_url = str(paper["pdf_url"])
     if dest.is_file() and not force:
-        if _sha256(dest) == expected:
+        if not expected or _sha256(dest) == expected:
             return dest
         raise RuntimeError(f"{arxiv_id}: cache sha256 mismatch (delete {dest} or use --force)")
     if dest.is_file() and force and _sha256(dest) == expected:
