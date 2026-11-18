@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from runtime_protocol.delegated_hitl import child_workflow_gate_ids, merge_child_delegate_hitl_policy
 from runtime_protocol.delegation_inheritance import (
     append_delegated_child_run,
     delegate_inherited_hitl_policy,
@@ -8,6 +9,39 @@ from runtime_protocol.delegation_inheritance import (
     merge_delegate_inherited_tool_settings,
     pick_delegate_inherited_tool_settings,
 )
+
+
+def test_delegate_inherited_hitl_policy_keeps_only_child_shared_gates():
+    parent = {
+        "enabled": True,
+        "gates": {
+            "plan_approval_gate": {"target": {"node_id": "workflow_delegate"}},
+            "task_pause_gate": {"enabled": True},
+        },
+        "tools": {"search_web": {"mode": "ask", "scope": "run"}},
+        "max_interrupts_per_run": 8,
+    }
+    inherited = delegate_inherited_hitl_policy(parent, child_gate_ids=frozenset({"task_pause_gate"}))
+    assert "plan_approval_gate" not in (inherited or {}).get("gates", {})
+    assert inherited["gates"]["task_pause_gate"]["enabled"] is True
+
+
+def test_merge_child_delegate_hitl_policy_preserves_child_gates():
+    child = {
+        "enabled": True,
+        "gates": {"task_pause_gate": {"enabled": True, "mode": "approval"}},
+        "max_interrupts_per_run": 20,
+    }
+    parent_tools = {"tools": {"search_web": {"mode": "ask", "scope": "run"}}, "max_interrupts_per_run": 8}
+    merged = merge_child_delegate_hitl_policy(child, parent_tools, child_gate_ids=frozenset({"task_pause_gate"}))
+    assert merged["gates"]["task_pause_gate"]["enabled"] is True
+    assert merged["tools"]["search_web"]["mode"] == "ask"
+    assert merged["max_interrupts_per_run"] == 8
+
+
+def test_child_workflow_gate_ids_reads_builtin_shape():
+    spec = {"config": {"hitl_policy": {"gates": {"plan_approval_gate": {}, "task_pause_gate": {}}}}}
+    assert child_workflow_gate_ids(spec) == frozenset({"plan_approval_gate", "task_pause_gate"})
 
 
 def test_delegate_inherited_hitl_policy_strips_parent_graph_gates():

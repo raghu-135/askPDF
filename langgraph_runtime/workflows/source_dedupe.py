@@ -71,6 +71,7 @@ def merge_unique_source_dicts(
     key_fn,
     *,
     enrich_provenance: bool = False,
+    prefer_last: bool = False,
 ) -> List[Dict[str, Any]]:
     merged: Dict[Any, Dict[str, Any]] = {}
     order: List[Any] = []
@@ -101,6 +102,9 @@ def merge_unique_source_dicts(
                 ],
             }
             order.append(key)
+            continue
+        if prefer_last:
+            merged[key] = {**merged[key], **dict(raw)}
             continue
         for field, value in raw.items():
             if field not in merged[key] or merged[key][field] in (None, "", [], {}):

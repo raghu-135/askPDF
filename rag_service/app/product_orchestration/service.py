@@ -177,9 +177,12 @@ async def _submit_runtime_approval(
         raise
 
 
-def _attach_parallel_projection(result: Dict[str, Any], execution_event_sink: Any) -> None:
+async def _attach_parallel_projection(result: Dict[str, Any], execution_event_sink: Any) -> None:
     if execution_event_sink is None or not hasattr(execution_event_sink, "parallel_events"):
         return
+    from app.product_orchestration.parallel_event_reconcile import reconcile_parallel_terminal_events
+
+    await reconcile_parallel_terminal_events(execution_event_sink, result)
     projection = project_parallel_events(execution_event_sink.parallel_events())
     result["parallel_attempts"] = projection["journal"]
     if result.get("parallel_summary") or projection["summary"].get("dispatch_id"):
@@ -660,7 +663,7 @@ class AgentRunService:
                 })
             result = result_to_product_payload(runtime_result)
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
-            _attach_parallel_projection(result, execution_event_sink)
+            await _attach_parallel_projection(result, execution_event_sink)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
             status = result.get("status") if isinstance(result.get("status"), str) else None
             if status is None:
@@ -876,7 +879,11 @@ class AgentRunService:
 
         from app.db import get_thread
         from app.services.agent_task_repository import create_task
-        from runtime_protocol.delegation_inheritance import merge_delegate_inherited_tool_settings
+        from runtime_protocol.delegation_inheritance import (
+            delegate_inherited_hitl_policy,
+            merge_delegate_inherited_tool_settings,
+        )
+        from runtime_protocol.delegated_hitl import child_workflow_gate_ids, merge_child_delegate_hitl_policy
 
         if not embedding_model:
             raise ValueError("embedding_model is required for delegation")
@@ -973,6 +980,18 @@ class AgentRunService:
         thread_settings = {**thread_settings, **inherited_tool}
         definition = definition_from_workflow(workflow)
         provider = builder_for_definition(definition)
+        child_gate_ids = child_workflow_gate_ids(workflow.spec_json)
+        child_config = workflow.spec_json.get("config") if isinstance(workflow.spec_json.get("config"), dict) else {}
+        child_hitl_policy = child_config.get("hitl_policy") if isinstance(child_config.get("hitl_policy"), dict) else {}
+        inherited_hitl = delegate_inherited_hitl_policy(
+            inherited_tool.get("hitl_policy"),
+            child_gate_ids=child_gate_ids,
+        )
+        merged_hitl_policy = merge_child_delegate_hitl_policy(
+            child_hitl_policy,
+            inherited_hitl,
+            child_gate_ids=child_gate_ids,
+        )
         request_overrides = {
             "llm_model": llm_model,
             "use_web_search": resolved_use_web_search,
@@ -981,7 +1000,7 @@ class AgentRunService:
             "browser_access_mode": resolved_browser_mode,
             "use_browser_access": resolved_use_browser,
             "hitl_browser_approval": inherited_tool.get("hitl_browser_approval"),
-            "hitl_policy": inherited_tool.get("hitl_policy"),
+            "hitl_policy": merged_hitl_policy or None,
             "hitl_canvas_publish": inherited_tool.get("hitl_canvas_publish"),
             "use_reranker": use_reranker,
             "system_role": system_role or None,
@@ -1221,6 +1240,89 @@ class AgentRunService:
                 terminal_data={"run_id": run.id, "status": status},
                 boundary_only=status == AgentRunStatus.AWAITING_HUMAN.value,
             )
+
+    async def run_delegate_child_resume(
+        self,
+        *,
+        parent_run_id: str,
+        thread_id: str,
+        child_run_id: str,
+        interrupt_id: str,
+        action: str,
+        approval_scope: Optional[str] = None,
+        approval_feedback: Optional[str] = None,
+        approval_modifications: Optional[Dict[str, Any]] = None,
+        edited_payload: Optional[Dict[str, Any]] = None,
+        selected_option_ids: Optional[list[str]] = None,
+        client_metadata: Optional[Dict[str, Any]] = None,
+        mcp_execution_context_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        parent_run = await self.repository.get_run(parent_run_id)
+        child_run = await self.repository.get_run(child_run_id)
+        if parent_run is None or child_run is None:
+            raise ValueError("parent_run_id or child_run_id not found")
+        if str(child_run.thread_id) != thread_id or str(parent_run.thread_id) != thread_id:
+            raise ValueError("thread_id does not match delegated runs")
+        if str(getattr(child_run, "parent_run_id", "") or "") != parent_run_id:
+            raise ValueError("child_run_id is not delegated from parent_run_id")
+
+        trace_recorder = AgentTraceRecorder(child_run)
+        execution_event_sink = AgentExecutionEventSink(include_details=False)
+        execution_event_sink.detach_delivery()
+        execution_event_sink.bind_trace_recorder(trace_recorder)
+        execution_event_sink.bind_runtime_binding_persister(self.repository.update_runtime_binding)
+        execution_event_sink.bind_runtime_fact_persister(self.repository.update_run_metadata_fields)
+        execution_event_sink.bind_runtime_event_persister(
+            child_run_id,
+            self.repository.append_run_event,
+            initial_sequence=0,
+        )
+        resolution = None
+        try:
+            resolution = await self.resume_agent_run(
+                child_run_id,
+                interrupt_id=interrupt_id,
+                action=action,
+                edited_payload=edited_payload,
+                client_metadata=client_metadata,
+                selected_option_ids=selected_option_ids,
+                expected_thread_id=thread_id,
+                execution_event_sink=execution_event_sink,
+                approval_scope=approval_scope,
+                approval_feedback=approval_feedback,
+                approval_modifications=approval_modifications,
+            )
+        finally:
+            boundary_only = (
+                resolution is not None
+                and str(getattr(resolution.run, "status", "")) == AgentRunStatus.AWAITING_HUMAN.value
+            )
+            await close_agent_execution_sink(
+                execution_event_sink,
+                boundary_only=boundary_only or resolution is None,
+            )
+        if resolution is None:
+            raise RuntimeError("Delegated child resume returned no result")
+        run = resolution.run
+        from app.services.agent_runtime_projection import read_terminal_chat_answer_for_run
+
+        answer = await read_terminal_chat_answer_for_run(run)
+        status = str(getattr(run, "status", "") or "")
+        pending = getattr(run, "pending_interrupt_json", None)
+        result_payload = {
+            "status": status,
+            "answer": answer,
+            "final_answer": answer,
+            "pending_interrupt": pending,
+        }
+        return {
+            "child_workflow_id": run.workflow_id,
+            "child_run_id": run.id,
+            "final_answer": answer,
+            "status": status,
+            "pending_interrupt": pending,
+            "result": result_payload,
+        }
 
     async def resume_agent_run(
         self,
@@ -1533,7 +1635,7 @@ class AgentRunService:
                     },
                 )
             result = result_to_product_payload(runtime_result)
-            _attach_parallel_projection(result, execution_event_sink)
+            await _attach_parallel_projection(result, execution_event_sink)
             prior_metrics = dict(resolution.run.metrics_json or {})
             metrics = {
                 **prior_metrics,

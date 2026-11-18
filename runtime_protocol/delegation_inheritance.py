@@ -15,8 +15,16 @@ DELEGATE_INHERITED_TOOL_SETTINGS_KEYS = (
     "hitl_canvas_publish",
 )
 
-def delegate_inherited_hitl_policy(hitl_policy: Any) -> dict[str, Any] | None:
-    """Inherit only tool-approval rules; parent graph gates are workflow-specific."""
+def delegate_inherited_hitl_policy(
+    hitl_policy: Any,
+    *,
+    child_gate_ids: frozenset[str] | None = None,
+) -> dict[str, Any] | None:
+    """Inherit tool rules and limits; never copy parent-only graph gates.
+
+    When ``child_gate_ids`` is set, parent gates are included only if the child
+    workflow defines the same gate id (for example inherited interrupt caps).
+    """
 
     if not isinstance(hitl_policy, Mapping):
         return None
@@ -26,6 +34,17 @@ def delegate_inherited_hitl_policy(hitl_policy: Any) -> dict[str, Any] | None:
         inherited["tools"] = dict(tools)
     if "max_interrupts_per_run" in hitl_policy:
         inherited["max_interrupts_per_run"] = hitl_policy["max_interrupts_per_run"]
+    gates = hitl_policy.get("gates")
+    if child_gate_ids and isinstance(gates, Mapping) and gates:
+        shared = {
+            gate_id: dict(gate)
+            for gate_id, gate in gates.items()
+            if gate_id in child_gate_ids and isinstance(gate, Mapping)
+        }
+        if shared:
+            inherited["gates"] = shared
+            if "enabled" in hitl_policy:
+                inherited["enabled"] = hitl_policy["enabled"]
     return inherited or None
 
 

@@ -14,7 +14,7 @@ from langgraph_runtime.workflows.enums import PromptProfile
 from langgraph_runtime.workflows.corrective_contracts import CORRECTIVE_WORKFLOW_ID, corrective_memory_recall_allowed
 from langgraph_runtime.workflows.evidence import corrective_evidence_context, corrective_evidence_packets
 from langgraph_runtime.workflows.planning import WORKER_NODE_ORDER
-from langgraph_runtime.agent.canvas_layout_skills import canvas_layout_skills_section
+from langgraph_runtime.agent.canvas_layout_skills import canvas_emit_enabled, canvas_layout_skills_section
 from langgraph_runtime.workflows.canvas_citation_menu import canvas_prompt_sections
 from langgraph_runtime.prompts.loaders import get_browser_access_mandate, get_web_search_mandate, load_runtime_prompt
 from runtime_protocol.prompt_assembly import truncate_for_workflow
@@ -102,11 +102,38 @@ def _format_available_worker_nodes(state_or_settings: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
+def _workflow_prompt_tool_items(
+    state_or_settings: Dict[str, Any],
+    *,
+    use_web_search: bool,
+    use_browser_access: bool,
+    include_publish_canvas: bool = False,
+) -> list[str]:
+    from langgraph_runtime.agent.tool_registry import TOOL_NAME_PUBLISH_CANVAS, get_workflow_prompt_tool_names
+
+    names = get_workflow_prompt_tool_names(
+        use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
+    )
+    if not include_publish_canvas or not canvas_emit_enabled(state_or_settings.get("allowed_tool_ids")):
+        names = [name for name in names if name != TOOL_NAME_PUBLISH_CANVAS]
+    return names
+
+
+def _prompt_context(
+    state_or_settings: Dict[str, Any],
+    *,
+    include_publish_canvas_tool: bool = False,
+) -> Dict[str, Any]:
     use_web_search = bool(state_or_settings.get("use_web_search", False))
     use_browser_access = bool(state_or_settings.get("use_browser_access", False))
     tool_sections = build_tool_registry_and_playbook_sections(
-        None,
+        _workflow_prompt_tool_items(
+            state_or_settings,
+            use_web_search=use_web_search,
+            use_browser_access=use_browser_access,
+            include_publish_canvas=include_publish_canvas_tool,
+        ),
         state_or_settings.get("tool_instructions") or {},
         use_web_search=use_web_search,
         use_browser_access=use_browser_access,
@@ -117,7 +144,9 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
     browser_access_mandate = ""
     if use_browser_access:
         browser_access_mandate = "## Browser Workbench Mandate\n\n" + get_browser_access_mandate()
-    layout_skills = canvas_layout_skills_section(state_or_settings.get("allowed_tool_ids"))
+    layout_skills = ""
+    if include_publish_canvas_tool:
+        layout_skills = canvas_layout_skills_section(state_or_settings.get("allowed_tool_ids"))
     canvas_context = canvas_prompt_sections(state_or_settings) if layout_skills else ""
     if not canvas_context:
         from langgraph_runtime.workflows.canvas_citation_menu import format_quoted_canvas_revision_section
@@ -248,8 +277,9 @@ def build_grounded_answer_verifier_prompt(state: Dict[str, Any]) -> str:
 def build_final_answer_messages(state: Dict[str, Any], context: str) -> Dict[str, str]:
     system_role = sanitize_system_role(state.get("system_role", ""))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
+    canvas_tooling = canvas_emit_enabled(state.get("allowed_tool_ids"))
     values = {
-        **_prompt_context(state),
+        **_prompt_context(state, include_publish_canvas_tool=canvas_tooling),
         "CONTEXT": context or CONTEXT_PLACEHOLDER,
         "SYSTEM_ROLE_SECTION": f"Assistant role:\n{system_role}" if system_role else "",
         "CUSTOM_INSTRUCTIONS_SECTION": f"Custom instructions:\n{custom_instructions}" if custom_instructions else "",

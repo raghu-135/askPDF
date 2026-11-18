@@ -148,6 +148,7 @@ MCP_TEST_FILES = [
     "test_delegate_sync_sink_finalize_pytest.py",
     "test_delegated_child_resume_guard_pytest.py",
     "test_delegated_resume_terminal_pytest.py",
+    "test_parallel_event_reconcile_pytest.py",
     "test_mcp_allowed_hosts_pytest.py",
     "test_mcp_context.py",
     "test_mcp_transport.py",

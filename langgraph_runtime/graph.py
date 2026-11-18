@@ -196,7 +196,13 @@ def web_prefetch_allowed(state: Mapping[str, Any]) -> bool:
 
     if not bool(state.get("use_web_search")):
         return False
-    mode = str(state.get("web_search_mode") or "on")
+    from runtime_protocol.permission_modes import derive_web_search_mode
+
+    mode = derive_web_search_mode(
+        web_search_mode=state.get("web_search_mode"),
+        hitl_web_approval=state.get("hitl_web_approval"),
+        use_web_search=state.get("use_web_search"),
+    )
     policy = state.get("hitl_policy")
     tools = policy.get("tools") if isinstance(policy, Mapping) else None
     web_policy = tools.get(ToolName.SEARCH_WEB.value) if isinstance(tools, Mapping) else None
