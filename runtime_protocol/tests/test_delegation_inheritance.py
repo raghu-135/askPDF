@@ -2,10 +2,31 @@ from __future__ import annotations
 
 from runtime_protocol.delegation_inheritance import (
     append_delegated_child_run,
+    delegate_inherited_hitl_policy,
     delegated_child_runs_from_technical,
     delegated_child_runs_technical_details,
     merge_delegate_inherited_tool_settings,
+    pick_delegate_inherited_tool_settings,
 )
+
+
+def test_delegate_inherited_hitl_policy_strips_parent_graph_gates():
+    parent = {
+        "enabled": True,
+        "gates": {
+            "plan_approval_gate": {
+                "target": {"node_id": "workflow_delegate", "node_type": "workflow_delegate"},
+                "routes": {"approve": "workflow_delegate"},
+            },
+        },
+        "tools": {"search_web": {"mode": "ask", "scope": "run"}},
+        "max_interrupts_per_run": 8,
+    }
+    inherited = delegate_inherited_hitl_policy(parent)
+    assert "gates" not in (inherited or {})
+    assert inherited["tools"]["search_web"]["mode"] == "ask"
+    picked = pick_delegate_inherited_tool_settings({"hitl_policy": parent, "web_search_mode": "ask"})
+    assert "gates" not in picked.get("hitl_policy", {})
 
 
 def test_merge_delegate_inherited_tool_settings_prefers_ask_web_mode():

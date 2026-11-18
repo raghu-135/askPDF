@@ -15,6 +15,19 @@ DELEGATE_INHERITED_TOOL_SETTINGS_KEYS = (
     "hitl_canvas_publish",
 )
 
+def delegate_inherited_hitl_policy(hitl_policy: Any) -> dict[str, Any] | None:
+    """Inherit only tool-approval rules; parent graph gates are workflow-specific."""
+
+    if not isinstance(hitl_policy, Mapping):
+        return None
+    inherited: dict[str, Any] = {}
+    tools = hitl_policy.get("tools")
+    if isinstance(tools, Mapping) and tools:
+        inherited["tools"] = dict(tools)
+    if "max_interrupts_per_run" in hitl_policy:
+        inherited["max_interrupts_per_run"] = hitl_policy["max_interrupts_per_run"]
+    return inherited or None
+
 
 def pick_delegate_inherited_tool_settings(source: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(source, Mapping):
@@ -25,6 +38,11 @@ def pick_delegate_inherited_tool_settings(source: Mapping[str, Any] | None) -> d
             continue
         value = source[key]
         if value is None:
+            continue
+        if key == "hitl_policy":
+            inherited_hitl = delegate_inherited_hitl_policy(value)
+            if inherited_hitl:
+                picked[key] = inherited_hitl
             continue
         picked[key] = value
     return _normalize_delegate_tool_derivatives(picked)
