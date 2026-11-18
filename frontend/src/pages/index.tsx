@@ -1457,6 +1457,7 @@ export default function Home() {
                   onThreadUpdate={handleThreadUpdated}
                   onOpenThread={handleOpenThreadInChat}
                   onOpenTrace={handleOpenTrace}
+                  onOpenDelegatedRun={handleOpenDelegatedRun}
                   onOpenCanvas={handleOpenCanvas}
                   onOpenMemoryReview={handleOpenConversationReview}
                   onOpenDocumentCitation={handleOpenDocumentCitation}

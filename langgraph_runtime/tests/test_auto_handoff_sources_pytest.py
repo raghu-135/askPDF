@@ -44,6 +44,7 @@ async def test_delegate_synthesizer_node_merges_child_sources_into_state():
         "child_final_answer": "Done.",
         "child_run_id": "child-run-1",
         "child_workflow_id": "router_rag_agent",
+        "delegated_child_runs": [{"run_id": "child-run-1", "workflow_id": "router_rag_agent", "order": 1}],
         "delegate_child_output": {
             "result": {
                 "document_sources": [{"file_hash": "f-1", "page_number": 3, "snippet": "from child"}],
@@ -61,4 +62,6 @@ async def test_delegate_synthesizer_node_merges_child_sources_into_state():
     assert update["document_sources"][0]["page_number"] == 3
     assert update["web_sources"][0]["url"] == "https://arxiv.org/abs/1706.03762"
     assert update["used_chat_ids"] == ["turn-9"]
-    assert update["debug_trace"]["technical_details"]["child_run_id"] == "child-run-1"
+    technical = update["debug_trace"]["technical_details"]
+    assert technical["child_run_id"] == "child-run-1"
+    assert technical["delegated_child_runs"][0]["run_id"] == "child-run-1"

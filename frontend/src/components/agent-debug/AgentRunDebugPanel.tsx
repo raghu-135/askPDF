@@ -12,6 +12,7 @@ import { compactExecutionText } from '../agent-graph/agent-execution-display';
 import { isTaskOwnedAgentRun } from '../../lib/deep-research-ui-state';
 import { useAgentRunCapabilities } from '../../lib/use-agent-run-capabilities';
 import { isValidTraceId } from '../../lib/trace-tabs';
+import { delegatedChildRunLinkLabel, delegatedChildRunsFromRunDetails } from '../../lib/delegated-child-runs';
 
 function AgentRunDebugPanel({
   runId,
@@ -100,18 +101,10 @@ function AgentRunDebugPanel({
     || (typeof grounding?.usefulness_score === 'number'
       ? (Number(grounding.usefulness_score) >= 3 ? 'yes (historical score)' : 'no (historical score)')
       : undefined);
-  const delegationMeta = useMemo(() => {
-    if (!runDetails) return null;
-    const technical = (
-      (debug?.technical_details && typeof debug.technical_details === 'object' && !Array.isArray(debug.technical_details))
-        ? debug.technical_details
-        : getRunTrace(runDetails)?.technical_details
-    ) as Record<string, unknown> | undefined;
-    if (!technical) return null;
-    const childRunId = String(technical.child_run_id || technical.delegate_child_run_id || '').trim();
-    const childWorkflowId = String(technical.child_workflow_id || technical.delegate_child_workflow_id || '').trim();
-    return childRunId ? { childRunId, childWorkflowId: childWorkflowId || undefined } : null;
-  }, [debug?.technical_details, runDetails]);
+  const delegatedChildRuns = useMemo(
+    () => delegatedChildRunsFromRunDetails(runDetails),
+    [runDetails, debug?.technical_details],
+  );
 
   useEffect(() => {
     setRefreshedRunDetails(undefined);
@@ -268,17 +261,21 @@ function AgentRunDebugPanel({
           Route reason: {compactExecutionText(routeReason, 480)}
         </Typography>
       )}
-      {delegationMeta && onOpenDelegatedRun && (
-        <Box sx={{ px: 1, pb: 0.5 }}>
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<OpenInNewIcon />}
-            data-testid="debug-delegated-child-run-link"
-            onClick={() => onOpenDelegatedRun(delegationMeta.childRunId, delegationMeta.childWorkflowId)}
-          >
-            Open delegated child run{delegationMeta.childWorkflowId ? ` (${delegationMeta.childWorkflowId})` : ''}
-          </Button>
+      {delegatedChildRuns.length > 0 && onOpenDelegatedRun && (
+        <Box sx={{ px: 1, pb: 0.5, display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+          {delegatedChildRuns.map((child) => (
+            <Button
+              key={child.run_id}
+              size="small"
+              variant="outlined"
+              startIcon={<OpenInNewIcon />}
+              data-testid="debug-delegated-child-run-link"
+              onClick={() => onOpenDelegatedRun(child.run_id, child.workflow_id || undefined)}
+            >
+              Open delegated child run{child.workflow_id ? ` (${child.workflow_id})` : ''}
+              {delegatedChildRuns.length > 1 && child.order ? ` #${child.order}` : ''}
+            </Button>
+          ))}
         </Box>
       )}
       {loading && (

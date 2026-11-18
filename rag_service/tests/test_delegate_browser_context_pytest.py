@@ -15,9 +15,11 @@ def test_delegate_request_accepts_browser_fields():
         question="Use the browser to find similar papers.",
         use_browser_access=True,
         browser_access_mode="ask",
+        inherited_tool_settings={"web_search_mode": "ask", "hitl_web_approval": True},
     )
     assert body.use_browser_access is True
     assert body.browser_access_mode == "ask"
+    assert body.inherited_tool_settings["web_search_mode"] == "ask"
 
 
 def test_execution_context_validation_exposes_browser_use(monkeypatch):

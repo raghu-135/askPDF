@@ -33,6 +33,7 @@ class DelegateSyncRequest(BaseModel):
     tool_instructions: Dict[str, str] = Field(default_factory=dict)
     context_window: Optional[int] = Field(default=None, ge=256, le=2_000_000)
     context_budget: Optional[Dict[str, float]] = None
+    inherited_tool_settings: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _validate_execution_context(
@@ -94,6 +95,7 @@ async def delegate_sync(
             context_window=body.context_window or context_fields.get("context_window"),
             context_budget=body.context_budget,
             mcp_execution_context_token=execution_context.strip() if execution_context else None,
+            inherited_tool_settings=body.inherited_tool_settings,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "delegate_invalid", "message": str(exc)}) from exc
