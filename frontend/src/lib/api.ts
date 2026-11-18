@@ -1134,6 +1134,7 @@ export interface AgentRunDebug {
   detail_manifest?: AgentRunOperationDetailManifest[];
   detail_safety?: Record<string, any>;
   final_output?: AgentRunFinalOutput;
+  technical_details?: Record<string, unknown>;
   topology?: {
     available?: boolean;
     kind?: string | null;

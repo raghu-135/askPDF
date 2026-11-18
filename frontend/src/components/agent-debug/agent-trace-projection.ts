@@ -824,8 +824,8 @@ export const mergeLiveAndRetainedTraceViews = (
     return live;
   }
   const liveVisits = new Set(live.operations.map((operation) => `${operation.id}:${operation.visitIndex || 1}`));
-  const retainedByVisit = new Map(
-    retained.operations.map((operation) => [`${operation.id}:${operation.visitIndex || 1}`, operation] as const),
+  const retainedByVisit = new Map<string, TraceOperationView>(
+    retained.operations.map((operation) => [`${operation.id}:${operation.visitIndex || 1}`, operation]),
   );
   const operations = [
     ...retained.operations.filter((operation) => !liveVisits.has(`${operation.id}:${operation.visitIndex || 1}`)),
