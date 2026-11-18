@@ -43,4 +43,6 @@ async def test_delegated_child_web_search_under_ask_interrupts_before_execution(
     )
     assert mode is ApprovalMode.ASK
     assert isinstance(pending, dict)
-    assert pending.get("tool_name") == "search_web"
+    proposed = pending.get("proposed_tool") if isinstance(pending.get("proposed_tool"), dict) else {}
+    assert proposed.get("name") == "search_web"
+    assert pending.get("type") == "tool_approval"
