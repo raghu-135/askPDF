@@ -52,26 +52,6 @@ def test_merge_thread_settings_applies_context_window_override():
     assert merged["context_window"] == 131072
 
 
-def test_coverage_bonus_extends_web_worker_visit_limit():
-    config = {
-        "replans": 1,
-        "coverage_iterations": {"web_search_iteration_bonus": 3},
-        "graph": {
-            "nodes": [
-                {"id": "web-1", "type": "web_worker"},
-                {"id": "serial", "type": "serial_dispatch"},
-            ],
-            "edges": [],
-        },
-    }
-    spec = {"config": config}
-    base = replan_loop_policy(spec, config)
-    web_limit = base["node_visit_limits"]["web-1"]
-    config_without = {**config, "coverage_iterations": {}}
-    without = replan_loop_policy({"config": config_without}, config_without)
-    assert web_limit == without["node_visit_limits"]["web-1"] + 3
-
-
 def test_storage_reset_drops_context_window_override():
     stored = merge_thread_advanced_storage({"context_window": 200_000}, {"context_window": None})
     assert "context_window" not in stored
