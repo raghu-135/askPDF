@@ -14,6 +14,9 @@ import {
 import ReplayIcon from '@mui/icons-material/Replay';
 import { AgentWorkflow, AutoLimitsSettings, PromptToolDefinition } from '../lib/api';
 import { ConversationMarkdown } from './conversation/ConversationMarkdown';
+import ThreadAdvancedSettingsSection, {
+  type ThreadAdvancedSettingsValue,
+} from './ThreadAdvancedSettingsSection';
 import { selectFieldVariant } from '../theme';
 
 export interface ChatSettingsFormProps {
@@ -55,6 +58,12 @@ export interface ChatSettingsFormProps {
   onResetSystemRole: () => void;
   onResetToolInstruction: (toolId: string) => void;
   onResetCustomInstructions: () => void;
+  advancedSettings?: ThreadAdvancedSettingsValue | null;
+  advancedDefaults?: ThreadAdvancedSettingsValue | null;
+  advancedFieldSpecs?: NonNullable<import('../lib/api').PromptDefaults['advanced_field_specs']>;
+  onAdvancedChange?: (value: ThreadAdvancedSettingsValue) => void;
+  onAdvancedResetField?: (fieldKey: string) => void;
+  onAdvancedResetSection?: () => void;
 }
 
 const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
@@ -95,6 +104,12 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
   onResetSystemRole,
   onResetToolInstruction,
   onResetCustomInstructions,
+  advancedSettings,
+  advancedDefaults,
+  advancedFieldSpecs,
+  onAdvancedChange,
+  onAdvancedResetField,
+  onAdvancedResetSection,
 }) => {
   const replansEnabled = Boolean(agentWorkflows.find((workflow) => workflow.id === agentWorkflowId)?.supports_replans);
   const autoLimitsEnabled = Boolean(
@@ -414,6 +429,16 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
           </Box>
         ));
       })()}
+      {advancedSettings && advancedDefaults && advancedFieldSpecs && onAdvancedChange && onAdvancedResetField && onAdvancedResetSection ? (
+        <ThreadAdvancedSettingsSection
+          defaults={advancedDefaults}
+          value={advancedSettings}
+          fieldSpecs={advancedFieldSpecs}
+          onChange={onAdvancedChange}
+          onResetField={onAdvancedResetField}
+          onResetSection={onAdvancedResetSection}
+        />
+      ) : null}
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
         <TextField
           fullWidth

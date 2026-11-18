@@ -32,7 +32,7 @@ from app.db import (
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
 from app.auth import current_principal
-from app.models.llm_server_client import merge_thread_settings
+from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, merge_thread_settings
 from app.models.requests import ThreadChatRequest
 from app.services.canvas_service import CanvasService
 from app.services.embedding_model_service import (
@@ -230,6 +230,10 @@ async def thread_chat_endpoint(
         # Override thread_id from path
         req.thread_id = thread_id
         thread_settings = merge_thread_settings(await get_thread_settings(thread_id))
+        if req.context_budget is None and thread_settings.get("context_budget"):
+            req.context_budget = thread_settings["context_budget"]
+        if req.context_window == DEFAULT_TOKEN_BUDGET and int(thread_settings.get("context_window") or DEFAULT_TOKEN_BUDGET) != DEFAULT_TOKEN_BUDGET:
+            req.context_window = int(thread_settings["context_window"])
         if req.replans is None and await _settings_workflow_supports_replans(thread_settings):
             req.replans = thread_settings["replans"]
         if req.system_role_override is None:

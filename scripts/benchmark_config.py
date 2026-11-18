@@ -20,6 +20,22 @@ _CHAT_BUDGET_KEYS = frozenset(
         "durable_memory_ratio",
         "document_ratio",
         "memory_expanded_ratio",
+        "evidence_ratio",
+        "draft_ratio",
+        "plan_section_ratio",
+        "plan_total_ratio",
+        "plan_memory_ratio",
+    }
+)
+
+_THREAD_ADVANCED_KEYS = frozenset(
+    {
+        "context_window",
+        "context_budget",
+        "max_iterations_sufficient_coverage",
+        "max_iterations_probably_sufficient_coverage",
+        "web_search_iteration_bonus",
+        "coverage_iterations",
     }
 )
 
@@ -70,7 +86,14 @@ def thread_settings_baseline(config: dict[str, Any] | None = None) -> dict[str, 
     """Subset applied via PUT /threads/{id}/settings after workflow is set."""
     cfg = config if config is not None else load_benchmark_config()
     baseline = cfg.get("thread_settings")
-    return dict(baseline) if isinstance(baseline, dict) else {}
+    if not isinstance(baseline, dict):
+        return {}
+    advanced = cfg.get("advanced") if isinstance(cfg.get("advanced"), dict) else {}
+    merged = dict(baseline)
+    for key in _THREAD_ADVANCED_KEYS:
+        if key in advanced:
+            merged[key] = advanced[key]
+    return merged
 
 
 def context_baseline_record(config: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -269,6 +269,9 @@ export interface AutoLimitsSettings {
 
 export interface ThreadSettings {
   replans: number;
+  context_window?: number;
+  context_budget?: ContextBudgetDefaults;
+  coverage_iterations?: Record<string, number>;
   auto_limits?: AutoLimitsSettings;
   system_role: string;
   tool_instructions: Record<string, string>;
@@ -948,6 +951,15 @@ export interface PromptDefaults {
   auto_limits?: AutoLimitsSettings;
   context_window: number;
   context_budget: ContextBudgetDefaults;
+  coverage_iterations?: Record<string, number>;
+  advanced_field_specs?: Array<{
+    key: string;
+    type: 'ratio' | 'integer';
+    minimum?: number;
+    maximum?: number;
+    default?: number;
+    env_var?: string;
+  }>;
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;

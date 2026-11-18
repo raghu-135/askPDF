@@ -37,6 +37,16 @@ _OVERRIDE_ALIASES = {
     "document_ratio": "document_ratio",
     "memory_expanded": "memory_expanded_ratio",
     "memory_expanded_ratio": "memory_expanded_ratio",
+    "evidence": "evidence_ratio",
+    "evidence_ratio": "evidence_ratio",
+    "draft": "draft_ratio",
+    "draft_ratio": "draft_ratio",
+    "plan_section": "plan_section_ratio",
+    "plan_section_ratio": "plan_section_ratio",
+    "plan_total": "plan_total_ratio",
+    "plan_total_ratio": "plan_total_ratio",
+    "plan_memory": "plan_memory_ratio",
+    "plan_memory_ratio": "plan_memory_ratio",
 }
 
 

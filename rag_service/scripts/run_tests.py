@@ -62,6 +62,7 @@ UNIT_TEST_FILES = [
     "test_deep_research_controls_pytest.py",
     "test_budget_env_resolution_pytest.py",
     "test_context_budget_pytest.py",
+    "test_thread_advanced_settings_pytest.py",
     "test_content_store_pytest.py",
     "test_external_research_tools.py",
     "test_execution_stream_live_delivery_pytest.py",

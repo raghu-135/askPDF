@@ -43,6 +43,7 @@ ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "task_policy",
     "auto_policy",
     "available_delegate_workflows",
+    "coverage_iterations",
 }
 
 
@@ -189,6 +190,11 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
     except (TypeError, ValueError):
         max_todos, max_attempts, max_interrupts = 50, 2, 16
     deep_control_visits = max_todos + replans + 1
+    coverage = config.get("coverage_iterations") if isinstance(config.get("coverage_iterations"), dict) else {}
+    try:
+        web_search_bonus = max(0, min(32, int(coverage.get("web_search_iteration_bonus", 0))))
+    except (TypeError, ValueError):
+        web_search_bonus = 0
     for node_id, node_type in node_types.items():
         if node_type == WorkflowNodeType.REPLANNER.value:
             node_visit_limits[node_id] = replans
@@ -229,6 +235,8 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
             node_visit_limits[node_id] = node_type_max_visits(node_type) if repeatable_budget_intervention else max_todos * max_attempts
         elif node_type == WorkflowNodeType.HITL_GATE.value and workflow_runtime_features(spec).get("supports_long_running_tasks"):
             node_visit_limits[node_id] = max_interrupts
+        elif node_type == WorkflowNodeType.WEB_WORKER.value and web_search_bonus:
+            node_visit_limits[node_id] = node_visit_limits.get(node_id, replans + 1) + web_search_bonus
     max_total_visits = sum(node_visit_limits.get(node_id, 1) for node_id in node_types)
     return {
         "max_total_visits": max_total_visits,

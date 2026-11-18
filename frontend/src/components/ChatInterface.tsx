@@ -89,6 +89,8 @@ import {
     type ReasoningFormat as ReasoningFormatValue,
 } from '../lib/enums';
 import ChatSettingsDialog from './ChatSettingsDialog';
+import type { ThreadAdvancedSettingsValue } from './ThreadAdvancedSettingsSection';
+import type { ContextBudgetDefaults } from '../lib/api';
 import { useThreadChatSettingsRegistryOptional } from '../lib/thread-chat-settings-context';
 import DeepResearchTaskPanel, { DeepResearchTaskPicker } from './DeepResearchTaskPanel';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
@@ -744,6 +746,39 @@ export interface BuilderTestConversationRuntime extends ConversationRuntime {
     onSessionChange: React.Dispatch<React.SetStateAction<BuilderTestSession>>;
 }
 
+function buildAdvancedSettingsPatch(
+    value: ThreadAdvancedSettingsValue,
+    defaults: ThreadAdvancedSettingsValue,
+): Record<string, unknown> {
+    const patch: Record<string, unknown> = {};
+    if (value.contextWindow !== defaults.contextWindow) {
+        patch.context_window = value.contextWindow;
+    }
+    const budgetPatch: Record<string, number | null> = {};
+    (Object.keys(value.contextBudget) as Array<keyof ContextBudgetDefaults>).forEach((key) => {
+        const current = value.contextBudget[key];
+        const baseline = defaults.contextBudget[key];
+        if (current !== undefined && current !== baseline) {
+            budgetPatch[key] = current;
+        }
+    });
+    if (Object.keys(budgetPatch).length > 0) {
+        patch.context_budget = budgetPatch;
+    }
+    const coveragePatch: Record<string, number | null> = {};
+    Object.keys(defaults.coverageIterations).forEach((key) => {
+        const current = value.coverageIterations[key];
+        const baseline = defaults.coverageIterations[key];
+        if (current !== undefined && current !== baseline) {
+            coveragePatch[key] = current;
+        }
+    });
+    if (Object.keys(coveragePatch).length > 0) {
+        patch.coverage_iterations = coveragePatch;
+    }
+    return patch;
+}
+
 export interface ChatInterfaceProps {
     activeThread: Thread | null;
     chatSentences: ConversationSentence[];
@@ -856,6 +891,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultHitlCanvasPublish, setDefaultHitlCanvasPublish] = useState(false);
     const [useReranker, setUseReranker] = useState(false);
     const [defaultUseReranker, setDefaultUseReranker] = useState(false);
+    const [advancedDefaults, setAdvancedDefaults] = useState<ThreadAdvancedSettingsValue | null>(null);
+    const [advancedSettings, setAdvancedSettings] = useState<ThreadAdvancedSettingsValue | null>(null);
+    const [advancedFieldSpecs, setAdvancedFieldSpecs] = useState<
+        NonNullable<import('../lib/api').PromptDefaults['advanced_field_specs']>
+    >([]);
     const [useMemory, setUseMemory] = useState(true);
     const [useThreadMemory, setUseThreadMemory] = useState(true);
     const [useProjectMemory, setUseProjectMemory] = useState(true);
@@ -1017,12 +1057,29 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (settings?.auto_limits) {
             setAutoLimits(settings.auto_limits);
         }
+        if (settings?.context_window) {
+            setContextWindow(settings.context_window);
+        }
+        if (advancedDefaults) {
+            setAdvancedSettings({
+                contextWindow: settings?.context_window ?? advancedDefaults.contextWindow,
+                contextBudget: {
+                    ...advancedDefaults.contextBudget,
+                    ...(settings?.context_budget ?? {}),
+                },
+                coverageIterations: {
+                    ...advancedDefaults.coverageIterations,
+                    ...(settings?.coverage_iterations ?? {}),
+                },
+            });
+        }
     }, [
         defaultCustomInstructions,
         defaultHitlCanvasPublish,
         defaultSystemRole,
         defaultUseReranker,
         webSearchMode,
+        advancedDefaults,
     ]);
 
     const loadProjectMemorySettings = useCallback(async () => {
@@ -1151,6 +1208,16 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultUseReranker(res.defaults.use_reranker ?? false);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
+                    }
+                    const advancedValue: ThreadAdvancedSettingsValue = {
+                        contextWindow: res.defaults.context_window,
+                        contextBudget: res.defaults.context_budget,
+                        coverageIterations: res.defaults.coverage_iterations ?? {},
+                    };
+                    setAdvancedFieldSpecs(res.defaults.advanced_field_specs ?? []);
+                    setAdvancedDefaults(advancedValue);
+                    if (!activeThread) {
+                        setAdvancedSettings(advancedValue);
                     }
                     if (!activeThread) {
                         setReplans(Math.min(1, res.defaults.replans_limit));
@@ -1418,6 +1485,38 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setAgentWorkflowId(agentWorkflows.find((workflow) => workflow.is_default)?.id || agentWorkflows[0]?.id || '');
         if (defaultAutoLimits) {
             setAutoLimits(defaultAutoLimits);
+        }
+        if (advancedDefaults) {
+            setAdvancedSettings(advancedDefaults);
+        }
+    };
+
+    const handleAdvancedResetField = (fieldKey: string) => {
+        if (!advancedDefaults || !advancedSettings) return;
+        if (fieldKey === 'context_window') {
+            setAdvancedSettings({ ...advancedSettings, contextWindow: advancedDefaults.contextWindow });
+            setContextWindow(advancedDefaults.contextWindow);
+            return;
+        }
+        if (fieldKey in advancedDefaults.coverageIterations) {
+            setAdvancedSettings({
+                ...advancedSettings,
+                coverageIterations: {
+                    ...advancedSettings.coverageIterations,
+                    [fieldKey]: advancedDefaults.coverageIterations[fieldKey],
+                },
+            });
+            return;
+        }
+        const budgetKey = fieldKey as keyof ContextBudgetDefaults;
+        if (advancedDefaults.contextBudget[budgetKey] !== undefined) {
+            setAdvancedSettings({
+                ...advancedSettings,
+                contextBudget: {
+                    ...advancedSettings.contextBudget,
+                    [budgetKey]: advancedDefaults.contextBudget[budgetKey] as number,
+                },
+            });
         }
     };
 
@@ -2793,6 +2892,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             if (workflowSupportsAutoLimits(agentWorkflows, agentWorkflowId) && autoLimits) {
                 nextSettings.auto_limits = autoLimits;
             }
+            if (advancedSettings && advancedDefaults) {
+                Object.assign(nextSettings, buildAdvancedSettingsPatch(advancedSettings, advancedDefaults));
+            }
             const saved = await updateThreadSettings(activeThread.id, nextSettings);
             applyThreadSettingsToState(saved);
             setSettingsDialogOpen(false);
@@ -2879,6 +2981,20 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             onResetSystemRole: resetSystemRoleToDefault,
             onResetToolInstruction: resetToolInstructionToDefault,
             onResetCustomInstructions: resetCustomInstructionsToDefault,
+            advancedSettings,
+            advancedDefaults,
+            advancedFieldSpecs,
+            onAdvancedChange: (value) => {
+                setAdvancedSettings(value);
+                setContextWindow(value.contextWindow);
+            },
+            onAdvancedResetField: handleAdvancedResetField,
+            onAdvancedResetSection: () => {
+                if (advancedDefaults) {
+                    setAdvancedSettings(advancedDefaults);
+                    setContextWindow(advancedDefaults.contextWindow);
+                }
+            },
             onSave: () => { void handleSaveThreadSettings(); },
             onReset: () => { void loadThreadSettings(); },
         });
@@ -2909,6 +3025,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         useProjectMemory,
         useReranker,
         useThreadMemory,
+        advancedDefaults,
+        advancedFieldSpecs,
+        advancedSettings,
     ]);
 
     const handleCopy = useCallback((text: string, messageId: string) => {

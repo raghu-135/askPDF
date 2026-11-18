@@ -174,6 +174,7 @@ from runtime_protocol.context_budget import (
     load_context_budget_settings,
     resolve_context_budget,
 )
+from runtime_protocol.thread_advanced_settings import resolve_thread_advanced_settings
 
 
 def compute_prefetch_budget(context_window: int, budget_overrides: dict | None = None) -> dict:
@@ -201,6 +202,8 @@ def default_thread_settings():
         "agent_workflow": {"workflow_id": default_agent_workflow_key()},
         "memory": dict(DEFAULT_THREAD_MEMORY_SETTINGS),
         "auto_limits": default_auto_limits(),
+        "context_budget": {},
+        "coverage_iterations": {},
     }
 
 
@@ -228,6 +231,10 @@ def merge_thread_settings(overrides=None):
     merged["auto_limits"] = merge_auto_limits(
         overrides.get("auto_limits") if isinstance(overrides, dict) else None
     )
+    advanced = resolve_thread_advanced_settings(overrides if isinstance(overrides, dict) else {})
+    merged["context_window"] = advanced["context_window"]
+    merged["context_budget"] = advanced["context_budget"]
+    merged["coverage_iterations"] = advanced["coverage_iterations"]
     return merged
 
 

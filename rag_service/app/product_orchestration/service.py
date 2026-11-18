@@ -62,6 +62,7 @@ from app.services.runtime_operation_repository import (
     fail_runtime_operation,
 )
 from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
+from app.models.llm_server_client import merge_thread_settings
 
 
 logger = logging.getLogger(__name__)
@@ -450,7 +451,7 @@ class AgentRunService:
             workflow.id,
         )
 
-        thread_settings = thread_settings if isinstance(thread_settings, dict) else {}
+        thread_settings = merge_thread_settings(thread_settings if isinstance(thread_settings, dict) else {})
         web_mode = thread_settings.get("web_search_mode")
         if web_mode not in {"off", "ask", "on"}:
             web_mode = derive_web_search_mode(
@@ -471,6 +472,7 @@ class AgentRunService:
             "system_role": getattr(req, "system_role_override", None),
             "tool_instructions": getattr(req, "tool_instructions_override", None),
             "custom_instructions": getattr(req, "custom_instructions_override", None),
+            "coverage_iterations": thread_settings.get("coverage_iterations"),
         }
         definition = definition_from_workflow(workflow)
         try:
