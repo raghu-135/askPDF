@@ -260,12 +260,16 @@ async def prompt_tools_endpoint():
     """Return user-facing tool aliases and default prompts for prompt customization UI."""
     try:
         from runtime_protocol.context_budget import load_context_budget_settings
+        from runtime_protocol.coverage_iterations import load_coverage_iteration_settings
+        from runtime_protocol.thread_advanced_settings import advanced_settings_field_specs
 
         defaults = merge_thread_settings({})
         defaults["tool_instructions"] = normalize_tool_instructions(
             defaults.get("tool_instructions", {})
         )
         defaults["context_budget"] = load_context_budget_settings().to_dict()
+        defaults["coverage_iterations"] = load_coverage_iteration_settings().to_dict()
+        defaults["advanced_field_specs"] = advanced_settings_field_specs()
         payload = PromptDefaults(**defaults).model_dump(mode="json")
         return {
             "tools": [
@@ -706,9 +710,20 @@ async def update_thread_settings_endpoint(
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        current = merge_thread_settings(await get_thread_settings(thread_id))
-        updates = req.model_dump(exclude_none=True)
-        next_settings = {**current, **updates}
+        from runtime_protocol.thread_advanced_settings import merge_thread_advanced_storage
+
+        raw = await get_thread_settings(thread_id) or {}
+        current = merge_thread_settings(raw)
+        updates = req.model_dump(exclude_unset=True)
+        advanced_patch = {}
+        for advanced_key in ("context_window", "context_budget", "coverage_iterations"):
+            if advanced_key in updates:
+                advanced_patch[advanced_key] = updates.pop(advanced_key)
+        raw_next = dict(raw)
+        raw_next.update(updates)
+        if advanced_patch:
+            raw_next.update(merge_thread_advanced_storage(raw, advanced_patch))
+        next_settings = merge_thread_settings(raw_next)
         requested_agent_workflow = next_settings.get("agent_workflow")
         requested_workflow_id = (
             requested_agent_workflow.get("workflow_id")
@@ -726,7 +741,7 @@ async def update_thread_settings_endpoint(
         next_settings["tool_instructions"] = normalize_tool_instructions(
             next_settings.get("tool_instructions", {})
         )
-        persisted = await update_thread_settings(thread_id, next_settings)
+        persisted = await update_thread_settings(thread_id, raw_next)
         if persisted is None:
             raise HTTPException(status_code=404, detail="Thread not found")
         merged = merge_thread_settings(persisted)
