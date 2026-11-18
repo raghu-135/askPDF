@@ -1,24 +1,27 @@
-# promptfoo eval POC (askPDF)
+# promptfoo + live-stack RAG evals
 
-Minimal replacement sketch for `benchmarks/run_benchmark.py`. Requires a live
-stack (`bash scripts/cloud-agent-setup.sh stack`) and benchmark PDFs:
-
-```bash
-./scripts/download_benchmark_pdfs.sh
-```
-
-## Smoke eval (5 Attention-paper questions)
+## Quick start (live stack required)
 
 ```bash
-export ASKPDF_BENCHMARK_MODEL='inclusionai/ling-3.2-flash:free'
-export PROMPTFOO_JUDGE_MODEL='openrouter:inclusionai/ling-3.2-flash:free'
-./evals/promptfoo/run_poc.sh
+bash scripts/cloud-agent-setup.sh stack
+./evals/promptfoo/run_eval.sh --judge --label baseline-1
 ```
 
-Uses `scripts/live_stack_client.py` and `scripts/benchmark_config.py` (same
-context baseline as `benchmarks/benchmark_config.json`).
+## Generate tests from `benchmarks/questions.json`
 
-Rate limit: `maxConcurrency: 1` and 3.5s delay in config (<20 OpenRouter RPM).
-Judge calls use `OPENROUTER_API_KEY` from the environment (never logged).
+```bash
+python3 scripts/generate_promptfoo_tests.py   # writes tests.generated.yaml
+```
 
-Outputs: `evals/promptfoo/output/poc-results.json` and console summary.
+## Sweeps (12-case `sweep_core` suite)
+
+```bash
+./evals/promptfoo/run_sweep.sh document_ratio_0.36 --judge
+```
+
+Uses `ASKPDF_BENCHMARK_CONFIG` merged from `benchmarks/benchmark_config.eval.json` and
+`evals/sweeps/<name>.json`. `--verify-settings` is enabled for sweeps.
+
+Models (override via env): `ASKPDF_BENCHMARK_MODEL=nvidia/nemotron-3.5-super-vl:free`,
+judge `ASKPDF_BENCHMARK_JUDGE_MODEL=inclusionai/ling-3.2-flash:free`, rate limit
+`ASKPDF_EVAL_MIN_INTERVAL_S=3.5`.

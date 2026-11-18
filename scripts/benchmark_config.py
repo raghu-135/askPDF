@@ -79,6 +79,14 @@ def chat_request_options(config: dict[str, Any] | None = None) -> dict[str, Any]
     budget = ctx.get("context_budget")
     if isinstance(budget, dict):
         options["context_budget"] = {k: budget[k] for k in _CHAT_BUDGET_KEYS if k in budget}
+    advanced = cfg.get("advanced") if isinstance(cfg.get("advanced"), dict) else {}
+    if advanced.get("context_window") is not None and "context_window" not in options:
+        options["context_window"] = advanced["context_window"]
+    adv_budget = advanced.get("context_budget")
+    if isinstance(adv_budget, dict):
+        merged = dict(options.get("context_budget") or {})
+        merged.update({k: adv_budget[k] for k in _CHAT_BUDGET_KEYS if k in adv_budget})
+        options["context_budget"] = merged
     return options
 
 

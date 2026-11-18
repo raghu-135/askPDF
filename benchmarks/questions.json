@@ -1,366 +1,239 @@
 {
-  "schema_version": 1,
-  "description": "Main RAG benchmark questions (40). Do not add holdout DPO items here.",
+  "schema_version": 2,
+  "description": "Primary RAG eval questions. Bundled CC BY PDFs; optional arXiv via scripts/download_benchmark_pdfs.sh.",
   "questions": [
     {
-      "id": "attn-overview",
+      "id": "invasion-overview",
       "type": "overview",
-      "question": "What does the Attention Is All You Need paper discuss at a high level?",
-      "fixture_files": ["1706.03762.pdf"],
+      "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-pone-0001208.pdf"],
       "expected_pages": [1, 2],
-      "answer_match": { "any_contains": ["transformer", "attention", "sequence"] },
-      "numeric": null
+      "question": "What does the PLOS ONE paper on economic development and biological invasions conclude?",
+      "answer_match": { "any_contains": ["invasion", "economic", "trade", "China"] }
     },
     {
-      "id": "attn-scaled-dot",
+      "id": "invasion-authors",
       "type": "fact",
-      "question": "In the Attention paper, what scaling factor is applied to dot-product attention scores?",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [4],
-      "answer_match": { "any_contains": ["sqrt", "√", "d_k", "d model"] },
-      "numeric": null
-    },
-    {
-      "id": "attn-encoder-layers",
-      "type": "table",
-      "question": "How many encoder layers does the base Transformer model use in the Attention paper (Table 3)?",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [6, 7],
-      "answer_match": { "any_contains": ["6"] },
-      "numeric": { "target": 6, "tolerance": 0 }
-    },
-    {
-      "id": "attn-multi-head-dk",
-      "type": "fact",
-      "question": "What is d_k per head in the Attention paper's default multi-head setup?",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [5],
-      "answer_match": { "any_contains": ["64"] },
-      "numeric": { "target": 64, "tolerance": 0 }
-    },
-    {
-      "id": "attn-authors",
-      "type": "fact",
-      "question": "Who is the first listed author on the Attention paper?",
-      "fixture_files": ["1706.03762.pdf"],
+      "suites": ["baseline"],
+      "fixture_files": ["plos-pone-0001208.pdf"],
       "expected_pages": [1],
-      "answer_match": { "any_contains": ["Vaswani"] },
-      "numeric": null
+      "question": "Who is the corresponding author on the China biological invasions paper?",
+      "answer_match": { "any_contains": ["Rumei Xu", "Xu"] }
     },
     {
-      "id": "attn-positional",
-      "type": "method",
-      "question": "How does the Transformer inject sequence order according to the Attention paper?",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [6],
-      "answer_match": { "any_contains": ["positional encoding", "positional encodings"] },
-      "numeric": null
-    },
-    {
-      "id": "attn-results-bleu",
-      "type": "table",
-      "question": "What English-to-German BLEU score does the big Transformer achieve on WMT 2014 in the Attention paper (Table 3)?",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [6, 7],
-      "answer_match": { "any_contains": ["28.4"] },
-      "numeric": { "target": 28.4, "tolerance": 0.1 }
-    },
-    {
-      "id": "bert-overview",
+      "id": "stats-rules-title",
       "type": "overview",
-      "question": "What does the BERT paper propose?",
-      "fixture_files": ["1810.04805.pdf"],
-      "expected_pages": [1, 2],
-      "answer_match": { "any_contains": ["bidirectional", "pre-training", "BERT"] },
-      "numeric": null
-    },
-    {
-      "id": "bert-pretraining-tasks",
-      "type": "method",
-      "question": "What are the two pre-training tasks used for BERT?",
-      "fixture_files": ["1810.04805.pdf"],
-      "expected_pages": [3, 4],
-      "answer_match": { "all_contains": ["masked", "next sentence"] },
-      "numeric": null
-    },
-    {
-      "id": "bert-large-layers",
-      "type": "table",
-      "question": "How many transformer layers does BERT-Large have?",
-      "fixture_files": ["1810.04805.pdf"],
-      "expected_pages": [4, 5],
-      "answer_match": { "any_contains": ["24"] },
-      "numeric": { "target": 24, "tolerance": 0 }
-    },
-    {
-      "id": "bert-base-params",
-      "type": "table",
-      "question": "Approximately how many parameters does BERT-Base have (millions)?",
-      "fixture_files": ["1810.04805.pdf"],
-      "expected_pages": [4, 5],
-      "answer_match": { "any_contains": ["110"] },
-      "numeric": { "target": 110, "tolerance": 5 }
-    },
-    {
-      "id": "bert-glue",
-      "type": "table",
-      "question": "What GLUE score does BERT-Large achieve with fine-tuning on all tasks (reported summary score)?",
-      "fixture_files": ["1810.04805.pdf"],
-      "expected_pages": [7, 8],
-      "answer_match": { "any_contains": ["80.5"] },
-      "numeric": { "target": 80.5, "tolerance": 0.2 }
-    },
-    {
-      "id": "rag-overview",
-      "type": "overview",
-      "question": "What problem does Retrieval-Augmented Generation (RAG) address?",
-      "fixture_files": ["2005.11401.pdf"],
-      "expected_pages": [1, 2],
-      "answer_match": { "any_contains": ["knowledge", "retrieval", "parametric"] },
-      "numeric": null
-    },
-    {
-      "id": "rag-two-memory",
-      "type": "method",
-      "question": "What two types of memory does a RAG model combine?",
-      "fixture_files": ["2005.11401.pdf"],
-      "expected_pages": [2, 3],
-      "answer_match": { "any_contains": ["non-parametric", "parametric"] },
-      "numeric": null
-    },
-    {
-      "id": "rag-fever",
-      "type": "results",
-      "question": "On which fact-checking style dataset does RAG report strong gains in the paper?",
-      "fixture_files": ["2005.11401.pdf"],
-      "expected_pages": [7, 8],
-      "answer_match": { "any_contains": ["FEVER"] },
-      "numeric": null
-    },
-    {
-      "id": "rag-jeopardy",
-      "type": "fact",
-      "question": "Which open-domain QA style task is used for Jeopardy question generation in the RAG paper?",
-      "fixture_files": ["2005.11401.pdf"],
-      "expected_pages": [5, 6],
-      "answer_match": { "any_contains": ["Jeopardy", "Natural Questions", "NQ"] },
-      "numeric": null
-    },
-    {
-      "id": "lora-overview",
-      "type": "overview",
-      "question": "What is LoRA in the LoRA paper?",
-      "fixture_files": ["2106.09685.pdf"],
-      "expected_pages": [1, 2],
-      "answer_match": { "any_contains": ["low-rank", "adaptation"] },
-      "numeric": null
-    },
-    {
-      "id": "lora-rank",
-      "type": "method",
-      "question": "What hyperparameter controls the rank of the low-rank update matrices in LoRA?",
-      "fixture_files": ["2106.09685.pdf"],
-      "expected_pages": [3, 4],
-      "answer_match": { "any_contains": ["r", "rank"] },
-      "numeric": null
-    },
-    {
-      "id": "lora-freeze",
-      "type": "method",
-      "question": "Are pretrained transformer weights frozen during LoRA training?",
-      "fixture_files": ["2106.09685.pdf"],
-      "expected_pages": [2, 3],
-      "answer_match": { "any_contains": ["frozen", "unchanged"] },
-      "numeric": null
-    },
-    {
-      "id": "lora-gpt3-trainable",
-      "type": "table",
-      "question": "How many trainable parameters does LoRA use for GPT-3 175B in the paper's main table (millions)?",
-      "fixture_files": ["2106.09685.pdf"],
-      "expected_pages": [7, 8],
-      "answer_match": { "any_contains": ["4.7", "4.7M", "million"] },
-      "numeric": { "target": 4.7, "tolerance": 0.5 }
-    },
-    {
-      "id": "survey-overview",
-      "type": "overview",
-      "question": "What is the scope of the Survey of Large Language Models paper?",
-      "fixture_files": ["2303.18223.pdf"],
-      "expected_pages": [1, 2, 3],
-      "answer_match": { "any_contains": ["large language model", "survey", "LLM"] },
-      "numeric": null
-    },
-    {
-      "id": "survey-taxonomy",
-      "type": "fact",
-      "question": "Does the LLM survey organize models along a timeline or evolution path?",
-      "fixture_files": ["2303.18223.pdf"],
-      "expected_pages": [4, 5, 6],
-      "answer_match": { "any_contains": ["timeline", "evolution", "emergence"] },
-      "numeric": null
-    },
-    {
-      "id": "survey-challenges",
-      "type": "overview",
-      "question": "Name one major challenge category discussed in the LLM survey.",
-      "fixture_files": ["2303.18223.pdf"],
-      "expected_pages": [10, 11, 12],
-      "answer_match": { "any_contains": ["hallucination", "alignment", "safety", "efficiency", "bias"] },
-      "numeric": null
-    },
-    {
-      "id": "survey-bloom",
-      "type": "fact",
-      "question": "Does the LLM survey discuss the BLOOM model?",
-      "fixture_files": ["2303.18223.pdf"],
-      "expected_pages": [20, 21, 22],
-      "answer_match": { "any_contains": ["BLOOM"] },
-      "numeric": null
-    },
-    {
-      "id": "multi-attn-bert",
-      "type": "multi_doc",
-      "question": "How do the Attention and BERT papers differ in training objective?",
-      "fixture_files": ["1706.03762.pdf", "1810.04805.pdf"],
-      "expected_pages": [1, 3],
-      "answer_match": { "any_contains": ["translation", "masked", "pre-training"] },
-      "numeric": null
-    },
-    {
-      "id": "multi-rag-lora",
-      "type": "multi_doc",
-      "question": "Which paper focuses on efficient fine-tuning with low-rank adapters: RAG or LoRA?",
-      "fixture_files": ["2005.11401.pdf", "2106.09685.pdf"],
-      "expected_pages": [1, 1],
-      "answer_match": { "any_contains": ["LoRA"] },
-      "numeric": null
-    },
-    {
-      "id": "multi-transformer-papers",
-      "type": "multi_doc",
-      "question": "Which uploaded papers describe transformer architectures (list at least two)?",
-      "fixture_files": ["1706.03762.pdf", "1810.04805.pdf", "2303.18223.pdf"],
-      "expected_pages": [1, 1],
-      "answer_match": { "any_contains": ["Attention", "BERT", "transformer"] },
-      "numeric": null
-    },
-    {
-      "id": "multi-rag-vs-parametric",
-      "type": "multi_doc",
-      "question": "Compare RAG and LoRA: which one augments generation with retrieved text passages?",
-      "fixture_files": ["2005.11401.pdf", "2106.09685.pdf"],
-      "expected_pages": [1, 2],
-      "answer_match": { "any_contains": ["RAG", "retrieval"] },
-      "numeric": null
-    },
-    {
-      "id": "multi-four-authors",
-      "type": "multi_doc",
-      "question": "Which paper among Attention, BERT, RAG, and LoRA is from Facebook AI (FAIR) authors?",
-      "fixture_files": ["1706.03762.pdf", "1810.04805.pdf", "2005.11401.pdf", "2106.09685.pdf"],
+      "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-pcbi-1004961.pdf"],
       "expected_pages": [1],
-      "answer_match": { "any_contains": ["RAG", "Lewis", "Facebook"] },
-      "numeric": null
+      "question": "What is the title of the Ten Simple Rules editorial on statistical practice?",
+      "answer_match": { "any_contains": ["Ten Simple Rules", "Statistical Practice"] }
     },
     {
-      "id": "decline-tokyo",
-      "type": "out_of_scope",
-      "question": "What is the current population of Tokyo?",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [],
-      "answer_match": { "decline": true },
-      "numeric": null
-    },
-    {
-      "id": "decline-stock",
-      "type": "out_of_scope",
-      "question": "What will Apple's stock price be on December 31, 2030?",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [],
-      "answer_match": { "decline": true },
-      "numeric": null
-    },
-    {
-      "id": "decline-quantum",
-      "type": "out_of_scope",
-      "question": "Explain experimental quantum gravity results from CERN in 2024.",
-      "fixture_files": ["1810.04805.pdf"],
-      "expected_pages": [],
-      "answer_match": { "decline": true },
-      "numeric": null
-    },
-    {
-      "id": "decline-missing-paper",
-      "type": "out_of_scope",
-      "question": "Summarize the GPT-4 technical report from OpenAI (not among the uploaded PDFs).",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [],
-      "answer_match": { "decline": true },
-      "numeric": null
-    },
-    {
-      "id": "decline-dpo-absent",
-      "type": "out_of_scope",
-      "question": "What is the DPO objective function in the Direct Preference Optimization paper?",
-      "fixture_files": ["1706.03762.pdf", "1810.04805.pdf", "2005.11401.pdf"],
-      "expected_pages": [],
-      "answer_match": { "decline": true },
-      "numeric": null
-    },
-    {
-      "id": "summarize-attn-results",
-      "type": "results",
-      "question": "Summarize the machine translation results reported in the Attention paper.",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [6, 7, 8],
-      "answer_match": { "any_contains": ["BLEU", "WMT", "translation"] },
-      "numeric": null
-    },
-    {
-      "id": "summarize-bert-squad",
-      "type": "results",
-      "question": "Summarize BERT's extractive QA results on SQuAD.",
-      "fixture_files": ["1810.04805.pdf"],
-      "expected_pages": [6, 7],
-      "answer_match": { "any_contains": ["SQuAD", "F1", "exact"] },
-      "numeric": null
-    },
-    {
-      "id": "summarize-lora",
-      "type": "results",
-      "question": "Summarize the empirical finding: does LoRA match full fine-tuning quality?",
-      "fixture_files": ["2106.09685.pdf"],
-      "expected_pages": [7, 8],
-      "answer_match": { "any_contains": ["match", "comparable", "no discernible"] },
-      "numeric": null
-    },
-    {
-      "id": "summarize-rag-ablation",
-      "type": "results",
-      "question": "What happens when RAG ablates the retrieval component according to the paper?",
-      "fixture_files": ["2005.11401.pdf"],
-      "expected_pages": [7, 8],
-      "answer_match": { "any_contains": ["worse", "degrad", "retrieval"] },
-      "numeric": null
-    },
-    {
-      "id": "survey-rlhf",
+      "id": "stats-rules-reid",
       "type": "fact",
-      "question": "Does the LLM survey discuss alignment techniques such as RLHF?",
-      "fixture_files": ["2303.18223.pdf"],
-      "expected_pages": [15, 16, 17],
-      "answer_match": { "any_contains": ["RLHF", "alignment", "reinforcement"] },
-      "numeric": null
+      "suites": ["baseline"],
+      "fixture_files": ["plos-pcbi-1004961.pdf"],
+      "expected_pages": [1],
+      "question": "Which author is listed with the University of Toronto on the statistical practice rules paper?",
+      "answer_match": { "any_contains": ["Nancy Reid", "Reid"] }
     },
     {
-      "id": "attn-layercomplexity",
-      "type": "table",
-      "question": "What is the per-layer complexity of self-attention with sequence length n and dimension d in the Attention paper (Table 1)?",
-      "fixture_files": ["1706.03762.pdf"],
-      "expected_pages": [6],
-      "answer_match": { "any_contains": ["O(n", "n^2", "n2"] },
-      "numeric": null
+      "id": "rna-editing-topic",
+      "type": "overview",
+      "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-biology-0020391.pdf"],
+      "expected_pages": [1, 2],
+      "question": "What type of RNA editing does the Alu-containing mRNA paper study?",
+      "answer_match": { "any_contains": ["A-to-I", "editing", "Alu"] }
+    },
+    {
+      "id": "rna-editing-species",
+      "type": "fact",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-biology-0020391.pdf"],
+      "expected_pages": [1],
+      "question": "Which organism's transcriptome is studied in the Alu RNA editing paper?",
+      "answer_match": { "any_contains": ["human", "Human"] }
+    },
+    {
+      "id": "social-medicine-essay",
+      "type": "overview",
+      "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-medicine-0030399.pdf"],
+      "expected_pages": [1],
+      "question": "What historical period does Dorothy Porter focus on when discussing social medicine?",
+      "answer_match": { "any_contains": ["Interwar", "Twentieth Century", "1920"] }
+    },
+    {
+      "id": "wolbachia-vector",
+      "type": "fact",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-pathogens-1008410.pdf"],
+      "expected_pages": [1],
+      "question": "Which mosquito species is studied in the Wolbachia wPip phenotype paper?",
+      "answer_match": { "any_contains": ["Aedes aegypti"] }
+    },
+    {
+      "id": "wolbachia-virus",
+      "type": "fact",
+      "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-pathogens-1008410.pdf"],
+      "expected_pages": [1, 2],
+      "question": "Which virus inhibition mechanism is discussed for Wolbachia in Aedes aegypti?",
+      "answer_match": { "any_contains": ["dengue"] }
+    },
+    {
+      "id": "spore-wall-organism",
+      "type": "fact",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-genetics-1003700.pdf"],
+      "expected_pages": [1],
+      "question": "Which yeast species is studied in the outer spore wall assembly paper?",
+      "answer_match": { "any_contains": ["Saccharomyces", "cerevisiae"] }
+    },
+    {
+      "id": "spore-wall-structure",
+      "type": "overview",
+      "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-genetics-1003700.pdf"],
+      "expected_pages": [1, 2],
+      "question": "What cellular structure does the spore wall paper describe?",
+      "answer_match": { "any_contains": ["spore", "wall"] }
+    },
+    {
+      "id": "invasion-page-ref",
+      "type": "fact",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-pone-0001208.pdf"],
+      "expected_pages": [1, 2],
+      "question": "According to the invasions paper, what is cited as a major cause of biological invasion?",
+      "answer_match": { "any_contains": ["trade", "travel", "global"] }
+    },
+    {
+      "id": "stats-open-access",
+      "type": "fact",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-pcbi-1004961.pdf"],
+      "expected_pages": [1],
+      "question": "Does the statistical practice rules paper indicate OPEN ACCESS?",
+      "answer_match": { "any_contains": ["OPEN ACCESS", "open access"] }
+    },
+    {
+      "id": "medicine-heading",
+      "type": "fact",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-medicine-0030399.pdf"],
+      "expected_pages": [1],
+      "question": "What section label appears at the top of Dorothy Porter's social medicine essay?",
+      "answer_match": { "any_contains": ["Essay"] }
+    },
+    {
+      "id": "pathogen-fraser",
+      "type": "fact",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-pathogens-1008410.pdf"],
+      "expected_pages": [1],
+      "question": "Who is the first author on the Wolbachia wPip Aedes paper?",
+      "answer_match": { "any_contains": ["Fraser"] }
+    },
+    {
+      "id": "genetics-neiman",
+      "type": "fact",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-genetics-1003700.pdf"],
+      "expected_pages": [1],
+      "question": "Which investigator is marked with * on the spore wall genetics paper?",
+      "answer_match": { "any_contains": ["Neiman"] }
+    },
+    {
+      "id": "rna-editing-author",
+      "type": "fact",
+      "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-biology-0020391.pdf"],
+      "expected_pages": [1],
+      "question": "Who is the corresponding author on the Alu RNA editing paper?",
+      "answer_match": { "any_contains": ["Maas", "Stefan Maas"] }
+    },
+    {
+      "id": "multi-invasion-stats",
+      "type": "multi_doc",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-pone-0001208.pdf", "plos-pcbi-1004961.pdf"],
+      "expected_pages": [1],
+      "question": "Compare: does either the China invasions paper or the statistical practice rules paper mention OPEN ACCESS on page 1?",
+      "answer_match": { "any_contains": ["OPEN ACCESS", "open access"] }
+    },
+    {
+      "id": "out-of-scope-neptune",
+      "type": "out_of_scope",
+      "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-pone-0001208.pdf"],
+      "expected_pages": [],
+      "question": "What is the orbital period of Neptune in Earth years?",
+      "answer_match": { "decline": true }
+    },
+    {
+      "id": "date-range-conference",
+      "type": "fact",
+      "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-medicine-0030399.pdf"],
+      "expected_pages": [1, 2],
+      "question": "The essay mentions a meeting held on 27–28 October; what year and event is associated with that date range?",
+      "answer_match": { "any_contains": ["27", "28", "October"] },
+      "numeric": null,
+      "assertions": { "no_internal_knowledge_note": true }
+    },
+    {
+      "id": "mem0-conversation",
+      "type": "conversation",
+      "suites": ["baseline"],
+      "optional_fixture": true,
+      "fixture_files": ["2504.19413.pdf"],
+      "assertions": { "no_internal_knowledge_note": true },
+      "turns": [
+        {
+          "id": "mem0-authors",
+          "question": "Who are the authors of this paper?",
+          "expected_pages": [1],
+          "answer_match": { "any_contains": ["Mem0", "memory", "author"] },
+          "bypass_clarification": true
+        },
+        {
+          "id": "mem0-qualifications",
+          "question": "What are their qualifications?",
+          "expected_pages": [1, 2],
+          "answer_match": {
+            "none_contains": ["attached documents do not", "do not address"],
+            "any_contains": ["Ph", "University", "author", "research"]
+          },
+          "bypass_clarification": true
+        },
+        {
+          "id": "mem0-web-search",
+          "question": "use the internet to search for it",
+          "expected_pages": [],
+          "chat_options": { "use_web_search": true },
+          "answer_match": {
+            "none_contains": ["attached documents do not"],
+            "any_contains": ["author", "Ph", "University", "qualification", "research"]
+          },
+          "bypass_clarification": true
+        },
+        {
+          "id": "mem0-clarify",
+          "question": "What methodology did they use?",
+          "expected_pages": [],
+          "bypass_clarification": false,
+          "answer_match": { "any_contains": ["method", "approach", "clarif", "which", "mean"] }
+        },
+        {
+          "id": "mem0-date-range",
+          "question": "Does the paper schedule anything for 27–28, and if so what?",
+          "expected_pages": [1, 5],
+          "answer_match": { "any_contains": ["27", "28"] }
+        }
+      ]
     }
   ]
 }

@@ -52,6 +52,8 @@ def ensure_paper(paper: dict[str, Any], *, force: bool = False) -> Path:
     _download(pdf_url, dest)
     actual = _sha256(dest)
     if actual != expected:
+        if not expected:
+            return dest
         dest.unlink(missing_ok=True)
         raise RuntimeError(f"{arxiv_id}: download sha256 {actual} != manifest {expected}")
     return dest
@@ -82,8 +84,9 @@ def paper_path(arxiv_or_file: str, *, include_holdout: bool = True) -> Path:
 
 
 def fixture_path(fixture_file: str) -> Path:
-    arxiv_id = fixture_file.replace(".pdf", "")
-    return paper_path(arxiv_id)
+    from benchmark_fixtures import fixture_path as resolve_fixture
+
+    return resolve_fixture(fixture_file)
 
 
 def paper_for_fixture(fixture_file: str) -> dict[str, Any] | None:

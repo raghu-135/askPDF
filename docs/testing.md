@@ -74,37 +74,22 @@ images, verifies import boundaries, runs the default test suite, collects
 control-plane and LangGraph tests, runs the LangGraph runtime proof, and runs
 a separate Hermes runtime-proof job.
 
-## RAG benchmark (on demand)
+## RAG evals (promptfoo + live stack, on demand)
 
-Shared arXiv fixtures are manifest-only under `benchmarks/fixtures/` (PDFs are
-downloaded, not committed). Before upload or benchmark:
-
-```bash
-./scripts/download_benchmark_pdfs.sh
-./scripts/upload_benchmark_fixtures.sh
-```
-
-Context window and packing ratios are pinned in `benchmarks/benchmark_config.json`
-(same baseline on every question; optional override via `ASKPDF_BENCHMARK_CONFIG` or
-`ASKPDF_BENCHMARK_CONTEXT_OVERRIDES_JSON`). Thread defaults (`replans`, reranker, etc.)
-use the same file via `PUT /threads/{id}/settings`.
-
-Run the benchmark suite (not part of default CI or `./run_tests.sh`):
+Bundled CC BY PDFs: `benchmarks/fixtures/bundled/` (see `fixtures/LICENSES.md`).
+Optional arXiv (Mem0, legacy suite): `./scripts/download_benchmark_pdfs.sh`.
 
 ```bash
-# stack at http://127.0.0.1:3000 — uses openai/gpt-4.1-mini + gemini-2.5-flash judge
-./scripts/run_rag_benchmark.sh --workflows router_rag_agent auto_rag_agent
-./scripts/run_rag_benchmark.sh --all-workflows --judge
-./scripts/run_rag_benchmark.sh --limit 5                  # smoke
-ASKPDF_INCLUDE_HOLDOUT=1 ./scripts/run_rag_benchmark.sh --holdout --judge
+python3 scripts/generate_promptfoo_tests.py
+bash scripts/cloud-agent-setup.sh stack
+./evals/promptfoo/run_eval.sh --judge --label baseline-1
+./evals/promptfoo/run_sweep.sh document_ratio_0.36 --judge
 ```
 
-Machine-readable JSON and a short Markdown summary are written under
-`benchmarks/reports/<commit-sha>.{json,md}` (gitignored). The committed
-reference scores are in `benchmarks/baseline.md` (aggregate in
-`benchmarks/baseline.json`); `run_benchmark.py` prints retrieval/answer deltas
-against that file when present. See `benchmarks/rubric.md` and
-`benchmarks/HOLDOUT.md` (DPO holdout — do not tune against).
+Live baseline config: `benchmarks/benchmark_config.eval.json`. Reports:
+`benchmarks/reports/<sha>-<label>.{json,md}`. Shared scoring:
+`scripts/benchmark_scoring.py`, `scripts/benchmark_execution.py`,
+`scripts/rag_eval_suite.py`.
 
 ## Coverage that is still thin
 

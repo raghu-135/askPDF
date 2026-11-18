@@ -15,7 +15,7 @@ evaluation split**.
 ## Running holdout cases
 
 ```bash
-ASKPDF_INCLUDE_HOLDOUT=1 ./scripts/run_rag_benchmark.sh --holdout-only
+# Holdout: extend rag_eval_suite with holdout_questions.json (on-demand; not default CI).
 ```
 
 Main-tuning questions are in [`questions.json`](questions.json).

@@ -1,6 +1,6 @@
 # RAG benchmark judge rubric (v1)
 
-Used by `benchmarks/run_benchmark.py` when exact or numeric matching is insufficient.
+Used by `scripts/rag_eval_suite.py` / promptfoo when exact or numeric matching is insufficient.
 
 ## Answer correctness (LLM judge)
 
@@ -21,7 +21,7 @@ Used by `benchmarks/run_benchmark.py` when exact or numeric matching is insuffic
 
 **Score 0 (fail)** otherwise.
 
-Judge prompt is fixed in `run_benchmark.py` (`JUDGE_SYSTEM_PROMPT`); changes require
+Judge prompt is fixed in `scripts/benchmark_scoring.py` (`JUDGE_SYSTEM_PROMPT`); changes require
 a benchmark schema bump.
 
 ## Retrieval hit
