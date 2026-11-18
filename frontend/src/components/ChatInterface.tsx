@@ -892,6 +892,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [useReranker, setUseReranker] = useState(false);
     const [defaultUseReranker, setDefaultUseReranker] = useState(false);
     const [advancedDefaults, setAdvancedDefaults] = useState<ThreadAdvancedSettingsValue | null>(null);
+    const advancedDefaultsRef = useRef<ThreadAdvancedSettingsValue | null>(null);
     const [advancedSettings, setAdvancedSettings] = useState<ThreadAdvancedSettingsValue | null>(null);
     const [advancedFieldSpecs, setAdvancedFieldSpecs] = useState<
         NonNullable<import('../lib/api').PromptDefaults['advanced_field_specs']>
@@ -1060,15 +1061,16 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (settings?.context_window) {
             setContextWindow(settings.context_window);
         }
-        if (advancedDefaults) {
+        const defaults = advancedDefaultsRef.current;
+        if (defaults) {
             setAdvancedSettings({
-                contextWindow: settings?.context_window ?? advancedDefaults.contextWindow,
+                contextWindow: settings?.context_window ?? defaults.contextWindow,
                 contextBudget: {
-                    ...advancedDefaults.contextBudget,
+                    ...defaults.contextBudget,
                     ...(settings?.context_budget ?? {}),
                 },
                 coverageIterations: {
-                    ...advancedDefaults.coverageIterations,
+                    ...defaults.coverageIterations,
                     ...(settings?.coverage_iterations ?? {}),
                 },
             });
@@ -1079,7 +1081,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         defaultSystemRole,
         defaultUseReranker,
         webSearchMode,
-        advancedDefaults,
     ]);
 
     const loadProjectMemorySettings = useCallback(async () => {
@@ -1216,6 +1217,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     };
                     setAdvancedFieldSpecs(res.defaults.advanced_field_specs ?? []);
                     setAdvancedDefaults(advancedValue);
+                    advancedDefaultsRef.current = advancedValue;
                     if (!activeThread) {
                         setAdvancedSettings(advancedValue);
                     }
