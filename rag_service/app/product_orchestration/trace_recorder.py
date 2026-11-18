@@ -269,6 +269,8 @@ class AgentTraceRecorder:
         trace_extras: Dict[str, Any] = {}
         if isinstance(event_dict.get("prefetch_summary"), dict):
             trace_extras["prefetch_summary"] = event_dict["prefetch_summary"]
+        if isinstance(event_dict.get("prompt_summary"), dict):
+            trace_extras["prompt_summary"] = event_dict["prompt_summary"]
         delegation = event_dict.get("delegation")
         if isinstance(delegation, dict) and delegation:
             trace_extras["delegation"] = delegation

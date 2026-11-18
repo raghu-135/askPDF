@@ -699,6 +699,17 @@ test('live trace projection surfaces terminal run failures without a node failur
   assert.equal(view.diagnostics.failures[0].message, 'No destination for route memory');
 });
 
+test('mergeLiveAndRetainedTraceViews keeps retained workflow_delegate detail when live stream lacks it', () => {
+  const retained = buildLiveTraceView([
+    { id: 1, event: 'operation.completed', data: { operation_id: 'workflow_delegate', operation_type: 'workflow_delegate', visit_index: 1, detail: { delegation: { child_run_id: 'child-9', child_workflow_id: 'router_rag_agent' } } } },
+  ]);
+  const live = buildLiveTraceView([
+    { id: 2, event: 'operation.completed', data: { operation_id: 'workflow_delegate', operation_type: 'workflow_delegate', visit_index: 1 } },
+  ]);
+  const merged = mergeLiveAndRetainedTraceViews(live, retained);
+  assert.equal(merged.operations[0].raw.detail.delegation.child_run_id, 'child-9');
+});
+
 test('live and retained projections merge repeated visits without duplicating identities', () => {
   const retained = buildLiveTraceView([
     { id: 1, event: 'operation.completed', data: { operation_id: 'router', operation_type: 'router', visit_index: 1, route: 'execute' } },

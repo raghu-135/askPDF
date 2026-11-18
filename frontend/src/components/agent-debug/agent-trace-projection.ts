@@ -505,6 +505,33 @@ const getRunGraph = (debug?: AgentRunDebug, nodeCatalog?: AgentNodeCatalog): Tra
   };
 };
 
+const attachRetainedOperationDetails = (
+  operations: TraceOperationView[],
+  details: Array<Record<string, any>>,
+): TraceOperationView[] => {
+  if (!details.length) return operations;
+  const detailByVisit = new Map<string, Record<string, any>>();
+  details.forEach((row) => {
+    const operationId = String(row.operation_id || '');
+    const visitIndex = asNumber(row.visit_index) || 1;
+    if (!operationId) return;
+    detailByVisit.set(`${operationId}:${visitIndex}`, row);
+  });
+  return operations.map((operation) => {
+    const key = `${operation.id}:${operation.visitIndex || 1}`;
+    const retained = detailByVisit.get(key);
+    if (!retained) return operation;
+    const existingDetail = asObject(operation.raw?.detail);
+    return {
+      ...operation,
+      raw: {
+        ...operation.raw,
+        detail: Object.keys(existingDetail).length > 0 ? { ...retained, ...existingDetail } : retained,
+      },
+    };
+  });
+};
+
 export const buildRunTraceView = (
   runDetails: AgentRunDetails,
   options: { nodeCatalog?: AgentNodeCatalog } = {},
@@ -526,7 +553,10 @@ export const buildRunTraceView = (
         status: detail.status,
         raw: { detail_manifest: detail },
       }, options.nodeCatalog));
-    const operations = [...summaryOperations, ...manifestOperations];
+    const operations = attachRetainedOperationDetails(
+      [...summaryOperations, ...manifestOperations],
+      asArray(debug.details),
+    );
     const tools = asArray(debug.tools).map(toolViewFromSummary);
     const models = asArray(debug.models).map(modelViewFromSummary);
     const usedOperationCount = Math.max(asNumber(summary.usedOperationCount) ?? 0, operations.filter((operation) => !operation.skipped).length);
@@ -794,9 +824,24 @@ export const mergeLiveAndRetainedTraceViews = (
     return live;
   }
   const liveVisits = new Set(live.operations.map((operation) => `${operation.id}:${operation.visitIndex || 1}`));
+  const retainedByVisit = new Map(
+    retained.operations.map((operation) => [`${operation.id}:${operation.visitIndex || 1}`, operation] as const),
+  );
   const operations = [
     ...retained.operations.filter((operation) => !liveVisits.has(`${operation.id}:${operation.visitIndex || 1}`)),
-    ...live.operations,
+    ...live.operations.map((operation) => {
+      const key = `${operation.id}:${operation.visitIndex || 1}`;
+      const prior = retainedByVisit.get(key);
+      const liveDetail = asObject(operation.raw?.detail);
+      const retainedDetail = asObject(prior?.raw?.detail);
+      if (!prior || Object.keys(liveDetail).length > 0 || Object.keys(retainedDetail).length === 0) {
+        return operation;
+      }
+      return {
+        ...operation,
+        raw: { ...operation.raw, detail: { ...retainedDetail, ...liveDetail } },
+      };
+    }),
   ];
   const toolKeys = new Set(live.tools.map((tool, index) => `${tool.id || tool.name}:${tool.callerNode || ''}:${tool.callerVisitIndex || 1}:${index}`));
   const retainedTools = retained.tools.filter((tool, index) => !toolKeys.has(`${tool.id || tool.name}:${tool.callerNode || ''}:${tool.callerVisitIndex || 1}:${index}`));

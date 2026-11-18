@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
-import { Box, Chip, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
-import { HumanReviewDecisionPanel } from '../conversation/HumanReviewDecisionPanel';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import { Box, Button, Chip, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
 import { getAgentRun, resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import { isRuntimeOperationEnabled, runtimeInterruptResponseOperation, runtimeOperationAvailability } from '../../lib/runtime-capabilities';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, InterruptStatus } from '../../lib/enums';
-import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, mergeLiveAndRetainedTraceViews, parseRunDebug, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
+import { buildCorrectiveInspection, buildRunTraceView, buildTraceExportJson, getRetainedRunErrorMessage, getRunTrace, mergeLiveAndRetainedTraceViews, parseRunDebug, shouldRefreshRetainedTrace, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 import { isTaskOwnedAgentRun } from '../../lib/deep-research-ui-state';
@@ -100,6 +100,18 @@ function AgentRunDebugPanel({
     || (typeof grounding?.usefulness_score === 'number'
       ? (Number(grounding.usefulness_score) >= 3 ? 'yes (historical score)' : 'no (historical score)')
       : undefined);
+  const delegationMeta = useMemo(() => {
+    if (!runDetails) return null;
+    const technical = (
+      (debug?.technical_details && typeof debug.technical_details === 'object' && !Array.isArray(debug.technical_details))
+        ? debug.technical_details
+        : getRunTrace(runDetails)?.technical_details
+    ) as Record<string, unknown> | undefined;
+    if (!technical) return null;
+    const childRunId = String(technical.child_run_id || technical.delegate_child_run_id || '').trim();
+    const childWorkflowId = String(technical.child_workflow_id || technical.delegate_child_workflow_id || '').trim();
+    return childRunId ? { childRunId, childWorkflowId: childWorkflowId || undefined } : null;
+  }, [debug?.technical_details, runDetails]);
 
   useEffect(() => {
     setRefreshedRunDetails(undefined);
@@ -256,6 +268,19 @@ function AgentRunDebugPanel({
           Route reason: {compactExecutionText(routeReason, 480)}
         </Typography>
       )}
+      {delegationMeta && onOpenDelegatedRun && (
+        <Box sx={{ px: 1, pb: 0.5 }}>
+          <Button
+            size="small"
+            variant="outlined"
+            startIcon={<OpenInNewIcon />}
+            data-testid="debug-delegated-child-run-link"
+            onClick={() => onOpenDelegatedRun(delegationMeta.childRunId, delegationMeta.childWorkflowId)}
+          >
+            Open delegated child run{delegationMeta.childWorkflowId ? ` (${delegationMeta.childWorkflowId})` : ''}
+          </Button>
+        </Box>
+      )}
       {loading && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.75 }}>
           <CircularProgress size={14} />
@@ -378,22 +403,12 @@ function AgentRunDebugPanel({
             <Typography variant="caption" color="error" sx={{ px: 0.5 }}>
               This human-input request has an invalid runtime response contract.
             </Typography>
-          ) : interruptStatus === InterruptStatus.Pending && responseOperation ? (
-            <HumanReviewDecisionPanel
-              interrupt={pendingInterrupt}
-              submitting={resumeSubmitting}
-              error={resumeError}
-              bottomSheet={false}
-              disabled={
-                isTaskOwnedRun
-                || !responseAvailability.visible
-                || !isRuntimeOperationEnabled(runCapabilities, responseOperation)
-              }
-              disabledReason={isTaskOwnedRun
-                ? 'Respond in the Deep Research panel.'
-                : responseAvailability.disabledReason}
-              onAction={(action, options) => void handleResume(action, options?.selectedOptionIds)}
-            />
+          ) : interruptStatus === InterruptStatus.Pending ? (
+            <Typography variant="caption" color="text.secondary" sx={{ px: 0.5 }}>
+              {isTaskOwnedRun
+                ? 'Approval is pending in the Deep Research panel. Debug Trace records the interrupt event only.'
+                : 'Approval is pending in chat. Use the approval card in the conversation to continue; this trace shows the interrupt event only.'}
+            </Typography>
           ) : null}
           {resumeMessage && (
             <Typography variant="caption" color="text.secondary" sx={{ px: 0.5 }}>

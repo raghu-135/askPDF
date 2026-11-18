@@ -23,6 +23,7 @@ from langgraph_runtime.workflows.runtime_invocation import append_event, log_nod
 from runtime_protocol.auto_limits import AUTO_LIMIT_MAX_DELEGATES_PER_TURN
 from langgraph_runtime.workflows.state import RouterRagState
 from langgraph_runtime.workflows.trace import compact_preview
+from langgraph_runtime.workflows.auto_handoff_sources import merge_auto_handoff_sources
 from langgraph_runtime.workflows.clarification_terminal import (
     clarification_options_from_mapping,
     clarification_terminal_active,
@@ -297,6 +298,7 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
         log_node_end(state, "workflow_delegate", started, data)
         return {
             **clarification_terminal_state_update(child_options),
+            **merge_auto_handoff_sources(state, child_payload=response),
             "child_run_id": child_run_id,
             "child_workflow_id": child_workflow_id,
             "delegate_child_run_id": child_run_id,
@@ -322,6 +324,7 @@ async def workflow_delegate_node(state: RouterRagState, config: RunnableConfig) 
     }
     log_node_end(state, "workflow_delegate", started, data)
     update: Dict[str, Any] = {
+        **merge_auto_handoff_sources(state, child_payload=response),
         "child_run_id": child_run_id,
         "child_workflow_id": child_workflow_id,
         "delegate_child_run_id": child_run_id,
@@ -350,6 +353,7 @@ async def delegate_synthesizer_node(state: RouterRagState, config: RunnableConfi
         log_node_end(state, "delegate_synthesizer", started, data)
         return {
             **clarification_terminal_state_update(options),
+            **merge_auto_handoff_sources(state),
             "debug_trace": state.get("debug_trace"),
             "node_events": append_event(state, "delegate_synthesizer", data, started=started, config=config),
         }
@@ -383,8 +387,10 @@ async def delegate_synthesizer_node(state: RouterRagState, config: RunnableConfi
         }
     )
     debug_trace["technical_details"] = technical
+    handoff = merge_auto_handoff_sources(state)
     return {
         "final_answer": answer,
+        **handoff,
         "debug_trace": debug_trace,
         "node_events": append_event(state, "delegate_synthesizer", data, started=started, config=config),
     }
