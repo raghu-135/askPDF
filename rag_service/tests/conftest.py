@@ -79,6 +79,23 @@ for _budget_name, _budget_value in {
 }.items():
     os.environ.setdefault(_budget_name, _budget_value)
 
+AUTO_LIMIT_TEST_ENV = {
+    "AUTO_MAX_TOTAL_VISITS": "12",
+    "AUTO_MAX_INTERRUPTS_PER_RUN": "4",
+    "AUTO_MAX_DELEGATES_PER_TURN": "1",
+    "AUTO_REQUIRE_PLAN_APPROVAL_ON_COMPLEX": "false",
+    "AUTO_REQUIRE_PLAN_APPROVAL_ALL": "false",
+}
+for _auto_name, _auto_value in AUTO_LIMIT_TEST_ENV.items():
+    os.environ.setdefault(_auto_name, _auto_value)
+
+
+@pytest.fixture(autouse=True)
+def _auto_limit_test_env(monkeypatch):
+    """Keep AUTO_* defaults stable across tests that temporarily clear env vars."""
+    for name, value in AUTO_LIMIT_TEST_ENV.items():
+        monkeypatch.setenv(name, value)
+
 from app.db.models_sqlmodel import (
     Project, Thread, File, ThreadFile,
     ChatTurn, ProcessStatus, MessageRole, AgentRuntimeOperation

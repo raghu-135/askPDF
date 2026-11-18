@@ -370,31 +370,50 @@ const ChatSettingsForm: React.FC<ChatSettingsFormProps> = ({
       <Typography variant="body2" color="text.secondary">
         These are the tools available in the app. You can configure how the assistant should use each one.
       </Typography>
-      {toolCatalog.map((toolDef) => (
-        <Box key={toolDef.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-          <TextField
-            fullWidth
-            label={toolDef.display_name}
-            value={effectiveToolInstructions[toolDef.id] || ''}
-            onChange={(e) =>
-              onToolInstructionChange(toolDef.id, e.target.value)
-            }
-            multiline
-            minRows={2}
-            maxRows={6}
-            helperText={toolDef.description}
-          />
-          <Tooltip title={`Reset ${toolDef.display_name} to default`}>
-            <IconButton
-              size="small"
-              sx={{ mt: 1 }}
-              onClick={() => onResetToolInstruction(toolDef.id)}
-            >
-              <ReplayIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
-      ))}
+      {(() => {
+        const groups: { label: string; tools: typeof toolCatalog }[] = [];
+        let current: (typeof groups)[number] | null = null;
+        for (const toolDef of toolCatalog) {
+          const label = toolDef.group_label || 'Tools';
+          if (!current || current.label !== label) {
+            current = { label, tools: [] };
+            groups.push(current);
+          }
+          current.tools.push(toolDef);
+        }
+        return groups.map((group) => (
+          <Box key={group.label}>
+            <Typography variant="subtitle2" sx={{ mt: 1, mb: 0.5 }}>
+              {group.label}
+            </Typography>
+            {group.tools.map((toolDef) => (
+              <Box key={toolDef.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+                <TextField
+                  fullWidth
+                  label={toolDef.display_name}
+                  value={effectiveToolInstructions[toolDef.id] || ''}
+                  onChange={(e) =>
+                    onToolInstructionChange(toolDef.id, e.target.value)
+                  }
+                  multiline
+                  minRows={2}
+                  maxRows={6}
+                  helperText={toolDef.description}
+                />
+                <Tooltip title={`Reset ${toolDef.display_name} to default`}>
+                  <IconButton
+                    size="small"
+                    sx={{ mt: 1 }}
+                    onClick={() => onResetToolInstruction(toolDef.id)}
+                  >
+                    <ReplayIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            ))}
+          </Box>
+        ));
+      })()}
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
         <TextField
           fullWidth

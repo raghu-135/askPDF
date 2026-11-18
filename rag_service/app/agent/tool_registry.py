@@ -358,6 +358,27 @@ for _deep_tool_name in (
         NODE_DEEP_RESEARCH_SUBAGENT,
     ]))
 
+# Context loader prefetches bounded evidence via MCP before routing (langgraph_runtime graph.context_loader).
+for _prefetch_tool_name in (
+    "search_knowledge",
+    TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY,
+    TOOL_NAME_SEARCH_DURABLE_MEMORY,
+    TOOL_NAME_SEARCH_WEB,
+):
+    _prefetch_contract = TOOL_CONTRACT_METADATA[_prefetch_tool_name]
+    _prefetch_contract["allowed_caller_nodes"] = list(dict.fromkeys([
+        *(_prefetch_contract.get("allowed_caller_nodes") or []),
+        NODE_CONTEXT_LOADER,
+    ]))
+    _prefetch_contract["allowed_node_types"] = list(dict.fromkeys([
+        *(_prefetch_contract.get("allowed_node_types") or []),
+        NODE_CONTEXT_LOADER,
+    ]))
+    _prefetch_contract["required_node_capabilities"] = list(dict.fromkeys([
+        *(_prefetch_contract.get("required_node_capabilities") or []),
+        CAP_CONTEXT_PREFETCH,
+    ]))
+
 
 def get_tool_contract_metadata(tool_name: str) -> Dict[str, Any]:
     """Return contract metadata for a canonical tool name."""
@@ -753,3 +774,196 @@ for _tool_name in (
     TOOL_FRIENDLY_CONFIG[_tool_name]["mcp_enabled"] = True
 
 TOOL_FRIENDLY_CONFIG[TOOL_NAME_ASK_FOR_CLARIFICATION]["mcp_enabled"] = False
+
+# Tools used by the memory curator only — not shown in AI Prompt Settings.
+INTERNAL_TOOL_NAMES = frozenset({
+    "memory_search",
+    "memory_get",
+    "memory_prepare_change",
+    "internet_search",
+})
+
+_CATALOG_DEDUPED_TOOL_NAMES = frozenset({
+    TOOL_NAME_PUB_MED,
+    TOOL_NAME_SEMANTIC_SCHOLAR_LEGACY,
+})
+
+BROWSER_TOOL_NAMES = frozenset({
+    TOOL_NAME_BROWSER_NAVIGATE,
+    TOOL_NAME_BROWSER_SNAPSHOT,
+    TOOL_NAME_BROWSER_ACT,
+    TOOL_NAME_BROWSER_READ,
+    TOOL_NAME_BROWSER_SAVE_TO_THREAD,
+})
+
+_CATEGORY_SORT_ORDER = (
+    CAT_CONTEXT,
+    CAT_RETRIEVAL,
+    CAT_THREAD_CONVERSATION_HISTORY,
+    CAT_DURABLE_MEMORY,
+    CAT_THREAD_EVENTS,
+    CAT_WEB,
+    CAT_BROWSER,
+    CAT_EXTERNAL_RESEARCH,
+    CAT_CONTROL,
+    CAT_ANSWER,
+)
+
+CATEGORY_GROUP_LABELS: Dict[str, str] = {
+    CAT_CONTEXT: "Context",
+    CAT_RETRIEVAL: "Documents",
+    CAT_THREAD_CONVERSATION_HISTORY: "Conversation",
+    CAT_DURABLE_MEMORY: "Durable memory",
+    CAT_THREAD_EVENTS: "Timeline",
+    CAT_WEB: "Web",
+    CAT_BROWSER: "Browser workbench",
+    CAT_EXTERNAL_RESEARCH: "Research sources",
+    CAT_CONTROL: "Control",
+    CAT_ANSWER: "Answer",
+}
+
+TOOL_INSTRUCTION_KEY_ALIASES: Dict[str, str] = {}
+for _alias_tool_name, _alias_cfg in TOOL_FRIENDLY_CONFIG.items():
+    if not isinstance(_alias_cfg, dict):
+        continue
+    _alias_id = str(_alias_cfg.get("id", _alias_tool_name))
+    TOOL_INSTRUCTION_KEY_ALIASES[_alias_tool_name] = _alias_id
+    TOOL_INSTRUCTION_KEY_ALIASES[_alias_id] = _alias_id
+
+
+def is_internal_tool(tool_name: str) -> bool:
+    return tool_name in INTERNAL_TOOL_NAMES
+
+
+def is_user_configurable_tool(tool_name: str) -> bool:
+    if tool_name in _CATALOG_DEDUPED_TOOL_NAMES or is_internal_tool(tool_name):
+        return False
+    if tool_name not in TOOL_FRIENDLY_CONFIG or tool_name not in TOOL_CONTRACT_METADATA:
+        return False
+    allowed_nodes = TOOL_CONTRACT_METADATA[tool_name].get("allowed_caller_nodes") or []
+    if allowed_nodes == ["memory_manager"]:
+        return False
+    return True
+
+
+def _catalog_sort_key(tool_name: str) -> tuple:
+    category = str(TOOL_CONTRACT_METADATA.get(tool_name, {}).get("category", ""))
+    try:
+        category_index = _CATEGORY_SORT_ORDER.index(category)
+    except ValueError:
+        category_index = len(_CATEGORY_SORT_ORDER)
+    display = str(TOOL_FRIENDLY_CONFIG.get(tool_name, {}).get("display_name", tool_name))
+    return (category_index, display.lower(), tool_name)
+
+
+def iter_user_configurable_tool_names() -> List[str]:
+    return sorted(
+        (name for name in TOOL_CONTRACT_METADATA if is_user_configurable_tool(name)),
+        key=_catalog_sort_key,
+    )
+
+
+def iter_workflow_prompt_tool_names() -> List[str]:
+    """Workflow- and chat-facing tools before web/browser gating."""
+    return list(iter_user_configurable_tool_names())
+
+
+def get_workflow_prompt_tool_names(
+    *,
+    use_web_search: bool = True,
+    use_browser_access: bool = False,
+) -> List[str]:
+    names = iter_workflow_prompt_tool_names()
+    if not use_web_search:
+        names = [name for name in names if name != TOOL_NAME_SEARCH_WEB]
+    if use_browser_access:
+        for name in BROWSER_TOOL_NAMES:
+            if name not in names:
+                names.append(name)
+    else:
+        names = [name for name in names if name not in BROWSER_TOOL_NAMES]
+    return names
+
+
+def tool_names_for_contract_id(contract_id: str) -> List[str]:
+    return sorted(
+        name
+        for name, metadata in TOOL_CONTRACT_METADATA.items()
+        if isinstance(metadata, dict) and metadata.get("id") == contract_id
+    )
+
+
+# Builtin workflow specs and Hermes exports may use MCP ids that differ from registry keys.
+WORKFLOW_TOOL_IDENTIFIER_ALIASES: Dict[str, str] = {
+    "pub_med": "pubmed",
+    "semanticscholar": "semantic_scholar",
+}
+
+
+def normalize_workflow_tool_identifier(identifier: str) -> str:
+    step = WORKFLOW_TOOL_IDENTIFIER_ALIASES.get(identifier, identifier)
+    return TOOL_INSTRUCTION_KEY_ALIASES.get(step, step)
+
+
+def is_accounted_callable_tool_identifier(identifier: str) -> bool:
+    """True when a workflow allowed_tool id maps to catalog, internal, or contract tools."""
+    name = normalize_workflow_tool_identifier(identifier)
+    if is_internal_tool(name) or is_user_configurable_tool(name):
+        return True
+    contracted = tool_names_for_contract_id(name)
+    if contracted:
+        return any(
+            is_user_configurable_tool(tool_name) or is_internal_tool(tool_name)
+            for tool_name in contracted
+        )
+    catalog_names = {entry["tool_name"] for entry in get_settings_tool_catalog_entries()}
+    return name in catalog_names
+
+
+def build_tool_catalog_entry(tool_name: str) -> Dict[str, str]:
+    cfg = TOOL_FRIENDLY_CONFIG.get(tool_name, {})
+    contract = TOOL_CONTRACT_METADATA.get(tool_name, {})
+    alias_id = str(cfg.get("id", tool_name))
+    category = str(contract.get("category", "") or "")
+    return {
+        "tool_name": tool_name,
+        "id": alias_id,
+        "display_name": str(cfg.get("display_name", alias_id.replace("_", " ").title())),
+        "description": str(cfg.get("description", "")),
+        "default_prompt": str(
+            cfg.get("default_prompt", "Use this tool when it is the most relevant retrieval path.")
+        ),
+        "category": category,
+        "group_label": CATEGORY_GROUP_LABELS.get(category, category.replace("_", " ").title()),
+    }
+
+
+def get_settings_tool_catalog_entries() -> List[Dict[str, str]]:
+    return [build_tool_catalog_entry(name) for name in iter_user_configurable_tool_names()]
+
+
+def apply_tool_instruction_key_aliases(raw: Dict[str, str]) -> Dict[str, str]:
+    merged = dict(raw)
+    for key, value in list(raw.items()):
+        canonical = TOOL_INSTRUCTION_KEY_ALIASES.get(key)
+        if canonical and canonical not in merged:
+            merged[canonical] = value
+    return merged
+
+
+def format_model_tool_inventory_section(catalog_entries: List[Dict[str, str]]) -> str:
+    lines = [
+        "## Tool Inventory",
+        "",
+        "These are the retrieval and clarification tools available in this runtime:",
+    ]
+    current_group = ""
+    for item in catalog_entries:
+        group = str(item.get("group_label") or "")
+        if group and group != current_group:
+            current_group = group
+            lines.extend(["", f"### {group}", ""])
+        lines.append(
+            f"- {item['display_name']} (tool name: `{item['tool_name']}`): {item['description']}"
+        )
+    return "\n".join(lines).strip()

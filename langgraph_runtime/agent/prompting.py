@@ -4,22 +4,17 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from langgraph_runtime.agent.tool_registry import TOOL_FRIENDLY_CONFIG
+from langgraph_runtime.agent.tool_registry import (
+    TOOL_FRIENDLY_CONFIG,
+    apply_tool_instruction_key_aliases,
+    build_tool_catalog_entry,
+    format_model_tool_inventory_section,
+    get_settings_tool_catalog_entries,
+    get_workflow_prompt_tool_names,
+    is_internal_tool,
+)
 from langgraph_runtime.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
-
-CORE_TOOL_NAMES = [
-    "get_thread_shape",
-    "search_knowledge",
-    "inspect_document",
-    "read_context",
-    "search_thread_conversation_history",
-    "search_durable_memory",
-    "search_thread_events",
-    "search_web",
-    "publish_canvas",
-    "ask_for_clarification",
-]
 
 def format_runtime_datetime_context(
     client_timezone: Optional[str] = None,
@@ -90,15 +85,112 @@ def _tool_description(tool_item: Any, tool_name: str) -> str:
     return ""
 
 
-def _default_tool_names(use_external_research: bool = True) -> List[Any]:
-    if not use_external_research:
-        return list(CORE_TOOL_NAMES)
-    external_names = [
-        name
-        for name, metadata in TOOL_FRIENDLY_CONFIG.items()
-        if metadata.get("mcp_server") == "first_party_research"
+def _resolve_tool_items(
+    tool_items: Optional[List[Any]],
+    *,
+    use_web_search: bool = True,
+    use_browser_access: bool = False,
+) -> List[str]:
+    if tool_items is not None:
+        return [_tool_name(item) for item in tool_items]
+    return get_workflow_prompt_tool_names(
+        use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
+    )
+
+
+def get_tool_catalog(
+    tool_items: Optional[List[Any]] = None,
+    *,
+    use_web_search: bool = True,
+    use_browser_access: bool = False,
+    for_settings: bool = False,
+) -> List[Dict[str, str]]:
+    if for_settings and tool_items is None:
+        return get_settings_tool_catalog_entries()
+    catalog: List[Dict[str, str]] = []
+    for tool_name in _resolve_tool_items(
+        tool_items,
+        use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
+    ):
+        if is_internal_tool(tool_name):
+            continue
+        catalog.append(build_tool_catalog_entry(tool_name))
+    return catalog
+
+
+def get_default_tool_instruction_map(tool_items: Optional[List[Any]] = None) -> Dict[str, str]:
+    return {
+        item["id"]: item["default_prompt"]
+        for item in get_tool_catalog(tool_items, for_settings=tool_items is None)
+    }
+
+
+def normalize_tool_instructions(
+    raw: Optional[Dict[str, str]],
+    max_chars_per_tool: int = 500,
+    tool_items: Optional[List[Any]] = None,
+) -> Dict[str, str]:
+    blocked = [
+        "do not use tools",
+        "disable tools",
+        "never use tools",
+        "ignore tool contract",
     ]
-    return [*CORE_TOOL_NAMES, *[name for name in external_names if name]]
+    normalized = get_default_tool_instruction_map(tool_items)
+    if not isinstance(raw, dict):
+        return normalized
+    aliased = apply_tool_instruction_key_aliases({str(k): str(v) for k, v in raw.items()})
+    canonical_values = {
+        tool_id: value
+        for tool_id, value in aliased.items()
+        if tool_id in normalized
+    }
+    known_ids = {item["id"] for item in TOOL_FRIENDLY_CONFIG.values()} | set(normalized)
+    known_ids |= set(TOOL_FRIENDLY_CONFIG.keys())
+    unknown = set(aliased) - known_ids
+    if unknown:
+        raise ValueError(f"Unknown tool instruction identifiers: {sorted(unknown)}")
+    for tool_id, value in canonical_values.items():
+        if tool_id not in normalized:
+            continue
+        text = _sanitize_lines_with_blocklist(str(value or ""), blocked, max_chars_per_tool)
+        if text:
+            normalized[tool_id] = text
+    return normalized
+
+
+def build_tool_registry_and_playbook_sections(
+    tool_items: Optional[List[Any]],
+    tool_instructions: Optional[Dict[str, str]],
+    *,
+    use_web_search: bool = True,
+    use_browser_access: bool = False,
+) -> Dict[str, str]:
+    resolved_tools = _resolve_tool_items(
+        tool_items,
+        use_web_search=use_web_search,
+        use_browser_access=use_browser_access,
+    )
+    catalog = get_tool_catalog(resolved_tools)
+    playbook = normalize_tool_instructions(
+        tool_instructions or {},
+        tool_items=resolved_tools,
+    )
+    return {
+        "TOOL_REGISTRY_SECTION": format_model_tool_inventory_section(catalog),
+        "TOOL_PLAYBOOK_SECTION": "\n".join(
+            [
+                "## Tool Playbook",
+                "",
+                *(
+                    f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
+                    for item in catalog
+                ),
+            ]
+        ),
+    }
 
 
 def _sanitize_lines_with_blocklist(raw: str, blocklist: List[str], max_chars: int) -> str:
@@ -131,57 +223,3 @@ def sanitize_custom_instructions(raw: str, max_chars: int = 2000) -> str:
         "pretend you have no tool",
     ]
     return _sanitize_lines_with_blocklist(raw, blocked, max_chars)
-
-
-def get_tool_catalog(tool_items: Optional[List[Any]] = None) -> List[Dict[str, str]]:
-    catalog: List[Dict[str, str]] = []
-    for tool_item in tool_items or _default_tool_names(use_external_research=True):
-        tool_name = _tool_name(tool_item)
-        cfg = TOOL_FRIENDLY_CONFIG.get(tool_name, {})
-        alias_id = str(cfg.get("id", tool_name))
-        catalog.append(
-            {
-                "tool_name": tool_name,
-                "id": alias_id,
-                "display_name": str(cfg.get("display_name", alias_id.replace("_", " ").title())),
-                "description": str(cfg.get("description", _tool_description(tool_item, tool_name))),
-                "default_prompt": str(cfg.get("default_prompt", "Use this tool when it is the most relevant retrieval path.")),
-            }
-        )
-    return catalog
-
-
-def get_default_tool_instruction_map(tool_items: Optional[List[Any]] = None) -> Dict[str, str]:
-    return {item["id"]: item["default_prompt"] for item in get_tool_catalog(tool_items)}
-
-
-def normalize_tool_instructions(
-    raw: Optional[Dict[str, str]],
-    max_chars_per_tool: int = 500,
-    tool_items: Optional[List[Any]] = None,
-) -> Dict[str, str]:
-    blocked = [
-        "do not use tools",
-        "disable tools",
-        "never use tools",
-        "ignore tool contract",
-    ]
-    normalized = get_default_tool_instruction_map(tool_items)
-    if not isinstance(raw, dict):
-        return normalized
-    canonical_values = {
-        tool_id: value
-        for tool_id, value in raw.items()
-        if tool_id in normalized
-    }
-    known_ids = {item["id"] for item in TOOL_FRIENDLY_CONFIG.values()} | set(normalized)
-    unknown = set(raw) - known_ids
-    if unknown:
-        raise ValueError(f"Unknown tool instruction identifiers: {sorted(unknown)}")
-    for tool_id, value in canonical_values.items():
-        if tool_id not in normalized:
-            continue
-        text = _sanitize_lines_with_blocklist(str(value or ""), blocked, max_chars_per_tool)
-        if text:
-            normalized[tool_id] = text
-    return normalized

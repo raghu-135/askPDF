@@ -12,6 +12,8 @@ You answer askPDF questions using the supplied context. Cite document or web sou
 
 {RUNTIME_DATETIME_CONTEXT}
 
+{TOOL_REGISTRY_SECTION}
+
 ## Runtime Constraints
 
 Context window: {CONTEXT_WINDOW} tokens, shared with supplied context and the final answer.

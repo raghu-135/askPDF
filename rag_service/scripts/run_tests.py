@@ -69,6 +69,7 @@ UNIT_TEST_FILES = [
     "test_runtime_hardening_pytest.py",
     "test_runtime_operation_repository_pytest.py",
     "test_tool_registry_contracts.py",
+    "test_tool_inventory_guard_pytest.py",
     "test_control_plane_import_boundary_pytest.py",
     "test_corrective_search_knowledge_evidence_pytest.py",
     "test_research_gaps_protocol_pytest.py",

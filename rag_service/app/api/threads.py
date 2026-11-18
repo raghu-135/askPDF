@@ -268,7 +268,10 @@ async def prompt_tools_endpoint():
         defaults["context_budget"] = load_context_budget_settings().to_dict()
         payload = PromptDefaults(**defaults).model_dump(mode="json")
         return {
-            "tools": [ToolCatalogEntry(**t).model_dump(mode="json") for t in get_tool_catalog()],
+            "tools": [
+                ToolCatalogEntry(**t).model_dump(mode="json")
+                for t in get_tool_catalog(for_settings=True)
+            ],
             "defaults": payload,
         }
     except Exception as e:

@@ -431,6 +431,8 @@ class ToolCatalogEntry(BaseModel):
     display_name: str
     description: str
     default_prompt: str
+    category: Optional[str] = None
+    group_label: Optional[str] = None
 
 
 class PromptDefaults(BaseModel):
