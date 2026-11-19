@@ -76,20 +76,26 @@ a separate Hermes runtime-proof job.
 
 ## RAG evals (promptfoo + live stack, on demand)
 
-Bundled CC BY PDFs: `benchmarks/fixtures/bundled/` (see `fixtures/LICENSES.md`).
-Optional arXiv (Mem0, legacy suite): `./scripts/download_benchmark_pdfs.sh`.
+Bundled CC BY PDFs only: `benchmarks/fixtures/bundled/` (`benchmarks/CORPUS.md`,
+`fixtures/LICENSES.md`). Legacy arXiv fetch: `./scripts/download_benchmark_pdfs.sh` (POC only).
 
 ```bash
 python3 scripts/generate_promptfoo_tests.py
+bash scripts/verify_promptfoo_tests_generated.sh
 bash scripts/cloud-agent-setup.sh stack
-./evals/promptfoo/run_eval.sh --judge --label baseline-1
+./evals/promptfoo/run_eval.sh --tier smoke --judge --label smoke-1
+ASKPDF_EVAL_PROFILE=fast ./evals/promptfoo/run_eval.sh --tier core --profile fast --judge
 ./evals/promptfoo/run_sweep.sh document_ratio_0.36 --judge
 ```
 
+Tiers: `smoke` (~5 cases), `core`, `advanced`, `holdout`. Profiles: `free` (default, RPM cap)
+or `fast` (parallel). Default reasoning effort `none` via `ASKPDF_EVAL_REASONING_EFFORT`.
+Stack readiness: `/health` + `/ready` before cases; indexing polled via files API.
+
 Live baseline config: `benchmarks/benchmark_config.eval.json`. Reports:
-`benchmarks/reports/<sha>-<label>.{json,md}`. Shared scoring:
-`scripts/benchmark_scoring.py`, `scripts/benchmark_execution.py`,
-`scripts/rag_eval_suite.py`.
+`benchmarks/reports/<sha>-<label>.{json,md}`. Shared modules:
+`scripts/benchmark_eval_support.py`, `scripts/benchmark_scoring.py`,
+`scripts/benchmark_execution.py`, `scripts/rag_eval_suite.py`.
 
 ## Coverage that is still thin
 

@@ -1,53 +1,53 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "holdout": true,
   "do_not_tune_against": true,
-  "paper_file": "2305.18290.pdf",
+  "description": "Holdout split on bundled CC BY PLOS PDFs only (reported via --tier holdout; not for tuning).",
   "questions": [
     {
-      "id": "holdout-dpo-overview",
+      "id": "holdout-genetics-overview",
+      "tier": "holdout",
       "type": "overview",
-      "question": "What does the Direct Preference Optimization paper propose?",
-      "fixture_files": ["2305.18290.pdf"],
+      "fixture_files": ["plos-genetics-1003700.pdf"],
       "expected_pages": [1, 2],
-      "answer_match": { "any_contains": ["preference", "DPO", "reward"] },
-      "numeric": null
+      "question": "What biological process is the outer spore wall paper primarily investigating?",
+      "answer_match": { "any_contains": ["spore", "wall", "assembly", "meiosis"] }
     },
     {
-      "id": "holdout-dpo-vs-rlhf",
-      "type": "method",
-      "question": "How does DPO differ from reinforcement learning from human feedback (RLHF)?",
-      "fixture_files": ["2305.18290.pdf"],
+      "id": "holdout-genetics-genes",
+      "tier": "holdout",
+      "type": "fact",
+      "fixture_files": ["plos-genetics-1003700.pdf"],
       "expected_pages": [2, 3],
-      "answer_match": { "any_contains": ["without", "reward model", "RL"] },
-      "numeric": null
+      "question": "Does the spore wall study discuss redundant genes or a gene network?",
+      "answer_match": { "any_contains": ["redundant", "network", "gene"] }
     },
     {
-      "id": "holdout-dpo-beta",
-      "type": "fact",
-      "question": "What role does the beta hyperparameter play in DPO?",
-      "fixture_files": ["2305.18290.pdf"],
-      "expected_pages": [3, 4],
-      "answer_match": { "any_contains": ["beta", "temperature", "KL"] },
-      "numeric": null
+      "id": "holdout-pathogen-mechanism",
+      "tier": "holdout",
+      "type": "method",
+      "fixture_files": ["plos-pathogens-1008410.pdf"],
+      "expected_pages": [1, 2],
+      "question": "What pathogen or disease context motivates the Wolbachia wPip Aedes study?",
+      "answer_match": { "any_contains": ["dengue", "virus"] }
     },
     {
-      "id": "holdout-dpo-implicit-reward",
+      "id": "holdout-pathogen-assumption",
+      "tier": "holdout",
       "type": "fact",
-      "question": "According to DPO, what is the language model secretly acting as?",
-      "fixture_files": ["2305.18290.pdf"],
+      "fixture_files": ["plos-pathogens-1008410.pdf"],
       "expected_pages": [1],
-      "answer_match": { "any_contains": ["reward model", "reward"] },
-      "numeric": null
+      "question": "What assumption about Wolbachia mechanisms does the paper say it challenges?",
+      "answer_match": { "any_contains": ["assumption", "mechanism", "wPip", "Wolbachia"] }
     },
     {
-      "id": "holdout-dpo-decline-without-pdf",
+      "id": "holdout-decline-without-indexed",
+      "tier": "holdout",
       "type": "out_of_scope",
-      "question": "State the closed-form DPO loss when only the Attention paper is indexed.",
-      "fixture_files": ["1706.03762.pdf"],
+      "fixture_files": ["plos-pone-0001208.pdf"],
       "expected_pages": [],
-      "answer_match": { "decline": true },
-      "numeric": null
+      "question": "From the China invasions paper alone, derive the closed-form DPO alignment loss.",
+      "answer_match": { "decline": true }
     }
   ]
 }

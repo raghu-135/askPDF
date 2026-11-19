@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -16,18 +15,10 @@ from benchmark_config import load_benchmark_config, thread_settings_baseline  # 
 from benchmark_execution import merge_case_chat_options, run_turn  # noqa: E402
 from live_stack_client import live_client  # noqa: E402
 
+from benchmark_eval_support import RequestPacer, resolve_profile  # noqa: E402
+
 CHAT_MODEL = os.getenv("ASKPDF_BENCHMARK_MODEL", "nvidia/nemotron-3.5-super-vl:free")
-_LAST_CALL_AT = 0.0
-_MIN_INTERVAL = float(os.getenv("ASKPDF_EVAL_MIN_INTERVAL_S", "3.5"))
-
-
-def _throttle() -> None:
-    global _LAST_CALL_AT
-    now = time.monotonic()
-    wait = _MIN_INTERVAL - (now - _LAST_CALL_AT)
-    if wait > 0:
-        time.sleep(wait)
-    _LAST_CALL_AT = time.monotonic()
+_PACER = RequestPacer(resolve_profile())
 
 
 def call_api(prompt: str, options: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -51,19 +42,22 @@ def call_api(prompt: str, options: dict[str, Any], context: dict[str, Any]) -> d
     api_base = os.getenv("ASKPDF_BENCHMARK_API", os.getenv("ASKPDF_API_URL", "http://127.0.0.1:8000/api"))
     cfg = load_benchmark_config()
     thread_baseline = thread_settings_baseline(cfg)
-    _throttle()
     try:
         with live_client(api_base=api_base) as client:
-            row = run_turn(
-                client,
-                thread_id,
-                case,
-                turn,
-                llm_model=CHAT_MODEL,
-                judge=None,
-                thread_baseline=thread_baseline,
-                verify_settings=False,
-            )
+
+            def _run() -> dict[str, Any]:
+                return run_turn(
+                    client,
+                    thread_id,
+                    case,
+                    turn,
+                    llm_model=CHAT_MODEL,
+                    judge=None,
+                    thread_baseline=thread_baseline,
+                    verify_settings=False,
+                )
+
+            row = _PACER.call(_run)
     except Exception as exc:
         return {"error": str(exc)}
     return {

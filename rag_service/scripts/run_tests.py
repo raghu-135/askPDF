@@ -79,6 +79,7 @@ UNIT_TEST_FILES = [
     "test_highlight_retrieval_invariant_pytest.py",
     "test_benchmark_scoring_pytest.py",
     "test_benchmark_effective_settings_pytest.py",
+    "test_benchmark_eval_support_pytest.py",
     "test_table_row_highlight_boxes_pytest.py",
     "test_table_row_projection_pytest.py",
     "test_hermes_builder_provider_pytest.py",

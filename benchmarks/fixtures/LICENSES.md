@@ -12,4 +12,5 @@ Redistribution is allowed under the license named per paper. Full PDF bytes live
 | `plos-pathogens-1008410.pdf` | Novel phenotype of Wolbachia strain wPip in Aedes aegypti… | Fraser et al. | https://journals.plos.org/plospathogens/article?id=10.1371/journal.ppat.1008410 | CC BY 4.0 |
 | `plos-genetics-1003700.pdf` | A Highly Redundant Gene Network Controls Assembly of the Outer Spore Wall in S. cerevisiae | Lin et al. | https://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1003700 | CC BY 4.0 |
 
-Optional download (not bundled): Mem0 / arXiv `2504.19413` for conversation regression cases.
+Eval harness uses only the bundled files above. Optional arXiv downloads (`manifest.json`) are
+for legacy POC scripts only — not redistributed and not used by `rag_eval_suite.py`.

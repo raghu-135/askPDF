@@ -88,14 +88,18 @@ def llm_judge(
     completions_url: str = "http://127.0.0.1:8000/v1/chat/completions",
 ) -> bool:
     user = json.dumps({"question": question, "answer": answer, "constraints": match})
-    payload = {
-        "model": judge_model,
-        "messages": [
-            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0,
-    }
+    from runtime_protocol.openrouter_chat_extra import merge_chat_completions_payload
+
+    payload = merge_chat_completions_payload(
+        {
+            "model": judge_model,
+            "messages": [
+                {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0,
+        }
+    )
     req_timeout = judge_request_timeout_s()
     max_attempts = int(os.getenv("ASKPDF_EVAL_JUDGE_RETRIES", "3"))
     last_exc: Exception | None = None
