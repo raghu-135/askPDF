@@ -35,6 +35,11 @@ def _scrub_unicode(value: Any) -> Any:
     return value
 
 
+def postgres_text_safe(value: Any) -> str:
+    """Strip NUL and surrogate pairs from values stored in PostgreSQL text columns."""
+    return str(_scrub_unicode(str(value or "")))
+
+
 def postgres_jsonb_safe(value: Any) -> Any:
     """Round-trip through JSON with ASCII escapes so asyncpg accepts the payload."""
     if value is None:

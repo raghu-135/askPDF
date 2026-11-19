@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from app.db.jsonb_utils import SafeJSONB, postgres_jsonb_safe
+from app.db.jsonb_utils import SafeJSONB, postgres_jsonb_safe, postgres_text_safe
 
 
 def test_postgres_jsonb_safe_roundtrips_nested_dict():
@@ -30,6 +30,10 @@ def test_postgres_jsonb_safe_strips_nul_and_malformed_u_escapes():
     reencoded = json.dumps(cleaned)
     json.loads(reencoded)
     assert "\x00" not in cleaned["structure_json"]["raw"]["text"]
+
+
+def test_postgres_text_safe_strips_nul_bytes():
+    assert "\x00" not in postgres_text_safe("gene\x00name")
 
 
 def test_safe_jsonb_type_decorator_scrubs_bind_params():
