@@ -276,9 +276,14 @@ def workflow_post_retrieval_scope_decline(state: Mapping[str, Any]) -> str | Non
         return None
     if not thread_has_attached_documents(state):
         return None
-    if document_evidence_packets(state) and any(
-        str(packet.get("content") or "").strip() for packet in document_evidence_packets(state)
-    ):
+    doc_packets = document_evidence_packets(state)
+    if doc_packets and any(str(packet.get("content") or "").strip() for packet in doc_packets):
+        return None
+    bundle = state.get("pre_fetch_bundle") if isinstance(state.get("pre_fetch_bundle"), dict) else {}
+    prefetch_evidence = str(bundle.get("document_evidence_text") or "").strip()
+    # When the router already prefetched document passages, defer hard declines until
+    # synthesis or grading can judge relevance (rerank scores alone are too brittle on bundles).
+    if prefetch_evidence and not doc_packets:
         return None
     return attachment_retrieval_scope_decline(state)
 
