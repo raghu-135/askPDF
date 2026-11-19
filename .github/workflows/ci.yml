@@ -150,9 +150,7 @@ jobs:
         run: cp .env.ci .env
 
       - name: Verify promptfoo benchmark test generation
-        run: |
-          python3 scripts/generate_promptfoo_tests.py
-          git diff --exit-code evals/promptfoo/tests.generated.yaml
+        run: bash scripts/verify_promptfoo_tests_generated.sh
 
       - name: Run Docker test runner
         run: ./run_tests.sh

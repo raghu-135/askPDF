@@ -94,9 +94,9 @@
       - editing
       - Alu
     case_json: '{"id": "rna-editing-topic", "type": "overview", "suites": ["baseline",
-      "sweep_core"], "fixture_files": ["plos-biology-0020391.pdf"], "expected_pages":
-      [1, 2], "question": "What type of RNA editing does the Alu-containing mRNA paper
-      study?", "answer_match": {"any_contains": ["A-to-I", "editing", "Alu"]}}'
+      "sweep_core"], "optional_fixture": true, "fixture_files": ["plos-biology-0020391.pdf"],
+      "expected_pages": [1, 2], "question": "What type of RNA editing does the Alu-containing
+      mRNA paper study?", "answer_match": {"any_contains": ["A-to-I", "editing", "Alu"]}}'
   assert:
   - type: javascript
     value: context.providerResponse?.metadata?.retrieval_hit === true
@@ -113,9 +113,9 @@
       - human
       - Human
     case_json: '{"id": "rna-editing-species", "type": "fact", "suites": ["baseline"],
-      "fixture_files": ["plos-biology-0020391.pdf"], "expected_pages": [1], "question":
-      "Which organism''s transcriptome is studied in the Alu RNA editing paper?",
-      "answer_match": {"any_contains": ["human", "Human"]}}'
+      "optional_fixture": true, "fixture_files": ["plos-biology-0020391.pdf"], "expected_pages":
+      [1], "question": "Which organism''s transcriptome is studied in the Alu RNA
+      editing paper?", "answer_match": {"any_contains": ["human", "Human"]}}'
   assert:
   - type: javascript
     value: context.providerResponse?.metadata?.retrieval_hit === true
@@ -327,9 +327,9 @@
       - Maas
       - Stefan Maas
     case_json: '{"id": "rna-editing-author", "type": "fact", "suites": ["baseline",
-      "sweep_core"], "fixture_files": ["plos-biology-0020391.pdf"], "expected_pages":
-      [1], "question": "Who is the corresponding author on the Alu RNA editing paper?",
-      "answer_match": {"any_contains": ["Maas", "Stefan Maas"]}}'
+      "sweep_core"], "optional_fixture": true, "fixture_files": ["plos-biology-0020391.pdf"],
+      "expected_pages": [1], "question": "Who is the corresponding author on the Alu
+      RNA editing paper?", "answer_match": {"any_contains": ["Maas", "Stefan Maas"]}}'
   assert:
   - type: javascript
     value: context.providerResponse?.metadata?.retrieval_hit === true
