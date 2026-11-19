@@ -1,0 +1,431 @@
+{
+  "schema_version": 3,
+  "commit_sha": "eacd2c9b220c6b032b0a9770eab0e12458ce647f",
+  "label": "smoke-v3",
+  "tier": "smoke",
+  "suite": null,
+  "profile": "free",
+  "generated_at": "2026-11-19T08:00:30.475649+00:00",
+  "chat_model": "nvidia/nemotron-3.5-super-vl:free",
+  "judge_model": "inclusionai/ling-3.2-flash:free",
+  "reasoning_effort": "none",
+  "context_baseline": {
+    "config_path": "benchmarks/benchmark_config.eval.json",
+    "context": {
+      "context_window": 131072,
+      "use_web_search": false,
+      "use_reranker": false
+    },
+    "thread_settings": {
+      "replans": 1,
+      "use_reranker": false,
+      "hitl_web_approval": false,
+      "context_window": 131072
+    }
+  },
+  "workflows": {
+    "router_rag_agent": {
+      "cases": 6,
+      "retrieval_hit_rate": 1.0,
+      "answer_pass_rate": 0.3333,
+      "grounding_pass_rate": 1.0,
+      "decline_correct_rate": 1.0,
+      "median_latency_s": 7.448,
+      "total_llm_tokens": 0,
+      "by_category": {
+        "facts": {
+          "cases": 4,
+          "retrieval_hit_rate": 1.0,
+          "answer_pass_rate": 0.0,
+          "grounding_pass_rate": 1.0,
+          "decline_correct_rate": null,
+          "median_latency_s": 7.448,
+          "total_llm_tokens": 0
+        },
+        "out_of_scope": {
+          "cases": 2,
+          "retrieval_hit_rate": 1.0,
+          "answer_pass_rate": 1.0,
+          "grounding_pass_rate": 1.0,
+          "decline_correct_rate": 1.0,
+          "median_latency_s": 8.565,
+          "total_llm_tokens": 0
+        }
+      }
+    }
+  },
+  "cases": [
+    {
+      "question_id": "out-of-scope-neptune",
+      "turn_id": "out-of-scope-neptune",
+      "type": "out_of_scope",
+      "category": "out_of_scope",
+      "answer": "The attached documents do not address this question.",
+      "answer_preview": "The attached documents do not address this question.",
+      "retrieval_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "retrieval_hit": true,
+      "latency_s": 8.565,
+      "llm_tokens_total": 0,
+      "run_id": "ae20a909-1792-49ba-9a63-bb165a70ceb9",
+      "effective_settings": {
+        "context_window": 131072,
+        "context_budget": {
+          "usable_ratio": 0.8,
+          "recent_ratio": 0.22,
+          "semantic_ratio": 0.12,
+          "durable_memory_ratio": 0.06,
+          "document_ratio": 0.28,
+          "memory_expanded_ratio": 0.12,
+          "evidence_ratio": 0.45,
+          "draft_ratio": 0.25,
+          "plan_section_ratio": 0.2,
+          "plan_total_ratio": 0.5,
+          "plan_memory_ratio": 0.12
+        },
+        "coverage_iterations": {
+          "web_search_iteration_bonus": 2,
+          "max_iterations_sufficient_coverage": 2,
+          "max_iterations_probably_sufficient_coverage": 4
+        },
+        "loop_policy": {
+          "max_total_visits": 26,
+          "node_visit_limits": {
+            "web_worker": 2,
+            "answer_reviser": 1,
+            "serial_dispatch": 10,
+            "answer_evaluator": 2,
+            "retrieval_worker": 2,
+            "thread_events_worker": 2,
+            "durable_memory_worker": 2,
+            "thread_conversation_history_worker": 2
+          },
+          "default_max_node_visits": 1
+        }
+      },
+      "settings_override_verified": true,
+      "settings_verify_reason": "ok",
+      "answer_pass": true,
+      "grounding_pass": true,
+      "answer_heuristic": true,
+      "decline_correct": true,
+      "workflow": "router_rag_agent"
+    },
+    {
+      "question_id": "ir-scifact-out-of-scope",
+      "turn_id": "ir-scifact-out-of-scope",
+      "type": "out_of_scope",
+      "category": "out_of_scope",
+      "answer": "The attached documents do not address this question.",
+      "answer_preview": "The attached documents do not address this question.",
+      "retrieval_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "retrieval_hit": true,
+      "latency_s": 7.401,
+      "llm_tokens_total": 0,
+      "run_id": "62a8de1f-ab79-4dbb-8c98-c94ab6146317",
+      "effective_settings": {
+        "context_window": 131072,
+        "context_budget": {
+          "usable_ratio": 0.8,
+          "recent_ratio": 0.22,
+          "semantic_ratio": 0.12,
+          "durable_memory_ratio": 0.06,
+          "document_ratio": 0.28,
+          "memory_expanded_ratio": 0.12,
+          "evidence_ratio": 0.45,
+          "draft_ratio": 0.25,
+          "plan_section_ratio": 0.2,
+          "plan_total_ratio": 0.5,
+          "plan_memory_ratio": 0.12
+        },
+        "coverage_iterations": {
+          "web_search_iteration_bonus": 2,
+          "max_iterations_sufficient_coverage": 2,
+          "max_iterations_probably_sufficient_coverage": 4
+        },
+        "loop_policy": {
+          "max_total_visits": 26,
+          "node_visit_limits": {
+            "web_worker": 2,
+            "answer_reviser": 1,
+            "serial_dispatch": 10,
+            "answer_evaluator": 2,
+            "retrieval_worker": 2,
+            "thread_events_worker": 2,
+            "durable_memory_worker": 2,
+            "thread_conversation_history_worker": 2
+          },
+          "default_max_node_visits": 1
+        }
+      },
+      "settings_override_verified": true,
+      "settings_verify_reason": "ok",
+      "answer_pass": true,
+      "grounding_pass": true,
+      "answer_heuristic": true,
+      "decline_correct": true,
+      "workflow": "router_rag_agent"
+    },
+    {
+      "question_id": "ir-nfcorpus-PLAIN-2",
+      "turn_id": "ir-nfcorpus-PLAIN-2",
+      "type": "fact",
+      "category": "facts",
+      "answer": "The attached documents do not address this question.",
+      "answer_preview": "The attached documents do not address this question.",
+      "retrieval_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "retrieval_hit": true,
+      "latency_s": 7.408,
+      "llm_tokens_total": 0,
+      "run_id": "98856cfa-78fa-47f8-9a64-10cd91680c1d",
+      "effective_settings": {
+        "context_window": 131072,
+        "context_budget": {
+          "usable_ratio": 0.8,
+          "recent_ratio": 0.22,
+          "semantic_ratio": 0.12,
+          "durable_memory_ratio": 0.06,
+          "document_ratio": 0.28,
+          "memory_expanded_ratio": 0.12,
+          "evidence_ratio": 0.45,
+          "draft_ratio": 0.25,
+          "plan_section_ratio": 0.2,
+          "plan_total_ratio": 0.5,
+          "plan_memory_ratio": 0.12
+        },
+        "coverage_iterations": {
+          "web_search_iteration_bonus": 2,
+          "max_iterations_sufficient_coverage": 2,
+          "max_iterations_probably_sufficient_coverage": 4
+        },
+        "loop_policy": {
+          "max_total_visits": 26,
+          "node_visit_limits": {
+            "web_worker": 2,
+            "answer_reviser": 1,
+            "serial_dispatch": 10,
+            "answer_evaluator": 2,
+            "retrieval_worker": 2,
+            "thread_events_worker": 2,
+            "durable_memory_worker": 2,
+            "thread_conversation_history_worker": 2
+          },
+          "default_max_node_visits": 1
+        }
+      },
+      "settings_override_verified": true,
+      "settings_verify_reason": "ok",
+      "answer_pass": false,
+      "grounding_pass": true,
+      "answer_heuristic": false,
+      "decline_correct": null,
+      "workflow": "router_rag_agent"
+    },
+    {
+      "question_id": "ir-nfcorpus-PLAIN-1741",
+      "turn_id": "ir-nfcorpus-PLAIN-1741",
+      "type": "fact",
+      "category": "facts",
+      "answer": "The attached documents do not address this question.",
+      "answer_preview": "The attached documents do not address this question.",
+      "retrieval_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "retrieval_hit": true,
+      "latency_s": 6.352,
+      "llm_tokens_total": 0,
+      "run_id": "ea7e8023-8924-470b-881a-d09823786d36",
+      "effective_settings": {
+        "context_window": 131072,
+        "context_budget": {
+          "usable_ratio": 0.8,
+          "recent_ratio": 0.22,
+          "semantic_ratio": 0.12,
+          "durable_memory_ratio": 0.06,
+          "document_ratio": 0.28,
+          "memory_expanded_ratio": 0.12,
+          "evidence_ratio": 0.45,
+          "draft_ratio": 0.25,
+          "plan_section_ratio": 0.2,
+          "plan_total_ratio": 0.5,
+          "plan_memory_ratio": 0.12
+        },
+        "coverage_iterations": {
+          "web_search_iteration_bonus": 2,
+          "max_iterations_sufficient_coverage": 2,
+          "max_iterations_probably_sufficient_coverage": 4
+        },
+        "loop_policy": {
+          "max_total_visits": 26,
+          "node_visit_limits": {
+            "web_worker": 2,
+            "answer_reviser": 1,
+            "serial_dispatch": 10,
+            "answer_evaluator": 2,
+            "retrieval_worker": 2,
+            "thread_events_worker": 2,
+            "durable_memory_worker": 2,
+            "thread_conversation_history_worker": 2
+          },
+          "default_max_node_visits": 1
+        }
+      },
+      "settings_override_verified": true,
+      "settings_verify_reason": "ok",
+      "answer_pass": false,
+      "grounding_pass": true,
+      "answer_heuristic": false,
+      "decline_correct": null,
+      "workflow": "router_rag_agent"
+    },
+    {
+      "question_id": "ir-trec-covid-1",
+      "turn_id": "ir-trec-covid-1",
+      "type": "fact",
+      "category": "facts",
+      "answer": "The attached documents do not address this question.",
+      "answer_preview": "The attached documents do not address this question.",
+      "retrieval_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "retrieval_hit": true,
+      "latency_s": 7.448,
+      "llm_tokens_total": 0,
+      "run_id": "a258260a-0717-4ed2-b12c-0b990d46b0f6",
+      "effective_settings": {
+        "context_window": 131072,
+        "context_budget": {
+          "usable_ratio": 0.8,
+          "recent_ratio": 0.22,
+          "semantic_ratio": 0.12,
+          "durable_memory_ratio": 0.06,
+          "document_ratio": 0.28,
+          "memory_expanded_ratio": 0.12,
+          "evidence_ratio": 0.45,
+          "draft_ratio": 0.25,
+          "plan_section_ratio": 0.2,
+          "plan_total_ratio": 0.5,
+          "plan_memory_ratio": 0.12
+        },
+        "coverage_iterations": {
+          "web_search_iteration_bonus": 2,
+          "max_iterations_sufficient_coverage": 2,
+          "max_iterations_probably_sufficient_coverage": 4
+        },
+        "loop_policy": {
+          "max_total_visits": 26,
+          "node_visit_limits": {
+            "web_worker": 2,
+            "answer_reviser": 1,
+            "serial_dispatch": 10,
+            "answer_evaluator": 2,
+            "retrieval_worker": 2,
+            "thread_events_worker": 2,
+            "durable_memory_worker": 2,
+            "thread_conversation_history_worker": 2
+          },
+          "default_max_node_visits": 1
+        }
+      },
+      "settings_override_verified": true,
+      "settings_verify_reason": "ok",
+      "answer_pass": false,
+      "grounding_pass": true,
+      "answer_heuristic": false,
+      "decline_correct": null,
+      "workflow": "router_rag_agent"
+    },
+    {
+      "question_id": "ir-trec-covid-18",
+      "turn_id": "ir-trec-covid-18",
+      "type": "fact",
+      "category": "facts",
+      "answer": "The attached documents do not address this question.",
+      "answer_preview": "The attached documents do not address this question.",
+      "retrieval_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "retrieval_hit": true,
+      "latency_s": 7.466,
+      "llm_tokens_total": 0,
+      "run_id": "ea164459-88f1-49e2-b101-0bcc0c736270",
+      "effective_settings": {
+        "context_window": 131072,
+        "context_budget": {
+          "usable_ratio": 0.8,
+          "recent_ratio": 0.22,
+          "semantic_ratio": 0.12,
+          "durable_memory_ratio": 0.06,
+          "document_ratio": 0.28,
+          "memory_expanded_ratio": 0.12,
+          "evidence_ratio": 0.45,
+          "draft_ratio": 0.25,
+          "plan_section_ratio": 0.2,
+          "plan_total_ratio": 0.5,
+          "plan_memory_ratio": 0.12
+        },
+        "coverage_iterations": {
+          "web_search_iteration_bonus": 2,
+          "max_iterations_sufficient_coverage": 2,
+          "max_iterations_probably_sufficient_coverage": 4
+        },
+        "loop_policy": {
+          "max_total_visits": 26,
+          "node_visit_limits": {
+            "web_worker": 2,
+            "answer_reviser": 1,
+            "serial_dispatch": 10,
+            "answer_evaluator": 2,
+            "retrieval_worker": 2,
+            "thread_events_worker": 2,
+            "durable_memory_worker": 2,
+            "thread_conversation_history_worker": 2
+          },
+          "default_max_node_visits": 1
+        }
+      },
+      "settings_override_verified": true,
+      "settings_verify_reason": "ok",
+      "answer_pass": false,
+      "grounding_pass": true,
+      "answer_heuristic": false,
+      "decline_correct": null,
+      "workflow": "router_rag_agent"
+    }
+  ]
+}

@@ -284,14 +284,56 @@ def resolve_chat_models() -> tuple[str, str]:
     return primary, fallback
 
 
-def apply_reasoning_effort(effort: str | None) -> None:
+def _patch_env_file_reasoning(effort: str | None) -> None:
+    """Sync ASKPDF_LLM_REASONING_EFFORT in repo .env so Compose runtimes pick it up."""
+    env_path = REPO / ".env"
+    if not env_path.is_file():
+        return
+    key = "ASKPDF_LLM_REASONING_EFFORT"
+    lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    out: list[str] = []
+    found = False
+    for line in lines:
+        if line.startswith(f"{key}="):
+            found = True
+            if effort:
+                out.append(f"{key}={effort}\n")
+            continue
+        out.append(line if line.endswith("\n") else line + "\n")
+    if effort and not found:
+        if out and not out[-1].endswith("\n"):
+            out[-1] = out[-1] + "\n"
+        out.append(f"{key}={effort}\n")
+    env_path.write_text("".join(out), encoding="utf-8")
+
+
+def _recreate_langgraph_runtime() -> None:
+    import subprocess
+
+    compose = os.getenv("ASKPDF_EVAL_COMPOSE", "docker compose")
+    subprocess.run(
+        [*compose.split(), "up", "-d", "--no-deps", "langgraph-runtime"],
+        cwd=REPO,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def apply_reasoning_effort(effort: str | None, *, sync_stack: bool | None = None) -> None:
     value = (effort or "").strip()
     if not value or value.lower() == "default":
-        os.environ.pop("ASKPDF_EVAL_REASONING_EFFORT", None)
+        os.environ.pop("ASKPDF_LLM_REASONING_EFFORT", None)
         os.environ.pop("ASKPDF_OPENROUTER_CHAT_EXTRA_BODY_JSON", None)
-        return
-    os.environ["ASKPDF_EVAL_REASONING_EFFORT"] = value
-    os.environ.pop("ASKPDF_OPENROUTER_CHAT_EXTRA_BODY_JSON", None)
+        _patch_env_file_reasoning(None)
+    else:
+        os.environ["ASKPDF_LLM_REASONING_EFFORT"] = value
+        os.environ.pop("ASKPDF_OPENROUTER_CHAT_EXTRA_BODY_JSON", None)
+        _patch_env_file_reasoning(value)
+    if sync_stack is None:
+        sync_stack = os.getenv("ASKPDF_EVAL_SYNC_REASONING", "0") == "1"
+    if sync_stack:
+        _recreate_langgraph_runtime()
 
 
 def run_parallel(

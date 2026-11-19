@@ -1,86 +1,3 @@
-- description: invasion-overview
-  vars:
-    question_id: invasion-overview
-    question: What does the PLOS ONE paper on economic development and biological
-      invasions conclude?
-    expected_pages:
-    - 1
-    - 2
-    answer_match:
-      any_contains: &id001
-      - invasion
-      - economic
-      - trade
-      - China
-    case_json: '{"id": "invasion-overview", "tier": "smoke", "type": "overview", "suites":
-      ["baseline", "sweep_core"], "fixture_files": ["plos-pone-0001208.pdf"], "expected_pages":
-      [1, 2], "question": "What does the PLOS ONE paper on economic development and
-      biological invasions conclude?", "answer_match": {"any_contains": ["invasion",
-      "economic", "trade", "China"]}}'
-  assert:
-  - type: javascript
-    value: context.providerResponse?.metadata?.retrieval_hit === true
-  - type: contains-any
-    value: *id001
-- description: invasion-authors
-  vars:
-    question_id: invasion-authors
-    question: Who is the corresponding author on the China biological invasions paper?
-    expected_pages:
-    - 1
-    answer_match:
-      any_contains: &id002
-      - Rumei Xu
-      - Xu
-    case_json: '{"id": "invasion-authors", "tier": "smoke", "type": "fact", "suites":
-      ["baseline", "smoke"], "fixture_files": ["plos-pone-0001208.pdf"], "expected_pages":
-      [1], "question": "Who is the corresponding author on the China biological invasions
-      paper?", "answer_match": {"any_contains": ["Rumei Xu", "Xu"]}}'
-  assert:
-  - type: javascript
-    value: context.providerResponse?.metadata?.retrieval_hit === true
-  - type: contains-any
-    value: *id002
-- description: stats-rules-title
-  vars:
-    question_id: stats-rules-title
-    question: What is the title of the Ten Simple Rules editorial on statistical practice?
-    expected_pages:
-    - 1
-    answer_match:
-      any_contains: &id003
-      - Ten Simple Rules
-      - Statistical Practice
-    case_json: '{"id": "stats-rules-title", "tier": "smoke", "type": "overview", "suites":
-      ["baseline", "sweep_core", "smoke"], "fixture_files": ["plos-pcbi-1004961.pdf"],
-      "expected_pages": [1], "question": "What is the title of the Ten Simple Rules
-      editorial on statistical practice?", "answer_match": {"any_contains": ["Ten
-      Simple Rules", "Statistical Practice"]}}'
-  assert:
-  - type: javascript
-    value: context.providerResponse?.metadata?.retrieval_hit === true
-  - type: contains-any
-    value: *id003
-- description: wolbachia-virus
-  vars:
-    question_id: wolbachia-virus
-    question: Which virus inhibition mechanism is discussed for Wolbachia in Aedes
-      aegypti?
-    expected_pages:
-    - 1
-    - 2
-    answer_match:
-      any_contains: &id004
-      - dengue
-    case_json: '{"id": "wolbachia-virus", "tier": "smoke", "type": "fact", "suites":
-      ["baseline", "sweep_core", "smoke"], "fixture_files": ["plos-pathogens-1008410.pdf"],
-      "expected_pages": [1, 2], "question": "Which virus inhibition mechanism is discussed
-      for Wolbachia in Aedes aegypti?", "answer_match": {"any_contains": ["dengue"]}}'
-  assert:
-  - type: javascript
-    value: context.providerResponse?.metadata?.retrieval_hit === true
-  - type: contains-any
-    value: *id004
 - description: out-of-scope-neptune
   vars:
     question_id: out-of-scope-neptune
@@ -97,3 +14,117 @@
     value: context.providerResponse?.metadata?.retrieval_hit === true
   - type: javascript
     value: '!/(attached documents do not|do not address)/i.test(output)'
+- description: ir-nfcorpus-PLAIN-2
+  vars:
+    question_id: ir-nfcorpus-PLAIN-2
+    question: Do Cholesterol Statin Drugs Cause Breast Cancer?
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id001
+      - Elevated
+      - Levels
+      - Cholesterol-Rich
+      - Lipid
+      - Rafts
+      - Cancer
+    case_json: '{"id": "ir-nfcorpus-PLAIN-2", "tier": "smoke", "type": "fact", "suites":
+      ["baseline"], "fixture_files": ["ir-nfcorpus-bundle-01.pdf"], "expected_pages":
+      [1, 2], "question": "Do Cholesterol Statin Drugs Cause Breast Cancer?", "answer_match":
+      {"any_contains": ["Elevated", "Levels", "Cholesterol-Rich", "Lipid", "Rafts",
+      "Cancer"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id001
+- description: ir-nfcorpus-PLAIN-1741
+  vars:
+    question_id: ir-nfcorpus-PLAIN-1741
+    question: nuts
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id002
+      - Garden
+      - Eden--plant
+      - Based
+      - Diets
+      - Genetic
+      - Drive
+    case_json: '{"id": "ir-nfcorpus-PLAIN-1741", "tier": "smoke", "type": "fact",
+      "suites": ["baseline"], "fixture_files": ["ir-nfcorpus-bundle-02.pdf"], "expected_pages":
+      [1, 2], "question": "nuts", "answer_match": {"any_contains": ["Garden", "Eden--plant",
+      "Based", "Diets", "Genetic", "Drive"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id002
+- description: ir-nfcorpus-out-of-scope
+  vars:
+    question_id: ir-nfcorpus-out-of-scope
+    question: What is the capital city of Australia?
+    expected_pages: []
+    answer_match:
+      decline: true
+    case_json: '{"id": "ir-nfcorpus-out-of-scope", "tier": "smoke", "type": "out_of_scope",
+      "suites": ["baseline", "smoke"], "fixture_files": ["ir-nfcorpus-bundle-01.pdf"],
+      "expected_pages": [], "question": "What is the capital city of Australia?",
+      "answer_match": {"decline": true}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: javascript
+    value: '!/(attached documents do not|do not address)/i.test(output)'
+- description: ir-trec-covid-1
+  vars:
+    question_id: ir-trec-covid-1
+    question: what is the origin of COVID-19
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id003
+      - Monophyletic
+      - Relationship
+      - Between
+      - Severe
+      - Acute
+      - Respiratory
+    case_json: '{"id": "ir-trec-covid-1", "tier": "smoke", "type": "fact", "suites":
+      ["baseline"], "fixture_files": ["ir-trec-covid-bundle-01.pdf"], "expected_pages":
+      [1, 2], "question": "what is the origin of COVID-19", "answer_match": {"any_contains":
+      ["Monophyletic", "Relationship", "Between", "Severe", "Acute", "Respiratory"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id003
+- description: ir-trec-covid-18
+  vars:
+    question_id: ir-trec-covid-18
+    question: what are the best masks for preventing infection by Covid-19?
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id004
+      - SARS
+      - MERS
+      - Novel
+      - Coronavirus
+      - COVID-19
+      - Epidemics
+    case_json: '{"id": "ir-trec-covid-18", "tier": "smoke", "type": "fact", "suites":
+      ["baseline"], "fixture_files": ["ir-trec-covid-bundle-01.pdf"], "expected_pages":
+      [1, 2], "question": "what are the best masks for preventing infection by Covid-19?",
+      "answer_match": {"any_contains": ["SARS", "MERS", "Novel", "Coronavirus", "COVID-19",
+      "Epidemics"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id004

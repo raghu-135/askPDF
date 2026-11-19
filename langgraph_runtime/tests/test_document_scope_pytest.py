@@ -27,6 +27,20 @@ def test_document_retrieval_scores_merge_prefetch_and_packet_sources():
     assert document_retrieval_scores(state) == [0.22, 0.31]
 
 
+def test_attachment_scope_uses_best_of_rerank_and_hybrid_scores():
+    state = {
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_evidence_text": "Cholesterol and lipid rafts in breast tissue.",
+            "document_sources": [
+                {"file_hash": "a" * 32, "rerank_score": 0.18, "score": 0.52},
+            ],
+        },
+        "question": "Do statins relate to breast cancer risk?",
+    }
+    assert attachment_retrieval_scope_decline(state) is None
+
+
 def test_attachment_scope_declines_on_low_prefetch_scores_despite_evidence_text():
     state = {
         "pre_fetch_bundle": {
@@ -73,8 +87,29 @@ def test_tokyo_declines_via_low_prefetch_scores_not_lexical_matching():
             **state["pre_fetch_bundle"],
             "document_sources": [{"file_hash": "a" * 32, "score": 0.18}],
         },
+        "evidence_packets": [
+            {
+                "source_ids": [f"doc:{'a' * 32}:chunk-1"],
+                "content": "",
+                "raw_retriever_score": 0.18,
+            }
+        ],
     }
     assert workflow_post_retrieval_scope_decline(state_low_score) == DOCUMENT_SCOPE_DECLINE_ANSWER
+
+
+def test_workflow_post_retrieval_keeps_in_scope_when_prefetch_has_passage_text():
+    state = {
+        "pre_fetch_bundle": {
+            "documents": [{"file_hash": "a" * 32}],
+            "document_evidence_text": "Cholesterol Statin Drugs Cause Breast Cancer",
+            "document_sources": [{"file_hash": "a" * 32, "rerank_score": 0.12, "score": 0.11}],
+        },
+        "question": "Do Cholesterol Statin Drugs Cause Breast Cancer?",
+        "workflow_id": "router_rag_agent",
+        "route": "document",
+    }
+    assert workflow_post_retrieval_scope_decline(state) is None
 
 
 def test_natural_language_questions_not_declined_when_retrieval_is_relevant():

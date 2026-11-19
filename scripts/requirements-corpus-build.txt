@@ -1,0 +1,5 @@
+# Pinned deps for scripts/build_eval_corpus_pdfs.py (one-off corpus build)
+datasets==3.2.0
+fpdf2==2.8.2
+huggingface_hub==0.26.2
+ir-datasets==0.5.8

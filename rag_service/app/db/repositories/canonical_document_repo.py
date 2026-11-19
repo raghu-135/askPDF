@@ -218,10 +218,8 @@ class CanonicalDocumentRepository:
             row.generation = generation
             row.extraction_fingerprint = fingerprint
             row.docling_version = docling_version
-            from app.db.jsonb_utils import postgres_jsonb_safe
-
-            row.document_json = postgres_jsonb_safe(document_json)
-            row.source_metadata_json = postgres_jsonb_safe(source_metadata)
+            row.document_json = document_json
+            row.source_metadata_json = source_metadata
             row.failure_json = None
             row.status = "completed"
             row.claim_token = None
@@ -241,6 +239,8 @@ class CanonicalDocumentRepository:
                 job.claim_token = None
                 job.completed_at = row.completed_at
                 job.updated_at = row.completed_at
+            from app.db.jsonb_utils import postgres_text_safe
+
             await session.execute(delete(DocumentSection).where(DocumentSection.file_hash == file_hash))
             await session.execute(delete(DocumentElement).where(DocumentElement.file_hash == file_hash))
             for section in sections:
@@ -248,7 +248,7 @@ class CanonicalDocumentRepository:
                 session.add(DocumentSection(
                     section_id=str(section["section_id"]), file_hash=file_hash, generation=generation,
                     parent_section_id=section.get("parent_section_id"), section_order=int(section.get("section_order", 0)),
-                    level=int(section.get("level", 0)), title=str(section.get("title") or ""),
+                    level=int(section.get("level", 0)), title=postgres_text_safe(section.get("title")),
                     heading_path=list(section.get("heading_path") or []), element_ids=list(section.get("element_ids") or []),
                     page_start=min(pages) if pages else None, page_end=max(pages) if pages else None,
                 ))
@@ -257,7 +257,9 @@ class CanonicalDocumentRepository:
                 session.add(DocumentElement(
                     element_id=str(element["element_id"]), file_hash=file_hash, generation=generation,
                     element_order=int(element.get("element_order", 0)), element_type=str(element.get("element_type") or "unspecified"),
-                    label=element.get("label"), text=str(element.get("text") or ""), section_id=element.get("section_id"),
+                    label=postgres_text_safe(element.get("label")) if element.get("label") is not None else None,
+                    text=postgres_text_safe(element.get("text")),
+                    section_id=element.get("section_id"),
                     parent_element_id=element.get("parent_element_id") or element.get("parent_ref"), page_start=min(pages) if pages else None, page_end=max(pages) if pages else None,
                     provenance_json={"items": list(element.get("provenance") or [])}, structure_json={"raw": element.get("raw") or {}, "heading_path": list(element.get("heading_path") or []), "table_structure": element.get("table_structure")},
                 ))
@@ -379,12 +381,16 @@ class CanonicalDocumentRepository:
                 projection_job.error = None
                 projection_job.updated_at = utc_now()
             await session.flush()
+            from app.db.jsonb_utils import postgres_text_safe
+
             for item in chunk_list:
                 pages = list(item.get("pages") or [])
                 session.add(DocumentChunk(
                     chunk_id=str(item["chunk_id"]), manifest_id=manifest.manifest_id, file_hash=file_hash, embedding_model=embedding_model,
                     source_id=stable_source_id(file_hash, generation, str(item["chunk_id"])),
-                    chunk_order=int(item.get("chunk_order", 0)), body_text=str(item.get("body_text") or ""), contextualized_text=str(item.get("contextualized_text") or ""),
+                    chunk_order=int(item.get("chunk_order", 0)),
+                    body_text=postgres_text_safe(item.get("body_text")),
+                    contextualized_text=postgres_text_safe(item.get("contextualized_text")),
                     sentence_ids=list(item.get("sentence_ids") or []), source_element_ids=list(item.get("source_element_ids") or []), section_id=item.get("section_id"), table_id=item.get("table_id"),
                     page_start=min(pages) if pages else None, page_end=max(pages) if pages else None,
                     metadata_json={
