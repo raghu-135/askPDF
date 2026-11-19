@@ -6,7 +6,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("ASKPDF_REPO_DIR", "/workspace"))
+if not (ROOT / "benchmarks" / "questions.json").is_file():
+    ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from benchmark_eval_support import (  # noqa: E402
