@@ -9,7 +9,7 @@
       "authors": "askPDF eval corpus (nfcorpus)",
       "pages": 1,
       "source_url": "beir/nfcorpus/test",
-      "license": "CC BY 4.0",
+      "license": "CC BY-SA 4.0",
       "sha256": "4efe4d6b6dcaceff049c94ae28f8d51a1d6810d182d65b73994f5d365ac87647",
       "tags": [
         "ir",
@@ -23,39 +23,11 @@
       "authors": "askPDF eval corpus (nfcorpus)",
       "pages": 1,
       "source_url": "beir/nfcorpus/test",
-      "license": "CC BY 4.0",
+      "license": "CC BY-SA 4.0",
       "sha256": "0f549be1919ef725f3c967377f379831f54d829640c27672e6d7a0e5a821333c",
       "tags": [
         "ir",
         "nfcorpus"
-      ]
-    },
-    {
-      "id": "ir-scifact-bundle-01",
-      "fixture_file": "ir-scifact-bundle-01.pdf",
-      "title": "IR eval bundle: scifact",
-      "authors": "askPDF eval corpus (scifact)",
-      "pages": 2,
-      "source_url": "beir/scifact/test",
-      "license": "CC BY 4.0",
-      "sha256": "8390d650f406f538cedfb56dbac156fa784790d504047de3acb8b1db4433dc75",
-      "tags": [
-        "ir",
-        "scifact"
-      ]
-    },
-    {
-      "id": "ir-scifact-bundle-02",
-      "fixture_file": "ir-scifact-bundle-02.pdf",
-      "title": "IR eval bundle: scifact",
-      "authors": "askPDF eval corpus (scifact)",
-      "pages": 1,
-      "source_url": "beir/scifact/test",
-      "license": "CC BY 4.0",
-      "sha256": "605bf00e7f36f2a15fb71201ecc979e9c64e5e0b36d388dc50824f3bc65be69a",
-      "tags": [
-        "ir",
-        "scifact"
       ]
     },
     {

@@ -1,4 +1,4 @@
-# Bundled benchmark PDFs (CC BY)
+# Bundled benchmark PDFs
 
 Redistribution is allowed under the license named per paper. Full PDF bytes live in
 `bundled/`. Optional arXiv fixtures remain manifest-only (see `manifest.json`).
@@ -14,13 +14,18 @@ Redistribution is allowed under the license named per paper. Full PDF bytes live
 
 Eval harness uses only the bundled files above. Optional arXiv downloads (`manifest.json`) are
 for legacy POC scripts only — not redistributed and not used by `rag_eval_suite.py`.
+
 ## IR corpus PDFs (generated)
 
 | File | Source | License | Notes |
 | --- | --- | --- | --- |
-| `ir-scifact-bundle-01.pdf` | BeIR/scifact | CC BY 4.0 | BEIR SciFact claims and evidence (AI2). |
-| `ir-scifact-bundle-02.pdf` | BeIR/scifact | CC BY 4.0 | BEIR SciFact claims and evidence (AI2). |
-| `ir-nfcorpus-bundle-01.pdf` | BeIR/nfcorpus | CC BY 4.0 | Nutrition/medical abstracts from PubMed Central open-access subset. |
-| `ir-nfcorpus-bundle-02.pdf` | BeIR/nfcorpus | CC BY 4.0 | Nutrition/medical abstracts from PubMed Central open-access subset. |
-| `ir-trec-covid-bundle-01.pdf` | BeIR/trec-covid | CC BY 4.0 (typical CORD-19 subset) | COVID-19 literature abstracts; verify per-article in production crawl. |
-| `ir-trec-covid-bundle-02.pdf` | BeIR/trec-covid | CC BY 4.0 (typical CORD-19 subset) | COVID-19 literature abstracts; verify per-article in production crawl. |
+| `ir-nfcorpus-bundle-01.pdf` | [BEIR/nfcorpus](https://huggingface.co/datasets/BeIR/nfcorpus) | **CC BY-SA 4.0** | NFCorpus license (nutrition/medical abstracts; BEIR metadata). Share-alike applies to derivatives. |
+| `ir-nfcorpus-bundle-02.pdf` | BEIR/nfcorpus | **CC BY-SA 4.0** | Same as above. |
+| `ir-trec-covid-bundle-01.pdf` | [BEIR/trec-covid](https://huggingface.co/datasets/BeIR/trec-covid) / [CORD-19](https://allenai.org/data/cord-19) | **Heterogeneous (CORD-19)** | Abstract text from CORD-19; underlying articles vary (PMC OA, publisher terms). Bundles use BEIR-selected passages only. |
+| `ir-trec-covid-bundle-02.pdf` | BEIR/trec-covid / CORD-19 | **Heterogeneous (CORD-19)** | Same as above. |
+
+### Excluded (not redistributed in this repo)
+
+| Source | License | Reason |
+| --- | --- | --- |
+| BEIR **SciFact** | [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) (per [BEIR dataset card](https://huggingface.co/datasets/BeIR/scifact) and SciFact repository) | Non-commercial restriction; incompatible with committing full text PDFs here. |

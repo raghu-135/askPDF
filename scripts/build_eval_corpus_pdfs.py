@@ -30,7 +30,6 @@ HF_DATASET_PINS: dict[str, str | None] = {
 
 # ir-datasets BEIR snapshot (package version pinned in requirements-corpus-build.txt)
 IR_DATASETS_BEIR: dict[str, str] = {
-    "scifact": "beir/scifact/test",
     "nfcorpus": "beir/nfcorpus/test",
     "trec-covid": "beir/trec-covid",
 }
@@ -55,19 +54,21 @@ SOURCES: tuple[SourceSpec, ...] = (
         slug="scifact",
         hf_id="BeIR/scifact",
         hf_config=None,
-        license_name="CC BY 4.0",
-        license_url="https://creativecommons.org/licenses/by/4.0/",
-        license_notes="BEIR SciFact claims and evidence (AI2).",
+        license_name="CC BY-NC 4.0",
+        license_url="https://creativecommons.org/licenses/by-nc/4.0/",
+        license_notes="Non-commercial only; excluded from bundled redistribution.",
         bundles=2,
         docs_per_bundle=4,
+        skipped=True,
+        skip_reason="CC BY-NC 4.0 (BEIR/SciFact) does not permit redistribution in this repository.",
     ),
     SourceSpec(
         slug="nfcorpus",
         hf_id="BeIR/nfcorpus",
         hf_config=None,
-        license_name="CC BY 4.0",
-        license_url="https://creativecommons.org/licenses/by/4.0/",
-        license_notes="Nutrition/medical abstracts from PubMed Central open-access subset.",
+        license_name="CC BY-SA 4.0",
+        license_url="https://creativecommons.org/licenses/by-sa/4.0/",
+        license_notes="Nutrition/medical abstracts (BEIR NFCorpus; PubMed Central open-access subset).",
         bundles=2,
         docs_per_bundle=4,
     ),
@@ -75,9 +76,9 @@ SOURCES: tuple[SourceSpec, ...] = (
         slug="trec-covid",
         hf_id="BeIR/trec-covid",
         hf_config=None,
-        license_name="CC BY 4.0 (typical CORD-19 subset)",
-        license_url="https://creativecommons.org/licenses/by/4.0/",
-        license_notes="COVID-19 literature abstracts; verify per-article in production crawl.",
+        license_name="CORD-19 heterogeneous (BEIR trec-covid subset)",
+        license_url="https://allenai.org/data/cord-19",
+        license_notes="Abstract passages from CORD-19 via BEIR; underlying article licenses vary.",
         bundles=2,
         docs_per_bundle=4,
     ),
@@ -334,8 +335,6 @@ def _build_questions_for_source(
             continue
         answer_text = str(row.get("answer") or "")
         qtext = str(row["question"])
-        if spec.slug == "scifact":
-            qtext = f"According to the bundled abstracts, is there evidence about this claim: {qtext}"
         gold = docs_by_id.get(cid)
         if gold:
             tokens = _tokens_for_match(f"{gold.get('title', '')} {gold['text'][:600]}", max_tokens=6)
@@ -389,9 +388,9 @@ def _build_questions_for_source(
         cases.append(
             {
                 "id": f"ir-{spec.slug}-out-of-scope",
-                "tier": "smoke" if spec.slug == "scifact" else "core",
+                "tier": "smoke" if spec.slug == "nfcorpus" else "core",
                 "type": "out_of_scope",
-                "suites": ["baseline", "smoke"] if spec.slug == "scifact" else ["baseline"],
+                "suites": ["baseline", "smoke"] if spec.slug == "nfcorpus" else ["baseline"],
                 "fixture_files": [fixtures[0]],
                 "expected_pages": [],
                 "question": "What is the capital city of Australia?",

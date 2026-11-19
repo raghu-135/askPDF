@@ -10,7 +10,10 @@ import re
 from copy import deepcopy
 from typing import Any, Dict
 
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.types import TypeDecorator
+
 from app.time_utils import iso_utc_z
 
 
@@ -19,7 +22,8 @@ _INVALID_JSON_U = re.compile(r"\\u(?![0-9a-fA-F]{4})")
 
 def _scrub_unicode(value: Any) -> Any:
     if isinstance(value, str):
-        return value.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+        cleaned = value.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+        return cleaned.replace("\x00", "")
     if isinstance(value, dict):
         return {key: _scrub_unicode(item) for key, item in value.items()}
     if isinstance(value, list):
@@ -31,10 +35,24 @@ def _scrub_unicode(value: Any) -> Any:
 
 def postgres_jsonb_safe(value: Any) -> Any:
     """Round-trip through JSON with ASCII escapes so asyncpg accepts the payload."""
+    if value is None:
+        return None
     scrubbed = _scrub_unicode(value)
     text = json.dumps(scrubbed, ensure_ascii=True, default=str)
     text = _INVALID_JSON_U.sub(r"\\\\u", text)
     return json.loads(text)
+
+
+class SafeJSONB(TypeDecorator):
+    """PostgreSQL JSONB that scrubs bind values before asyncpg encodes them."""
+
+    impl = JSONB
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return value
+        return postgres_jsonb_safe(value)
 
 
 def set_jsonb_field(

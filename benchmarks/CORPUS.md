@@ -10,7 +10,8 @@ the conversion script).
 | Family | License | Bundled? | Eval? |
 | --- | --- | --- | --- |
 | [PLOS journals](https://plos.org) | CC BY 4.0 | Yes | **Primary (legacy)** |
-| BEIR: SciFact, NFCorpus, TREC-COVID | CC BY 4.0 / typical PMC | Yes (generated PDFs) | **IR passages** |
+| BEIR: NFCorpus, TREC-COVID | CC BY-SA 4.0 / CORD-19 (heterogeneous) | Yes (generated PDFs) | **IR passages** |
+| BEIR: SciFact | CC BY-NC 4.0 | **No** | Excluded (non-commercial) |
 | HotpotQA (distractor passages) | CC BY-SA 4.0 | Yes | Multi-hop style Qs |
 | SQuAD 2.0 passage sample | CC BY-SA 4.0 | Yes | Extractive Qs |
 
@@ -19,6 +20,7 @@ the conversion script).
 | Source | Reason |
 | --- | --- |
 | FiQA (BEIR) | Challenge terms; omitted from committed corpus |
+| BEIR SciFact | CC BY-NC 4.0 — no redistribution in this repo |
 | Natural Questions | Size; CC BY-SA 3.0 would allow a future subset |
 | WikiQA | Microsoft license — no redistribution |
 | arXiv full PDFs | arXiv non-exclusive distribution policy |

@@ -14,22 +14,6 @@
     value: context.providerResponse?.metadata?.retrieval_hit === true
   - type: javascript
     value: '!/(attached documents do not|do not address)/i.test(output)'
-- description: ir-scifact-out-of-scope
-  vars:
-    question_id: ir-scifact-out-of-scope
-    question: What is the capital city of Australia?
-    expected_pages: []
-    answer_match:
-      decline: true
-    case_json: '{"id": "ir-scifact-out-of-scope", "tier": "smoke", "type": "out_of_scope",
-      "suites": ["baseline", "smoke"], "fixture_files": ["ir-scifact-bundle-01.pdf"],
-      "expected_pages": [], "question": "What is the capital city of Australia?",
-      "answer_match": {"decline": true}}'
-  assert:
-  - type: javascript
-    value: context.providerResponse?.metadata?.retrieval_hit === true
-  - type: javascript
-    value: '!/(attached documents do not|do not address)/i.test(output)'
 - description: ir-nfcorpus-PLAIN-2
   vars:
     question_id: ir-nfcorpus-PLAIN-2
@@ -79,6 +63,22 @@
     value: context.providerResponse?.metadata?.retrieval_hit === true
   - type: contains-any
     value: *id002
+- description: ir-nfcorpus-out-of-scope
+  vars:
+    question_id: ir-nfcorpus-out-of-scope
+    question: What is the capital city of Australia?
+    expected_pages: []
+    answer_match:
+      decline: true
+    case_json: '{"id": "ir-nfcorpus-out-of-scope", "tier": "smoke", "type": "out_of_scope",
+      "suites": ["baseline", "smoke"], "fixture_files": ["ir-nfcorpus-bundle-01.pdf"],
+      "expected_pages": [], "question": "What is the capital city of Australia?",
+      "answer_match": {"decline": true}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: javascript
+    value: '!/(attached documents do not|do not address)/i.test(output)'
 - description: ir-trec-covid-1
   vars:
     question_id: ir-trec-covid-1

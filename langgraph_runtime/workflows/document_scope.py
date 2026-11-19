@@ -44,11 +44,12 @@ def thread_has_attached_documents(state: Mapping[str, Any]) -> bool:
 
 
 def _score_from_mapping(source: Mapping[str, Any]) -> float | None:
+    scores: list[float] = []
     for key in ("rerank_score", "score", "raw_score"):
         value = source.get(key)
         if isinstance(value, (int, float)):
-            return float(value)
-    return None
+            scores.append(float(value))
+    return max(scores) if scores else None
 
 
 def document_evidence_packets(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:

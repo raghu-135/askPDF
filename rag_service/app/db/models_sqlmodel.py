@@ -27,6 +27,8 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+
+from app.db.jsonb_utils import SafeJSONB
 from app.db.enums import (
     AgentRunStatus,
     ChatTurnStatus,
@@ -1174,15 +1176,15 @@ class CanonicalDocument(SQLModel, table=True):
     status: str = Field(default="pending", index=True)
     document_json: Dict[str, Any] = Field(
         default_factory=dict,
-        sa_column=Column(JSONB, nullable=False, default=dict),
+        sa_column=Column(SafeJSONB, nullable=False, default=dict),
     )
     source_metadata_json: Dict[str, Any] = Field(
         default_factory=dict,
-        sa_column=Column(JSONB, nullable=False, default=dict),
+        sa_column=Column(SafeJSONB, nullable=False, default=dict),
     )
     failure_json: Optional[Dict[str, Any]] = Field(
         default=None,
-        sa_column=Column(JSONB),
+        sa_column=Column(SafeJSONB),
     )
     created_at: datetime = Field(
         default_factory=utc_now,
@@ -1258,11 +1260,11 @@ class DocumentElement(SQLModel, table=True):
     page_end: Optional[int] = None
     provenance_json: Dict[str, Any] = Field(
         default_factory=dict,
-        sa_column=Column(JSONB, nullable=False, default=dict),
+        sa_column=Column(SafeJSONB, nullable=False, default=dict),
     )
     structure_json: Dict[str, Any] = Field(
         default_factory=dict,
-        sa_column=Column(JSONB, nullable=False, default=dict),
+        sa_column=Column(SafeJSONB, nullable=False, default=dict),
     )
 
     __table_args__ = (
@@ -1350,7 +1352,7 @@ class DocumentChunk(SQLModel, table=True):
     table_id: Optional[str] = Field(default=None, index=True)
     page_start: Optional[int] = None
     page_end: Optional[int] = None
-    metadata_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False, default=dict))
+    metadata_json: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(SafeJSONB, nullable=False, default=dict))
 
     __table_args__ = (
         UniqueConstraint("manifest_id", "chunk_order", name="uq_document_chunks_order"),
