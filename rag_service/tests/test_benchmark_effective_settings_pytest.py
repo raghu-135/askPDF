@@ -1,7 +1,8 @@
+import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(os.environ.get("ASKPDF_REPO_DIR", Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from benchmark_effective_settings import supplement_from_thread_settings
