@@ -17,13 +17,15 @@ from sqlalchemy.types import TypeDecorator
 from app.time_utils import iso_utc_z
 
 
-_INVALID_JSON_U = re.compile(r"\\u(?![0-9a-fA-F]{4})")
+_INVALID_STR_U = re.compile(r"\\u(?![0-9a-fA-F]{4})")
 
 
 def _scrub_unicode(value: Any) -> Any:
     if isinstance(value, str):
         cleaned = value.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
-        return cleaned.replace("\x00", "")
+        cleaned = cleaned.replace("\x00", "")
+        cleaned = _INVALID_STR_U.sub(r"\\\\u", cleaned)
+        return cleaned
     if isinstance(value, dict):
         return {key: _scrub_unicode(item) for key, item in value.items()}
     if isinstance(value, list):
@@ -39,7 +41,6 @@ def postgres_jsonb_safe(value: Any) -> Any:
         return None
     scrubbed = _scrub_unicode(value)
     text = json.dumps(scrubbed, ensure_ascii=True, default=str)
-    text = _INVALID_JSON_U.sub(r"\\\\u", text)
     return json.loads(text)
 
 
