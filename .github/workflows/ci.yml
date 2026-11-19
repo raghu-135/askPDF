@@ -149,6 +149,9 @@ jobs:
       - name: Create clean CI environment
         run: cp .env.ci .env
 
+      - name: Verify promptfoo benchmark test generation
+        run: bash scripts/verify_promptfoo_tests_generated.sh
+
       - name: Run Docker test runner
         run: ./run_tests.sh
 

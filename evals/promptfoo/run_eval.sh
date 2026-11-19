@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export PYTHONPATH="${REPO_ROOT}/scripts${PYTHONPATH:+:${PYTHONPATH}}"
+export ASKPDF_BENCHMARK_CONFIG="${ASKPDF_BENCHMARK_CONFIG:-${REPO_ROOT}/benchmarks/benchmark_config.eval.json}"
+export ASKPDF_BENCHMARK_MODEL="${ASKPDF_BENCHMARK_MODEL:-nvidia/nemotron-3.5-super-vl:free}"
+export ASKPDF_BENCHMARK_MODEL_FALLBACK="${ASKPDF_BENCHMARK_MODEL_FALLBACK:-particle-ai/particle-1:free}"
+export ASKPDF_EVAL_JUDGE="${ASKPDF_EVAL_JUDGE:-1}"
+export ASKPDF_BENCHMARK_JUDGE_MODEL="${ASKPDF_BENCHMARK_JUDGE_MODEL:-inclusionai/ling-3.2-flash:free}"
+export ASKPDF_EVAL_MIN_INTERVAL_S="${ASKPDF_EVAL_MIN_INTERVAL_S:-3.5}"
+python3 "${REPO_ROOT}/scripts/generate_promptfoo_tests.py"
+exec python3 "${REPO_ROOT}/scripts/rag_eval_suite.py" --judge "$@"

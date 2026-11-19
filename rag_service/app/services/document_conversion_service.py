@@ -794,14 +794,16 @@ async def convert_pdf_and_project(
             docling_json=payload.get("docling") if isinstance(payload.get("docling"), Mapping) else {},
         )
         payload["reading_projection"] = sentences
+        from app.db.jsonb_utils import postgres_jsonb_safe
+
         published = await repo.complete_conversion(
             file_hash=file_hash,
             claim_token=claim_token,
             generation=generation,
             fingerprint=fingerprint,
             docling_version=str(getattr(docling, "__version__", "unknown")),
-            document_json=payload,
-            source_metadata=source,
+            document_json=postgres_jsonb_safe(payload),
+            source_metadata=postgres_jsonb_safe(source),
             sections=sections,
             elements=elements,
         )

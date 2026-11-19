@@ -77,6 +77,8 @@ UNIT_TEST_FILES = [
     "test_runtime_protocol_package_pytest.py",
     "test_runtime_provider_usage_budget_pytest.py",
     "test_highlight_retrieval_invariant_pytest.py",
+    "test_benchmark_scoring_pytest.py",
+    "test_benchmark_effective_settings_pytest.py",
     "test_table_row_highlight_boxes_pytest.py",
     "test_table_row_projection_pytest.py",
     "test_hermes_builder_provider_pytest.py",
@@ -180,6 +182,7 @@ DB_TEST_FILES = [
     "test_agent_task_cancel_paths_pytest.py",
     "test_agent_task_research_canvases_pytest.py",
     "test_jsonb_operations_pytest.py",
+    "test_jsonb_utils_pytest.py",
     "test_thread_fork_service_pytest.py",
 ]
 

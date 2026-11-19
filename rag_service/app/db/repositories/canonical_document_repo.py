@@ -218,8 +218,10 @@ class CanonicalDocumentRepository:
             row.generation = generation
             row.extraction_fingerprint = fingerprint
             row.docling_version = docling_version
-            row.document_json = document_json
-            row.source_metadata_json = source_metadata
+            from app.db.jsonb_utils import postgres_jsonb_safe
+
+            row.document_json = postgres_jsonb_safe(document_json)
+            row.source_metadata_json = postgres_jsonb_safe(source_metadata)
             row.failure_json = None
             row.status = "completed"
             row.claim_token = None

@@ -73,6 +73,21 @@
       "tags": ["survey", "long", "taxonomy", "tables"]
     },
     {
+      "arxiv_id": "2504.19413",
+      "arxiv_version": "v1",
+      "fixture_file": "2504.19413.pdf",
+      "title": "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory",
+      "authors": "Mem0 team",
+      "pages": 20,
+      "source_url": "https://arxiv.org/abs/2504.19413",
+      "pdf_url": "https://arxiv.org/pdf/2504.19413v1.pdf",
+      "sha256": "",
+      "optional": true,
+      "license": "arXiv.org non-exclusive distribution license 1.0 — optional runtime fetch only.",
+      "role": "benchmark",
+      "tags": ["memory", "agents", "conversation"]
+    },
+    {
       "arxiv_id": "2305.18290",
       "arxiv_version": "v3",
       "fixture_file": "2305.18290.pdf",

@@ -166,3 +166,4 @@ benchmarks/reports/*.md
 # PDFs (uploaded files - optional, uncomment if you don't want to track test PDFs)
 # *.pdf
 build_log.txt
+benchmarks/.sweep-*.json

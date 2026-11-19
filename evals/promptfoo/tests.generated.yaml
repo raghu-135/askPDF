@@ -1,0 +1,400 @@
+- description: invasion-overview
+  vars:
+    question_id: invasion-overview
+    question: What does the PLOS ONE paper on economic development and biological
+      invasions conclude?
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id001
+      - invasion
+      - economic
+      - trade
+      - China
+    case_json: '{"id": "invasion-overview", "type": "overview", "suites": ["baseline",
+      "sweep_core"], "fixture_files": ["plos-pone-0001208.pdf"], "expected_pages":
+      [1, 2], "question": "What does the PLOS ONE paper on economic development and
+      biological invasions conclude?", "answer_match": {"any_contains": ["invasion",
+      "economic", "trade", "China"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id001
+- description: invasion-authors
+  vars:
+    question_id: invasion-authors
+    question: Who is the corresponding author on the China biological invasions paper?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id002
+      - Rumei Xu
+      - Xu
+    case_json: '{"id": "invasion-authors", "type": "fact", "suites": ["baseline"],
+      "fixture_files": ["plos-pone-0001208.pdf"], "expected_pages": [1], "question":
+      "Who is the corresponding author on the China biological invasions paper?",
+      "answer_match": {"any_contains": ["Rumei Xu", "Xu"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id002
+- description: stats-rules-title
+  vars:
+    question_id: stats-rules-title
+    question: What is the title of the Ten Simple Rules editorial on statistical practice?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id003
+      - Ten Simple Rules
+      - Statistical Practice
+    case_json: '{"id": "stats-rules-title", "type": "overview", "suites": ["baseline",
+      "sweep_core"], "fixture_files": ["plos-pcbi-1004961.pdf"], "expected_pages":
+      [1], "question": "What is the title of the Ten Simple Rules editorial on statistical
+      practice?", "answer_match": {"any_contains": ["Ten Simple Rules", "Statistical
+      Practice"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id003
+- description: stats-rules-reid
+  vars:
+    question_id: stats-rules-reid
+    question: Which author is listed with the University of Toronto on the statistical
+      practice rules paper?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id004
+      - Nancy Reid
+      - Reid
+    case_json: '{"id": "stats-rules-reid", "type": "fact", "suites": ["baseline"],
+      "fixture_files": ["plos-pcbi-1004961.pdf"], "expected_pages": [1], "question":
+      "Which author is listed with the University of Toronto on the statistical practice
+      rules paper?", "answer_match": {"any_contains": ["Nancy Reid", "Reid"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id004
+- description: rna-editing-topic
+  vars:
+    question_id: rna-editing-topic
+    question: What type of RNA editing does the Alu-containing mRNA paper study?
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id005
+      - A-to-I
+      - editing
+      - Alu
+    case_json: '{"id": "rna-editing-topic", "type": "overview", "suites": ["baseline",
+      "sweep_core"], "optional_fixture": true, "fixture_files": ["plos-biology-0020391.pdf"],
+      "expected_pages": [1, 2], "question": "What type of RNA editing does the Alu-containing
+      mRNA paper study?", "answer_match": {"any_contains": ["A-to-I", "editing", "Alu"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id005
+- description: rna-editing-species
+  vars:
+    question_id: rna-editing-species
+    question: Which organism's transcriptome is studied in the Alu RNA editing paper?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id006
+      - human
+      - Human
+    case_json: '{"id": "rna-editing-species", "type": "fact", "suites": ["baseline"],
+      "optional_fixture": true, "fixture_files": ["plos-biology-0020391.pdf"], "expected_pages":
+      [1], "question": "Which organism''s transcriptome is studied in the Alu RNA
+      editing paper?", "answer_match": {"any_contains": ["human", "Human"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id006
+- description: social-medicine-essay
+  vars:
+    question_id: social-medicine-essay
+    question: What historical period does Dorothy Porter focus on when discussing
+      social medicine?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id007
+      - Interwar
+      - Twentieth Century
+      - '1920'
+    case_json: '{"id": "social-medicine-essay", "type": "overview", "suites": ["baseline",
+      "sweep_core"], "fixture_files": ["plos-medicine-0030399.pdf"], "expected_pages":
+      [1], "question": "What historical period does Dorothy Porter focus on when discussing
+      social medicine?", "answer_match": {"any_contains": ["Interwar", "Twentieth
+      Century", "1920"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id007
+- description: wolbachia-vector
+  vars:
+    question_id: wolbachia-vector
+    question: Which mosquito species is studied in the Wolbachia wPip phenotype paper?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id008
+      - Aedes aegypti
+    case_json: '{"id": "wolbachia-vector", "type": "fact", "suites": ["baseline"],
+      "fixture_files": ["plos-pathogens-1008410.pdf"], "expected_pages": [1], "question":
+      "Which mosquito species is studied in the Wolbachia wPip phenotype paper?",
+      "answer_match": {"any_contains": ["Aedes aegypti"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id008
+- description: wolbachia-virus
+  vars:
+    question_id: wolbachia-virus
+    question: Which virus inhibition mechanism is discussed for Wolbachia in Aedes
+      aegypti?
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id009
+      - dengue
+    case_json: '{"id": "wolbachia-virus", "type": "fact", "suites": ["baseline", "sweep_core"],
+      "fixture_files": ["plos-pathogens-1008410.pdf"], "expected_pages": [1, 2], "question":
+      "Which virus inhibition mechanism is discussed for Wolbachia in Aedes aegypti?",
+      "answer_match": {"any_contains": ["dengue"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id009
+- description: spore-wall-organism
+  vars:
+    question_id: spore-wall-organism
+    question: Which yeast species is studied in the outer spore wall assembly paper?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id010
+      - Saccharomyces
+      - cerevisiae
+    case_json: '{"id": "spore-wall-organism", "type": "fact", "suites": ["baseline"],
+      "fixture_files": ["plos-genetics-1003700.pdf"], "expected_pages": [1], "question":
+      "Which yeast species is studied in the outer spore wall assembly paper?", "answer_match":
+      {"any_contains": ["Saccharomyces", "cerevisiae"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id010
+- description: spore-wall-structure
+  vars:
+    question_id: spore-wall-structure
+    question: What cellular structure does the spore wall paper describe?
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id011
+      - spore
+      - wall
+    case_json: '{"id": "spore-wall-structure", "type": "overview", "suites": ["baseline",
+      "sweep_core"], "fixture_files": ["plos-genetics-1003700.pdf"], "expected_pages":
+      [1, 2], "question": "What cellular structure does the spore wall paper describe?",
+      "answer_match": {"any_contains": ["spore", "wall"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id011
+- description: invasion-page-ref
+  vars:
+    question_id: invasion-page-ref
+    question: According to the invasions paper, what is cited as a major cause of
+      biological invasion?
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id012
+      - trade
+      - travel
+      - global
+    case_json: '{"id": "invasion-page-ref", "type": "fact", "suites": ["baseline"],
+      "fixture_files": ["plos-pone-0001208.pdf"], "expected_pages": [1, 2], "question":
+      "According to the invasions paper, what is cited as a major cause of biological
+      invasion?", "answer_match": {"any_contains": ["trade", "travel", "global"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id012
+- description: stats-open-access
+  vars:
+    question_id: stats-open-access
+    question: Does the statistical practice rules paper indicate OPEN ACCESS?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id013
+      - OPEN ACCESS
+      - open access
+    case_json: '{"id": "stats-open-access", "type": "fact", "suites": ["baseline"],
+      "fixture_files": ["plos-pcbi-1004961.pdf"], "expected_pages": [1], "question":
+      "Does the statistical practice rules paper indicate OPEN ACCESS?", "answer_match":
+      {"any_contains": ["OPEN ACCESS", "open access"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id013
+- description: medicine-heading
+  vars:
+    question_id: medicine-heading
+    question: What section label appears at the top of Dorothy Porter's social medicine
+      essay?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id014
+      - Essay
+    case_json: '{"id": "medicine-heading", "type": "fact", "suites": ["baseline"],
+      "fixture_files": ["plos-medicine-0030399.pdf"], "expected_pages": [1], "question":
+      "What section label appears at the top of Dorothy Porter''s social medicine
+      essay?", "answer_match": {"any_contains": ["Essay"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id014
+- description: pathogen-fraser
+  vars:
+    question_id: pathogen-fraser
+    question: Who is the first author on the Wolbachia wPip Aedes paper?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id015
+      - Fraser
+    case_json: '{"id": "pathogen-fraser", "type": "fact", "suites": ["baseline"],
+      "fixture_files": ["plos-pathogens-1008410.pdf"], "expected_pages": [1], "question":
+      "Who is the first author on the Wolbachia wPip Aedes paper?", "answer_match":
+      {"any_contains": ["Fraser"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id015
+- description: genetics-neiman
+  vars:
+    question_id: genetics-neiman
+    question: Which investigator is marked with * on the spore wall genetics paper?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id016
+      - Neiman
+    case_json: '{"id": "genetics-neiman", "type": "fact", "suites": ["baseline"],
+      "fixture_files": ["plos-genetics-1003700.pdf"], "expected_pages": [1], "question":
+      "Which investigator is marked with * on the spore wall genetics paper?", "answer_match":
+      {"any_contains": ["Neiman"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id016
+- description: rna-editing-author
+  vars:
+    question_id: rna-editing-author
+    question: Who is the corresponding author on the Alu RNA editing paper?
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id017
+      - Maas
+      - Stefan Maas
+    case_json: '{"id": "rna-editing-author", "type": "fact", "suites": ["baseline",
+      "sweep_core"], "optional_fixture": true, "fixture_files": ["plos-biology-0020391.pdf"],
+      "expected_pages": [1], "question": "Who is the corresponding author on the Alu
+      RNA editing paper?", "answer_match": {"any_contains": ["Maas", "Stefan Maas"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id017
+- description: multi-invasion-stats
+  vars:
+    question_id: multi-invasion-stats
+    question: 'Compare: does either the China invasions paper or the statistical practice
+      rules paper mention OPEN ACCESS on page 1?'
+    expected_pages:
+    - 1
+    answer_match:
+      any_contains: &id018
+      - OPEN ACCESS
+      - open access
+    case_json: '{"id": "multi-invasion-stats", "type": "multi_doc", "suites": ["baseline"],
+      "fixture_files": ["plos-pone-0001208.pdf", "plos-pcbi-1004961.pdf"], "expected_pages":
+      [1], "question": "Compare: does either the China invasions paper or the statistical
+      practice rules paper mention OPEN ACCESS on page 1?", "answer_match": {"any_contains":
+      ["OPEN ACCESS", "open access"]}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id018
+- description: out-of-scope-neptune
+  vars:
+    question_id: out-of-scope-neptune
+    question: What is the orbital period of Neptune in Earth years?
+    expected_pages: []
+    answer_match:
+      decline: true
+    case_json: '{"id": "out-of-scope-neptune", "type": "out_of_scope", "suites": ["baseline",
+      "sweep_core"], "fixture_files": ["plos-pone-0001208.pdf"], "expected_pages":
+      [], "question": "What is the orbital period of Neptune in Earth years?", "answer_match":
+      {"decline": true}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: javascript
+    value: '!/(attached documents do not|do not address)/i.test(output)'
+- description: date-range-conference
+  vars:
+    question_id: date-range-conference
+    question: "The essay mentions a meeting held on 27\u201328 October; what year\
+      \ and event is associated with that date range?"
+    expected_pages:
+    - 1
+    - 2
+    answer_match:
+      any_contains: &id019
+      - '27'
+      - '28'
+      - October
+    case_json: '{"id": "date-range-conference", "type": "fact", "suites": ["baseline",
+      "sweep_core"], "fixture_files": ["plos-medicine-0030399.pdf"], "expected_pages":
+      [1, 2], "question": "The essay mentions a meeting held on 27\u201328 October;
+      what year and event is associated with that date range?", "answer_match": {"any_contains":
+      ["27", "28", "October"]}, "numeric": null, "assertions": {"no_internal_knowledge_note":
+      true}}'
+  assert:
+  - type: javascript
+    value: context.providerResponse?.metadata?.retrieval_hit === true
+  - type: contains-any
+    value: *id019
+  - type: javascript
+    value: '!/\(internal knowledge/i.test(output)'

@@ -1,0 +1,8 @@
+{
+  "advanced": {
+    "coverage_iterations": {
+      "max_iterations_sufficient_coverage": 3,
+      "max_iterations_probably_sufficient_coverage": 5
+    }
+  }
+}
