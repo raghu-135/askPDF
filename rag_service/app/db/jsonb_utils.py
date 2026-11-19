@@ -5,11 +5,36 @@ Critical for PostgreSQL JSONB change tracking. Without these helpers,
 mutations to nested JSONB fields may not be detected or persisted.
 """
 
+import json
+import re
 from copy import deepcopy
 from typing import Any, Dict
 
 from sqlalchemy.orm.attributes import flag_modified
 from app.time_utils import iso_utc_z
+
+
+_INVALID_JSON_U = re.compile(r"\\u(?![0-9a-fA-F]{4})")
+
+
+def _scrub_unicode(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+    if isinstance(value, dict):
+        return {key: _scrub_unicode(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_scrub_unicode(item) for item in value]
+    if isinstance(value, tuple):
+        return [_scrub_unicode(item) for item in value]
+    return value
+
+
+def postgres_jsonb_safe(value: Any) -> Any:
+    """Round-trip through JSON with ASCII escapes so asyncpg accepts the payload."""
+    scrubbed = _scrub_unicode(value)
+    text = json.dumps(scrubbed, ensure_ascii=True, default=str)
+    text = _INVALID_JSON_U.sub(r"\\\\u", text)
+    return json.loads(text)
 
 
 def set_jsonb_field(

@@ -55,12 +55,38 @@ def _load_cases(*, suite: str) -> list[dict[str, Any]]:
     return out
 
 
-def _upload_fixtures(client: httpx.Client, thread_id: str, files: list[str]) -> None:
+def _upload_fixtures(client: httpx.Client, thread_id: str, files: list[str]) -> set[str]:
+    ready: set[str] = set()
     for name in files:
         path = fixture_path(name)
         fh = upload_pdf(client, thread_id, path)
         wait_indexed(client, thread_id=thread_id, file_hash=fh, timeout=indexing_timeout_seconds(name))
         print(f"indexed {name}", flush=True)
+        ready.add(name)
+    return ready
+
+
+def _ensure_case_fixtures(
+    client: httpx.Client,
+    thread_id: str,
+    case: dict[str, Any],
+    *,
+    uploaded: set[str],
+) -> bool:
+    """Upload per-case fixtures not already on the thread. Return False when indexing fails."""
+    for name in case.get("fixture_files") or []:
+        if name in uploaded:
+            continue
+        try:
+            path = fixture_path(name)
+            fh = upload_pdf(client, thread_id, path)
+            wait_indexed(client, thread_id=thread_id, file_hash=fh, timeout=indexing_timeout_seconds(name))
+            print(f"indexed {name}", flush=True)
+            uploaded.add(name)
+        except (TimeoutError, RuntimeError, FileNotFoundError) as exc:
+            print(f"skip fixture {name} for {case.get('id')}: {exc}", flush=True)
+            return False
+    return True
 
 
 def _prepare_optional_fixtures(files: list[str]) -> list[str]:
@@ -162,11 +188,15 @@ def run_suite(
                 workflow_id=workflow,
                 settings_patch=thread_baseline,
             )
-            _upload_fixtures(client, thread_id, required_files)
+            uploaded = _upload_fixtures(client, thread_id, required_files)
             rows: list[dict[str, Any]] = []
             for case in cases:
+                if not _ensure_case_fixtures(client, thread_id, case, uploaded=uploaded):
+                    if case.get("optional_fixture"):
+                        continue
+                    raise RuntimeError(f"required fixture missing for {case.get('id')}")
                 if case.get("optional_fixture") and not all(
-                    f in required_files for f in (case.get("fixture_files") or [])
+                    f in uploaded for f in (case.get("fixture_files") or [])
                 ):
                     continue
                 for row in run_case(

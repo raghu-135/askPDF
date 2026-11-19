@@ -182,6 +182,7 @@ DB_TEST_FILES = [
     "test_agent_task_cancel_paths_pytest.py",
     "test_agent_task_research_canvases_pytest.py",
     "test_jsonb_operations_pytest.py",
+    "test_jsonb_utils_pytest.py",
     "test_thread_fork_service_pytest.py",
 ]
 
