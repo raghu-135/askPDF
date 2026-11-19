@@ -20,7 +20,7 @@ indexes via the files API (no fixed sleeps). See `benchmarks/CORPUS.md`.
 Models: `ASKPDF_BENCHMARK_MODEL` (default `nvidia/nemotron-3.5-super-vl:free`), fallback
 `ASKPDF_BENCHMARK_MODEL_FALLBACK=particle-ai/particle-1:free` — never `openrouter/free`.
 
-Reasoning: default `ASKPDF_EVAL_REASONING_EFFORT=none` → OpenRouter `reasoning.effort=none`.
+Reasoning: eval sets `ASKPDF_LLM_REASONING_EFFORT=none` → OpenRouter `reasoning.effort=none`.
 Compare with `--reasoning-compare` (core/advanced).
 
 Checkpoints: `benchmarks/reports/.checkpoint-<label>.json` (resume unless `--no-resume`).

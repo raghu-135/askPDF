@@ -158,6 +158,8 @@ backend/app/helper.py
 
 # Benchmark arXiv PDFs (fetched via scripts/download_benchmark_pdfs.sh)
 .benchmark-pdf-cache/
+.corpus-venv/
+benchmarks/fixtures/.dataset_cache/
 benchmarks/fixtures/pdfs/
 benchmarks/reports/*.json
 benchmarks/reports/*.md

@@ -1,238 +1,507 @@
 {
   "schema_version": 3,
-  "description": "Bundled CC BY 4.0 PLOS benchmark corpus only (see benchmarks/CORPUS.md and fixtures/LICENSES.md).",
+  "description": "Bundled CC BY / CC BY-SA IR and PLOS benchmark corpus (see benchmarks/CORPUS.md).",
   "questions": [
     {
       "id": "invasion-overview",
-      "tier": "smoke",
+      "tier": "core",
       "type": "overview",
-      "suites": ["baseline", "sweep_core"],
-      "fixture_files": ["plos-pone-0001208.pdf"],
-      "expected_pages": [1, 2],
+      "suites": [
+        "baseline",
+        "sweep_core"
+      ],
+      "fixture_files": [
+        "plos-pone-0001208.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
       "question": "What does the PLOS ONE paper on economic development and biological invasions conclude?",
-      "answer_match": { "any_contains": ["invasion", "economic", "trade", "China"] }
+      "answer_match": {
+        "any_contains": [
+          "invasion",
+          "economic",
+          "trade",
+          "China"
+        ]
+      }
     },
     {
       "id": "invasion-authors",
-      "tier": "smoke",
+      "tier": "core",
       "type": "fact",
-      "suites": ["baseline", "smoke"],
-      "fixture_files": ["plos-pone-0001208.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline",
+        "smoke"
+      ],
+      "fixture_files": [
+        "plos-pone-0001208.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Who is the corresponding author on the China biological invasions paper?",
-      "answer_match": { "any_contains": ["Rumei Xu", "Xu"] }
+      "answer_match": {
+        "any_contains": [
+          "Rumei Xu",
+          "Xu"
+        ]
+      }
     },
     {
       "id": "stats-rules-title",
-      "tier": "smoke",
+      "tier": "core",
       "type": "overview",
-      "suites": ["baseline", "sweep_core", "smoke"],
-      "fixture_files": ["plos-pcbi-1004961.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline",
+        "sweep_core",
+        "smoke"
+      ],
+      "fixture_files": [
+        "plos-pcbi-1004961.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "What is the title of the Ten Simple Rules editorial on statistical practice?",
-      "answer_match": { "any_contains": ["Ten Simple Rules", "Statistical Practice"] }
+      "answer_match": {
+        "any_contains": [
+          "Ten Simple Rules",
+          "Statistical Practice"
+        ]
+      }
     },
     {
       "id": "stats-rules-reid",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-pcbi-1004961.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-pcbi-1004961.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Which author is listed with the University of Toronto on the statistical practice rules paper?",
-      "answer_match": { "any_contains": ["Nancy Reid", "Reid"] }
+      "answer_match": {
+        "any_contains": [
+          "Nancy Reid",
+          "Reid"
+        ]
+      }
     },
     {
       "id": "rna-editing-topic",
       "tier": "core",
       "type": "overview",
-      "suites": ["baseline", "sweep_core"],
-      "fixture_files": ["plos-biology-0020391.pdf"],
-      "expected_pages": [1, 2],
+      "suites": [
+        "baseline",
+        "sweep_core"
+      ],
+      "fixture_files": [
+        "plos-biology-0020391.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
       "question": "What type of RNA editing does the Alu-containing mRNA paper study?",
-      "answer_match": { "any_contains": ["A-to-I", "editing", "Alu"] }
+      "answer_match": {
+        "any_contains": [
+          "A-to-I",
+          "editing",
+          "Alu"
+        ]
+      }
     },
     {
       "id": "rna-editing-species",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-biology-0020391.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-biology-0020391.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Which organism's transcriptome is studied in the Alu RNA editing paper?",
-      "answer_match": { "any_contains": ["human", "Human"] }
+      "answer_match": {
+        "any_contains": [
+          "human",
+          "Human"
+        ]
+      }
     },
     {
       "id": "social-medicine-essay",
       "tier": "core",
       "type": "overview",
-      "suites": ["baseline", "sweep_core"],
-      "fixture_files": ["plos-medicine-0030399.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline",
+        "sweep_core"
+      ],
+      "fixture_files": [
+        "plos-medicine-0030399.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "What historical period does Dorothy Porter focus on when discussing social medicine?",
-      "answer_match": { "any_contains": ["Interwar", "Twentieth Century", "1920"] }
+      "answer_match": {
+        "any_contains": [
+          "Interwar",
+          "Twentieth Century",
+          "1920"
+        ]
+      }
     },
     {
       "id": "wolbachia-vector",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-pathogens-1008410.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-pathogens-1008410.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Which mosquito species is studied in the Wolbachia wPip phenotype paper?",
-      "answer_match": { "any_contains": ["Aedes aegypti"] }
+      "answer_match": {
+        "any_contains": [
+          "Aedes aegypti"
+        ]
+      }
     },
     {
       "id": "wolbachia-virus",
-      "tier": "smoke",
+      "tier": "core",
       "type": "fact",
-      "suites": ["baseline", "sweep_core", "smoke"],
-      "fixture_files": ["plos-pathogens-1008410.pdf"],
-      "expected_pages": [1, 2],
+      "suites": [
+        "baseline",
+        "sweep_core",
+        "smoke"
+      ],
+      "fixture_files": [
+        "plos-pathogens-1008410.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
       "question": "Which virus inhibition mechanism is discussed for Wolbachia in Aedes aegypti?",
-      "answer_match": { "any_contains": ["dengue"] }
+      "answer_match": {
+        "any_contains": [
+          "dengue"
+        ]
+      }
     },
     {
       "id": "spore-wall-organism",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-genetics-1003700.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-genetics-1003700.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Which yeast species is studied in the outer spore wall assembly paper?",
-      "answer_match": { "any_contains": ["Saccharomyces", "cerevisiae"] }
+      "answer_match": {
+        "any_contains": [
+          "Saccharomyces",
+          "cerevisiae"
+        ]
+      }
     },
     {
       "id": "spore-wall-structure",
       "tier": "core",
       "type": "overview",
-      "suites": ["baseline", "sweep_core"],
-      "fixture_files": ["plos-genetics-1003700.pdf"],
-      "expected_pages": [1, 2],
+      "suites": [
+        "baseline",
+        "sweep_core"
+      ],
+      "fixture_files": [
+        "plos-genetics-1003700.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
       "question": "What cellular structure does the spore wall paper describe?",
-      "answer_match": { "any_contains": ["spore", "wall"] }
+      "answer_match": {
+        "any_contains": [
+          "spore",
+          "wall"
+        ]
+      }
     },
     {
       "id": "invasion-page-ref",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-pone-0001208.pdf"],
-      "expected_pages": [1, 2],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-pone-0001208.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
       "question": "According to the invasions paper, what is cited as a major cause of biological invasion?",
-      "answer_match": { "any_contains": ["trade", "travel", "global"] }
+      "answer_match": {
+        "any_contains": [
+          "trade",
+          "travel",
+          "global"
+        ]
+      }
     },
     {
       "id": "stats-open-access",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-pcbi-1004961.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-pcbi-1004961.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Does the statistical practice rules paper indicate OPEN ACCESS?",
-      "answer_match": { "any_contains": ["OPEN ACCESS", "open access"] }
+      "answer_match": {
+        "any_contains": [
+          "OPEN ACCESS",
+          "open access"
+        ]
+      }
     },
     {
       "id": "medicine-heading",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-medicine-0030399.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-medicine-0030399.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "What section label appears at the top of Dorothy Porter's social medicine essay?",
-      "answer_match": { "any_contains": ["Essay"] }
+      "answer_match": {
+        "any_contains": [
+          "Essay"
+        ]
+      }
     },
     {
       "id": "pathogen-fraser",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-pathogens-1008410.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-pathogens-1008410.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Who is the first author on the Wolbachia wPip Aedes paper?",
-      "answer_match": { "any_contains": ["Fraser"] }
+      "answer_match": {
+        "any_contains": [
+          "Fraser"
+        ]
+      }
     },
     {
       "id": "genetics-neiman",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-genetics-1003700.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-genetics-1003700.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Which investigator is marked with * on the spore wall genetics paper?",
-      "answer_match": { "any_contains": ["Neiman"] }
+      "answer_match": {
+        "any_contains": [
+          "Neiman"
+        ]
+      }
     },
     {
       "id": "rna-editing-author",
       "tier": "core",
       "type": "fact",
-      "suites": ["baseline", "sweep_core"],
-      "fixture_files": ["plos-biology-0020391.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline",
+        "sweep_core"
+      ],
+      "fixture_files": [
+        "plos-biology-0020391.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Who is the corresponding author on the Alu RNA editing paper?",
-      "answer_match": { "any_contains": ["Maas", "Stefan Maas"] }
+      "answer_match": {
+        "any_contains": [
+          "Maas",
+          "Stefan Maas"
+        ]
+      }
     },
     {
       "id": "multi-invasion-stats",
       "tier": "advanced",
       "type": "multi_doc",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-pone-0001208.pdf", "plos-pcbi-1004961.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-pone-0001208.pdf",
+        "plos-pcbi-1004961.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Compare: does either the China invasions paper or the statistical practice rules paper mention OPEN ACCESS on page 1?",
-      "answer_match": { "any_contains": ["OPEN ACCESS", "open access"] }
+      "answer_match": {
+        "any_contains": [
+          "OPEN ACCESS",
+          "open access"
+        ]
+      }
     },
     {
       "id": "out-of-scope-neptune",
       "tier": "smoke",
       "type": "out_of_scope",
-      "suites": ["baseline", "sweep_core", "smoke"],
-      "fixture_files": ["plos-pone-0001208.pdf"],
+      "suites": [
+        "baseline",
+        "sweep_core",
+        "smoke"
+      ],
+      "fixture_files": [
+        "plos-pone-0001208.pdf"
+      ],
       "expected_pages": [],
       "question": "What is the orbital period of Neptune in Earth years?",
-      "answer_match": { "decline": true }
+      "answer_match": {
+        "decline": true
+      }
     },
     {
       "id": "date-range-conference",
       "tier": "advanced",
       "type": "fact",
-      "suites": ["baseline", "sweep_core"],
-      "fixture_files": ["plos-medicine-0030399.pdf"],
-      "expected_pages": [1, 2],
-      "question": "The essay mentions a meeting held on 27–28 October; what year and event is associated with that date range?",
-      "answer_match": { "any_contains": ["27", "28", "October"] },
+      "suites": [
+        "baseline",
+        "sweep_core"
+      ],
+      "fixture_files": [
+        "plos-medicine-0030399.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "The essay mentions a meeting held on 27\u201328 October; what year and event is associated with that date range?",
+      "answer_match": {
+        "any_contains": [
+          "27",
+          "28",
+          "October"
+        ]
+      },
       "numeric": null,
-      "assertions": { "no_internal_knowledge_note": true }
+      "assertions": {
+        "no_internal_knowledge_note": true
+      }
     },
     {
       "id": "medicine-conversation",
       "tier": "advanced",
       "type": "conversation",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-medicine-0030399.pdf"],
-      "assertions": { "no_internal_knowledge_note": true },
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-medicine-0030399.pdf"
+      ],
+      "assertions": {
+        "no_internal_knowledge_note": true
+      },
       "turns": [
         {
           "id": "medicine-author",
           "question": "Who wrote the social medicine essay in this thread?",
-          "expected_pages": [1],
-          "answer_match": { "any_contains": ["Dorothy Porter", "Porter"] },
+          "expected_pages": [
+            1
+          ],
+          "answer_match": {
+            "any_contains": [
+              "Dorothy Porter",
+              "Porter"
+            ]
+          },
           "bypass_clarification": true
         },
         {
           "id": "medicine-period",
           "question": "What historical period does she emphasize?",
-          "expected_pages": [1, 2],
+          "expected_pages": [
+            1,
+            2
+          ],
           "answer_match": {
-            "any_contains": ["Interwar", "Twentieth", "1920", "twentieth"]
+            "any_contains": [
+              "Interwar",
+              "Twentieth",
+              "1920",
+              "twentieth"
+            ]
           },
           "bypass_clarification": true
         },
         {
           "id": "medicine-meeting-dates",
-          "question": "Does the essay mention a meeting on 27–28 October? If so, what context is given?",
-          "expected_pages": [1, 2],
-          "answer_match": { "any_contains": ["27", "28", "October", "meeting"] },
+          "question": "Does the essay mention a meeting on 27\u201328 October? If so, what context is given?",
+          "expected_pages": [
+            1,
+            2
+          ],
+          "answer_match": {
+            "any_contains": [
+              "27",
+              "28",
+              "October",
+              "meeting"
+            ]
+          },
           "bypass_clarification": true
         }
       ]
@@ -241,11 +510,712 @@
       "id": "pathogen-multi-hop",
       "tier": "advanced",
       "type": "multi_doc",
-      "suites": ["baseline"],
-      "fixture_files": ["plos-pathogens-1008410.pdf", "plos-genetics-1003700.pdf"],
-      "expected_pages": [1],
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "plos-pathogens-1008410.pdf",
+        "plos-genetics-1003700.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
       "question": "Across the Wolbachia and spore wall papers, which one studies Saccharomyces cerevisiae?",
-      "answer_match": { "any_contains": ["cerevisiae", "Saccharomyces", "spore", "yeast"] }
+      "answer_match": {
+        "any_contains": [
+          "cerevisiae",
+          "Saccharomyces",
+          "spore",
+          "yeast"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-1",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "According to the bundled abstracts, is there evidence about this claim: 0-dimensional biomaterials show inductive properties.",
+      "answer_match": {
+        "any_contains": [
+          "Opportunities",
+          "Nanotechnologies",
+          "Manipulate",
+          "Track",
+          "Stem",
+          "Cells"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-3",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "According to the bundled abstracts, is there evidence about this claim: 1,000 genomes project enables mapping of genetic sequence variation consisting of rare variants with larger penetrance effects than common variants.",
+      "answer_match": {
+        "any_contains": [
+          "Rare",
+          "Variants",
+          "Create",
+          "Synthetic",
+          "Genome-Wide",
+          "Associations"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-5",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "According to the bundled abstracts, is there evidence about this claim: 1/2000 in UK have abnormal PrP positivity.",
+      "answer_match": {
+        "any_contains": [
+          "Prevalent",
+          "Abnormal",
+          "Prion",
+          "Protein",
+          "Human",
+          "Appendixes"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-13",
+      "tier": "advanced",
+      "type": "overview",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "According to the bundled abstracts, is there evidence about this claim: 5% of perinatal mortality is due to low birth weight.",
+      "answer_match": {
+        "any_contains": [
+          "Estimates",
+          "Global",
+          "Prevalence",
+          "Childhood",
+          "Underweight",
+          "1990"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-36",
+      "tier": "advanced",
+      "type": "overview",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "According to the bundled abstracts, is there evidence about this claim: A deficiency of vitamin B12 increases blood levels of homocysteine.",
+      "answer_match": {
+        "any_contains": [
+          "Folic",
+          "Acid",
+          "Improves",
+          "Endothelial",
+          "Function",
+          "Coronary"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-42",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "According to the bundled abstracts, is there evidence about this claim: A high microerythrocyte count raises vulnerability to severe anemia in homozygous alpha (+)- thalassemia trait subjects.",
+      "answer_match": {
+        "any_contains": [
+          "Increased",
+          "Microerythrocyte",
+          "Count",
+          "Homozygous",
+          "Thalassaemia",
+          "Contributes"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-48",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "According to the bundled abstracts, is there evidence about this claim: A total of 1,000 people in the UK are asymptomatic carriers of vCJD infection.",
+      "answer_match": {
+        "any_contains": [
+          "Prevalent",
+          "Abnormal",
+          "Prion",
+          "Protein",
+          "Human",
+          "Appendixes"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-49",
+      "tier": "advanced",
+      "type": "overview",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "According to the bundled abstracts, is there evidence about this claim: ADAR1 binds to Dicer to cleave pre-miRNA.",
+      "answer_match": {
+        "any_contains": [
+          "ADAR1",
+          "Forms",
+          "Complex",
+          "Dicer",
+          "Promote",
+          "MicroRNA"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-multi",
+      "tier": "advanced",
+      "type": "multi_doc",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-01.pdf",
+        "ir-scifact-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
+      "question": "Across the bundled scifact documents, what topic domain do the titles suggest?",
+      "answer_match": {
+        "any_contains": [
+          "Scifact",
+          "Ir-scifact-bundle-01"
+        ]
+      }
+    },
+    {
+      "id": "ir-scifact-out-of-scope",
+      "tier": "smoke",
+      "type": "out_of_scope",
+      "suites": [
+        "baseline",
+        "smoke"
+      ],
+      "fixture_files": [
+        "ir-scifact-bundle-01.pdf"
+      ],
+      "expected_pages": [],
+      "question": "What is the capital city of Australia?",
+      "answer_match": {
+        "decline": true
+      }
+    },
+    {
+      "id": "ir-nfcorpus-PLAIN-2",
+      "tier": "smoke",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-nfcorpus-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "Do Cholesterol Statin Drugs Cause Breast Cancer?",
+      "answer_match": {
+        "any_contains": [
+          "Elevated",
+          "Levels",
+          "Cholesterol-Rich",
+          "Lipid",
+          "Rafts",
+          "Cancer"
+        ]
+      }
+    },
+    {
+      "id": "ir-nfcorpus-PLAIN-1050",
+      "tier": "advanced",
+      "type": "overview",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-nfcorpus-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "Dr. Dean Ornish",
+      "answer_match": {
+        "any_contains": [
+          "Garden",
+          "Eden--plant",
+          "Based",
+          "Diets",
+          "Genetic",
+          "Drive"
+        ]
+      }
+    },
+    {
+      "id": "ir-nfcorpus-PLAIN-1537",
+      "tier": "advanced",
+      "type": "overview",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-nfcorpus-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "low-carb diets",
+      "answer_match": {
+        "any_contains": [
+          "Garden",
+          "Eden--plant",
+          "Based",
+          "Diets",
+          "Genetic",
+          "Drive"
+        ]
+      }
+    },
+    {
+      "id": "ir-nfcorpus-PLAIN-1741",
+      "tier": "smoke",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-nfcorpus-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "nuts",
+      "answer_match": {
+        "any_contains": [
+          "Garden",
+          "Eden--plant",
+          "Based",
+          "Diets",
+          "Genetic",
+          "Drive"
+        ]
+      }
+    },
+    {
+      "id": "ir-nfcorpus-PLAIN-1909",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-nfcorpus-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "pork",
+      "answer_match": {
+        "any_contains": [
+          "Garden",
+          "Eden--plant",
+          "Based",
+          "Diets",
+          "Genetic",
+          "Drive"
+        ]
+      }
+    },
+    {
+      "id": "ir-nfcorpus-PLAIN-2261",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-nfcorpus-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "trans fats",
+      "answer_match": {
+        "any_contains": [
+          "Garden",
+          "Eden--plant",
+          "Based",
+          "Diets",
+          "Genetic",
+          "Drive"
+        ]
+      }
+    },
+    {
+      "id": "ir-nfcorpus-PLAIN-2550",
+      "tier": "advanced",
+      "type": "overview",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-nfcorpus-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "Barriers to Heart Disease Prevention",
+      "answer_match": {
+        "any_contains": [
+          "Elevated",
+          "Levels",
+          "Cholesterol-Rich",
+          "Lipid",
+          "Rafts",
+          "Cancer"
+        ]
+      }
+    },
+    {
+      "id": "ir-nfcorpus-multi",
+      "tier": "advanced",
+      "type": "multi_doc",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-nfcorpus-bundle-01.pdf",
+        "ir-nfcorpus-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
+      "question": "Across the bundled nfcorpus documents, what topic domain do the titles suggest?",
+      "answer_match": {
+        "any_contains": [
+          "Nfcorpus",
+          "Ir-nfcorpus-bundle-0"
+        ]
+      }
+    },
+    {
+      "id": "ir-nfcorpus-out-of-scope",
+      "tier": "core",
+      "type": "out_of_scope",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-nfcorpus-bundle-01.pdf"
+      ],
+      "expected_pages": [],
+      "question": "What is the capital city of Australia?",
+      "answer_match": {
+        "decline": true
+      }
+    },
+    {
+      "id": "ir-trec-covid-1",
+      "tier": "smoke",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-trec-covid-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "what is the origin of COVID-19",
+      "answer_match": {
+        "any_contains": [
+          "Monophyletic",
+          "Relationship",
+          "Between",
+          "Severe",
+          "Acute",
+          "Respiratory"
+        ]
+      }
+    },
+    {
+      "id": "ir-trec-covid-6",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-trec-covid-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "what types of rapid testing for Covid-19 have been developed?",
+      "answer_match": {
+        "any_contains": [
+          "SARS",
+          "MERS",
+          "Novel",
+          "Coronavirus",
+          "COVID-19",
+          "Epidemics"
+        ]
+      }
+    },
+    {
+      "id": "ir-trec-covid-8",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-trec-covid-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "how has lack of testing availability led to underreporting of true incidence of Covid-19?",
+      "answer_match": {
+        "any_contains": [
+          "SARS",
+          "MERS",
+          "Novel",
+          "Coronavirus",
+          "COVID-19",
+          "Epidemics"
+        ]
+      }
+    },
+    {
+      "id": "ir-trec-covid-13",
+      "tier": "advanced",
+      "type": "overview",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-trec-covid-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "what are the transmission routes of coronavirus?",
+      "answer_match": {
+        "any_contains": [
+          "Comprehensive",
+          "Overview",
+          "COVID-19",
+          "Based",
+          "Current",
+          "Evidence"
+        ]
+      }
+    },
+    {
+      "id": "ir-trec-covid-18",
+      "tier": "smoke",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-trec-covid-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "what are the best masks for preventing infection by Covid-19?",
+      "answer_match": {
+        "any_contains": [
+          "SARS",
+          "MERS",
+          "Novel",
+          "Coronavirus",
+          "COVID-19",
+          "Epidemics"
+        ]
+      }
+    },
+    {
+      "id": "ir-trec-covid-26",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-trec-covid-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "what are the initial symptoms of Covid-19?",
+      "answer_match": {
+        "any_contains": [
+          "SARS",
+          "MERS",
+          "Novel",
+          "Coronavirus",
+          "COVID-19",
+          "Epidemics"
+        ]
+      }
+    },
+    {
+      "id": "ir-trec-covid-31",
+      "tier": "core",
+      "type": "fact",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-trec-covid-bundle-01.pdf"
+      ],
+      "expected_pages": [
+        1,
+        2
+      ],
+      "question": "How does the coronavirus differ from seasonal flu?",
+      "answer_match": {
+        "any_contains": [
+          "Comprehensive",
+          "Overview",
+          "COVID-19",
+          "Based",
+          "Current",
+          "Evidence"
+        ]
+      }
+    },
+    {
+      "id": "ir-trec-covid-multi",
+      "tier": "advanced",
+      "type": "multi_doc",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-trec-covid-bundle-01.pdf",
+        "ir-trec-covid-bundle-02.pdf"
+      ],
+      "expected_pages": [
+        1
+      ],
+      "question": "Across the bundled trec-covid documents, what topic domain do the titles suggest?",
+      "answer_match": {
+        "any_contains": [
+          "Trec-covid",
+          "Ir-trec-covid-bundle"
+        ]
+      }
+    },
+    {
+      "id": "ir-trec-covid-out-of-scope",
+      "tier": "core",
+      "type": "out_of_scope",
+      "suites": [
+        "baseline"
+      ],
+      "fixture_files": [
+        "ir-trec-covid-bundle-01.pdf"
+      ],
+      "expected_pages": [],
+      "question": "What is the capital city of Australia?",
+      "answer_match": {
+        "decline": true
+      }
     }
   ]
 }

@@ -14,3 +14,13 @@ Redistribution is allowed under the license named per paper. Full PDF bytes live
 
 Eval harness uses only the bundled files above. Optional arXiv downloads (`manifest.json`) are
 for legacy POC scripts only — not redistributed and not used by `rag_eval_suite.py`.
+## IR corpus PDFs (generated)
+
+| File | Source | License | Notes |
+| --- | --- | --- | --- |
+| `ir-scifact-bundle-01.pdf` | BeIR/scifact | CC BY 4.0 | BEIR SciFact claims and evidence (AI2). |
+| `ir-scifact-bundle-02.pdf` | BeIR/scifact | CC BY 4.0 | BEIR SciFact claims and evidence (AI2). |
+| `ir-nfcorpus-bundle-01.pdf` | BeIR/nfcorpus | CC BY 4.0 | Nutrition/medical abstracts from PubMed Central open-access subset. |
+| `ir-nfcorpus-bundle-02.pdf` | BeIR/nfcorpus | CC BY 4.0 | Nutrition/medical abstracts from PubMed Central open-access subset. |
+| `ir-trec-covid-bundle-01.pdf` | BeIR/trec-covid | CC BY 4.0 (typical CORD-19 subset) | COVID-19 literature abstracts; verify per-article in production crawl. |
+| `ir-trec-covid-bundle-02.pdf` | BeIR/trec-covid | CC BY 4.0 (typical CORD-19 subset) | COVID-19 literature abstracts; verify per-article in production crawl. |

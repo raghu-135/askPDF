@@ -9,12 +9,18 @@ from runtime_protocol.openrouter_chat_extra import merge_chat_completions_payloa
 from runtime_protocol.transport import definition_from_dict
 
 
+def test_openrouter_reasoning_effort_unset_is_empty(monkeypatch):
+    monkeypatch.delenv("ASKPDF_OPENROUTER_CHAT_EXTRA_BODY_JSON", raising=False)
+    monkeypatch.delenv("ASKPDF_LLM_REASONING_EFFORT", raising=False)
+    assert openrouter_chat_extra_body() == {}
+
+
 def test_openrouter_reasoning_effort_env(monkeypatch):
     monkeypatch.delenv("ASKPDF_OPENROUTER_CHAT_EXTRA_BODY_JSON", raising=False)
-    monkeypatch.setenv("ASKPDF_EVAL_REASONING_EFFORT", "none")
-    assert openrouter_chat_extra_body() == {"reasoning": {"effort": "none"}}
+    monkeypatch.setenv("ASKPDF_LLM_REASONING_EFFORT", "high")
+    assert openrouter_chat_extra_body() == {"reasoning": {"effort": "high"}}
     payload = merge_chat_completions_payload({"model": "demo", "messages": []})
-    assert payload["reasoning"]["effort"] == "none"
+    assert payload["reasoning"]["effort"] == "high"
 
 
 def test_shared_protocol_is_one_top_level_dependency_neutral_package():

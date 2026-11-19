@@ -294,8 +294,8 @@ def run_suite(
 ) -> dict[str, Any]:
     if config_path:
         os.environ["ASKPDF_BENCHMARK_CONFIG"] = config_path
-    os.environ.setdefault("ASKPDF_EVAL_REASONING_EFFORT", "none")
-    apply_reasoning_effort(reasoning_effort or os.getenv("ASKPDF_EVAL_REASONING_EFFORT", "none"))
+    effort = reasoning_effort or os.getenv("ASKPDF_LLM_REASONING_EFFORT", "none")
+    apply_reasoning_effort(effort, sync_stack=os.getenv("ASKPDF_EVAL_SYNC_REASONING", "1") == "1")
 
     wait_stack_ready()
     admin_token()
@@ -308,7 +308,7 @@ def run_suite(
     chat_model, _fallback = resolve_chat_models()
     ckpt_path = checkpoint_path(label)
     completed = load_checkpoint(ckpt_path) if checkpoint_resume else set()
-    if resume and completed:
+    if checkpoint_resume and completed:
         print(f"resuming from checkpoint with {len(completed)} completed keys", flush=True)
 
     sha = _git_sha()
@@ -322,7 +322,7 @@ def run_suite(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "chat_model": chat_model,
         "judge_model": JUDGE_MODEL,
-        "reasoning_effort": reasoning_effort or os.getenv("ASKPDF_EVAL_REASONING_EFFORT", "none"),
+        "reasoning_effort": effort,
         "context_baseline": context_baseline_record(benchmark_cfg),
         "workflows": {},
         "cases": [],
@@ -379,7 +379,7 @@ def main() -> int:
     parser.add_argument("--no-resume", action="store_true", help="Ignore checkpoint and rerun all cases")
     parser.add_argument(
         "--reasoning-effort",
-        default=os.getenv("ASKPDF_EVAL_REASONING_EFFORT", "none"),
+        default=os.getenv("ASKPDF_LLM_REASONING_EFFORT", "none"),
         help="OpenRouter reasoning.effort for chat (default none)",
     )
     parser.add_argument(

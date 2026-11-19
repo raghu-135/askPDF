@@ -10,8 +10,8 @@ def openrouter_chat_extra_body(*, environ: Mapping[str, str] | None = None) -> d
     """Return extra_body kwargs for ChatOpenAI when calling OpenRouter.
 
     ``ASKPDF_OPENROUTER_CHAT_EXTRA_BODY_JSON`` overrides everything. When unset,
-  ``ASKPDF_EVAL_REASONING_EFFORT`` (default ``none`` during eval) sets
-    ``reasoning.effort`` only when non-empty.
+    ``ASKPDF_LLM_REASONING_EFFORT`` sets OpenRouter ``reasoning.effort`` when
+    non-empty. Unset or ``default`` omits reasoning extensions (normal app default).
     """
     values = os.environ if environ is None else environ
     raw = (values.get("ASKPDF_OPENROUTER_CHAT_EXTRA_BODY_JSON") or "").strip()
@@ -20,7 +20,7 @@ def openrouter_chat_extra_body(*, environ: Mapping[str, str] | None = None) -> d
         if not isinstance(parsed, dict):
             raise ValueError("ASKPDF_OPENROUTER_CHAT_EXTRA_BODY_JSON must be a JSON object")
         return parsed
-    effort = (values.get("ASKPDF_EVAL_REASONING_EFFORT") or "").strip()
+    effort = (values.get("ASKPDF_LLM_REASONING_EFFORT") or "").strip()
     if not effort:
         return {}
     if effort.lower() == "default":

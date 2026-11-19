@@ -1,0 +1,26 @@
+{
+  "ir_datasets": {
+    "scifact": "beir/scifact/test",
+    "nfcorpus": "beir/nfcorpus/test",
+    "trec-covid": "beir/trec-covid"
+  },
+  "hf_dataset_pins": {
+    "hotpot_qa": null,
+    "rajpurkar/squad_v2": null
+  },
+  "skipped": [
+    "hotpotqa: Hotpot JSON CDN blocked in this environment; use BEIR bundles (re-enable when cache is seeded).",
+    "squad: SQuAD JSON omitted here; BEIR + HotpotQA cover extractive and multi-hop IR.",
+    "fiqa: FiQA challenge terms are research-oriented; not bundled for redistribution.",
+    "nq: Natural Questions omitted (size); CC BY-SA 3.0 would allow a future subset.",
+    "wikiqa: Microsoft WikiQA license forbids redistribution."
+  ],
+  "added_pdfs": [
+    "ir-scifact-bundle-01.pdf",
+    "ir-scifact-bundle-02.pdf",
+    "ir-nfcorpus-bundle-01.pdf",
+    "ir-nfcorpus-bundle-02.pdf",
+    "ir-trec-covid-bundle-01.pdf",
+    "ir-trec-covid-bundle-02.pdf"
+  ]
+}

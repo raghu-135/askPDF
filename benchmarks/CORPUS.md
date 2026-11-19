@@ -1,23 +1,44 @@
 # RAG eval benchmark corpus
 
 The live eval harness uses **only PDFs committed under** `benchmarks/fixtures/bundled/`.
-Each file is a PLOS research article under **Creative Commons Attribution 4.0 (CC BY 4.0)**,
-which allows redistribution with attribution. Sources and licenses are listed in
-[`fixtures/LICENSES.md`](fixtures/LICENSES.md) and `fixtures/bundled_manifest.json`.
+Sources and licenses are listed in [`fixtures/LICENSES.md`](fixtures/LICENSES.md),
+`fixtures/bundled_manifest.json`, and `fixtures/corpus_build_metadata.json` (pins for
+the conversion script).
 
-## Why PLOS CC BY
+## Bundled sources
 
-| Source | License | Bundled in repo? | Used in eval? |
+| Family | License | Bundled? | Eval? |
 | --- | --- | --- | --- |
-| [PLOS journals](https://plos.org) (ONE, Biology, Medicine, Pathogens, Genetics, Computational Biology) | CC BY 4.0 | Yes | **Primary corpus** |
-| [arXiv](https://arxiv.org) preprints (Attention, BERT, RAG, LoRA, surveys, DPO, etc.) | arXiv non-exclusive distribution — **do not redistribute PDFs** | No (runtime fetch only) | Legacy `benchmark_papers.py` / POC only |
-| [BEIR / NFCorpus / SciFact](https://github.com/beir-cellar/beir) | Dataset-specific (often CC BY); text shards, not full PDFs | No | Not used (future IR metrics) |
-| [WikiQA](https://www.microsoft.com/en-us/download/details.aspx?id=52419) | Microsoft Research license | No | Not used |
-| US government works (NASA, CDC factsheets) | Public domain / US gov | Possible future add | Not in this PR |
+| [PLOS journals](https://plos.org) | CC BY 4.0 | Yes | **Primary (legacy)** |
+| BEIR: SciFact, NFCorpus, TREC-COVID | CC BY 4.0 / typical PMC | Yes (generated PDFs) | **IR passages** |
+| HotpotQA (distractor passages) | CC BY-SA 4.0 | Yes | Multi-hop style Qs |
+| SQuAD 2.0 passage sample | CC BY-SA 4.0 | Yes | Extractive Qs |
 
-PLOS gives a stable, multi-domain set (ecology, stats editorial, RNA biology, medicine essay,
-pathogens, yeast genetics) that exercises tables, author lines, multi-page facts, and declines
-without relying on arXiv’s no-redistribution policy.
+### Not bundled (redistribution or policy)
+
+| Source | Reason |
+| --- | --- |
+| FiQA (BEIR) | Challenge terms; omitted from committed corpus |
+| Natural Questions | Size; CC BY-SA 3.0 would allow a future subset |
+| WikiQA | Microsoft license — no redistribution |
+| arXiv full PDFs | arXiv non-exclusive distribution policy |
+| Mem0 / arXiv `2504.19413` | Out of scope for this harness |
+
+PLOS fixtures exercise real PDF layout (tables, authorship). IR bundles group several
+plain-text passages per PDF so retrieval is tested on scientific and encyclopedic prose
+without violating dataset redistribution rules.
+
+## Regenerating IR fixtures
+
+```bash
+python3 -m venv .corpus-venv
+.corpus-venv/bin/pip install -r scripts/requirements-corpus-build.txt
+.corpus-venv/bin/python scripts/build_eval_corpus_pdfs.py --merge-questions
+python3 scripts/generate_promptfoo_tests.py
+```
+
+Then refresh `bundled_manifest.json` shas (the script updates manifest entries) and
+commit PDFs + `questions.json`.
 
 ## Holdout split
 

@@ -89,7 +89,7 @@ ASKPDF_EVAL_PROFILE=fast ./evals/promptfoo/run_eval.sh --tier core --profile fas
 ```
 
 Tiers: `smoke` (~5 cases), `core`, `advanced`, `holdout`. Profiles: `free` (default, RPM cap)
-or `fast` (parallel). Default reasoning effort `none` via `ASKPDF_EVAL_REASONING_EFFORT`.
+or `fast` (parallel). Evals set app `ASKPDF_LLM_REASONING_EFFORT=none` (unset in `.env` for normal use).
 Stack readiness: `/health` + `/ready` before cases; indexing polled via files API.
 
 Live baseline config: `benchmarks/benchmark_config.eval.json`. Reports:
