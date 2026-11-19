@@ -13,6 +13,7 @@ from langchain_openai import ChatOpenAI
 from openai import BaseModel as OpenAIBaseModel
 from runtime_protocol.configuration import LANGGRAPH_LIMIT_NAMES, parse_required_positive_int
 from runtime_protocol.llm_provider import llm_provider_configuration, openai_sdk_default_headers
+from runtime_protocol.openrouter_chat_extra import merge_chat_openai_kwargs
 
 _REASONING_RESPONSE_FIELDS = (
     "reasoning",
@@ -134,11 +135,14 @@ def get_llm(
     client = http_async_client or _execution_client.get()
     if client is None:
         raise RuntimeError("LangGraph model client is unavailable outside an execution scope")
-    return ReasoningChatOpenAI(
-        model=model_name,
-        temperature=temperature,
-        base_url=base_url,
-        api_key=api_key,
-        default_headers=openai_sdk_default_headers(headers),
-        http_async_client=client,
+    kwargs = merge_chat_openai_kwargs(
+        {
+            "model": model_name,
+            "temperature": temperature,
+            "base_url": base_url,
+            "api_key": api_key,
+            "default_headers": openai_sdk_default_headers(headers),
+            "http_async_client": client,
+        }
     )
+    return ReasoningChatOpenAI(**kwargs)

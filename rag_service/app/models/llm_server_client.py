@@ -399,14 +399,19 @@ def get_llm(
         else get_http_client("llm")
     )
     api_key, headers = llm_provider_auth()
-    return ReasoningChatOpenAI(
-        model=model_name,
-        temperature=temperature,
-        base_url=_get_base_url(),
-        api_key=api_key or "sk-no-key-required",
-        default_headers=openai_sdk_default_headers(headers),
-        http_async_client=async_client,
+    from runtime_protocol.openrouter_chat_extra import merge_chat_openai_kwargs
+
+    kwargs = merge_chat_openai_kwargs(
+        {
+            "model": model_name,
+            "temperature": temperature,
+            "base_url": _get_base_url(),
+            "api_key": api_key or "sk-no-key-required",
+            "default_headers": openai_sdk_default_headers(headers),
+            "http_async_client": async_client,
+        }
     )
+    return ReasoningChatOpenAI(**kwargs)
 
 def get_embedding_model(model_name: str, *, own_async_transport: bool = False):
     """

@@ -1,4 +1,4 @@
-"""Resolve benchmark PDF paths: committed bundled CC BY copies or optional arXiv download."""
+"""Resolve benchmark PDF paths: committed bundled CC BY copies (eval) or optional arXiv download (legacy)."""
 
 from __future__ import annotations
 
@@ -70,6 +70,10 @@ def indexing_timeout_seconds(fixture_file: str) -> float:
     from benchmark_papers import indexing_timeout_seconds as legacy_timeout
 
     return legacy_timeout(fixture_file)
+
+
+def list_bundled_fixtures() -> list[str]:
+    return [str(p["fixture_file"]) for p in load_bundled_manifest().get("papers") or []]
 
 
 def list_benchmark_fixtures(*, include_optional_arxiv: bool = False) -> list[str]:

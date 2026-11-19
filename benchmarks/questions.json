@@ -1,9 +1,10 @@
 {
-  "schema_version": 2,
-  "description": "Primary RAG eval questions. Bundled CC BY PDFs; optional arXiv via scripts/download_benchmark_pdfs.sh.",
+  "schema_version": 3,
+  "description": "Bundled CC BY 4.0 PLOS benchmark corpus only (see benchmarks/CORPUS.md and fixtures/LICENSES.md).",
   "questions": [
     {
       "id": "invasion-overview",
+      "tier": "smoke",
       "type": "overview",
       "suites": ["baseline", "sweep_core"],
       "fixture_files": ["plos-pone-0001208.pdf"],
@@ -13,8 +14,9 @@
     },
     {
       "id": "invasion-authors",
+      "tier": "smoke",
       "type": "fact",
-      "suites": ["baseline"],
+      "suites": ["baseline", "smoke"],
       "fixture_files": ["plos-pone-0001208.pdf"],
       "expected_pages": [1],
       "question": "Who is the corresponding author on the China biological invasions paper?",
@@ -22,8 +24,9 @@
     },
     {
       "id": "stats-rules-title",
+      "tier": "smoke",
       "type": "overview",
-      "suites": ["baseline", "sweep_core"],
+      "suites": ["baseline", "sweep_core", "smoke"],
       "fixture_files": ["plos-pcbi-1004961.pdf"],
       "expected_pages": [1],
       "question": "What is the title of the Ten Simple Rules editorial on statistical practice?",
@@ -31,6 +34,7 @@
     },
     {
       "id": "stats-rules-reid",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline"],
       "fixture_files": ["plos-pcbi-1004961.pdf"],
@@ -40,9 +44,9 @@
     },
     {
       "id": "rna-editing-topic",
+      "tier": "core",
       "type": "overview",
       "suites": ["baseline", "sweep_core"],
-      "optional_fixture": true,
       "fixture_files": ["plos-biology-0020391.pdf"],
       "expected_pages": [1, 2],
       "question": "What type of RNA editing does the Alu-containing mRNA paper study?",
@@ -50,9 +54,9 @@
     },
     {
       "id": "rna-editing-species",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline"],
-      "optional_fixture": true,
       "fixture_files": ["plos-biology-0020391.pdf"],
       "expected_pages": [1],
       "question": "Which organism's transcriptome is studied in the Alu RNA editing paper?",
@@ -60,6 +64,7 @@
     },
     {
       "id": "social-medicine-essay",
+      "tier": "core",
       "type": "overview",
       "suites": ["baseline", "sweep_core"],
       "fixture_files": ["plos-medicine-0030399.pdf"],
@@ -69,6 +74,7 @@
     },
     {
       "id": "wolbachia-vector",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline"],
       "fixture_files": ["plos-pathogens-1008410.pdf"],
@@ -78,8 +84,9 @@
     },
     {
       "id": "wolbachia-virus",
+      "tier": "smoke",
       "type": "fact",
-      "suites": ["baseline", "sweep_core"],
+      "suites": ["baseline", "sweep_core", "smoke"],
       "fixture_files": ["plos-pathogens-1008410.pdf"],
       "expected_pages": [1, 2],
       "question": "Which virus inhibition mechanism is discussed for Wolbachia in Aedes aegypti?",
@@ -87,6 +94,7 @@
     },
     {
       "id": "spore-wall-organism",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline"],
       "fixture_files": ["plos-genetics-1003700.pdf"],
@@ -96,6 +104,7 @@
     },
     {
       "id": "spore-wall-structure",
+      "tier": "core",
       "type": "overview",
       "suites": ["baseline", "sweep_core"],
       "fixture_files": ["plos-genetics-1003700.pdf"],
@@ -105,6 +114,7 @@
     },
     {
       "id": "invasion-page-ref",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline"],
       "fixture_files": ["plos-pone-0001208.pdf"],
@@ -114,6 +124,7 @@
     },
     {
       "id": "stats-open-access",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline"],
       "fixture_files": ["plos-pcbi-1004961.pdf"],
@@ -123,6 +134,7 @@
     },
     {
       "id": "medicine-heading",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline"],
       "fixture_files": ["plos-medicine-0030399.pdf"],
@@ -132,6 +144,7 @@
     },
     {
       "id": "pathogen-fraser",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline"],
       "fixture_files": ["plos-pathogens-1008410.pdf"],
@@ -141,6 +154,7 @@
     },
     {
       "id": "genetics-neiman",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline"],
       "fixture_files": ["plos-genetics-1003700.pdf"],
@@ -150,9 +164,9 @@
     },
     {
       "id": "rna-editing-author",
+      "tier": "core",
       "type": "fact",
       "suites": ["baseline", "sweep_core"],
-      "optional_fixture": true,
       "fixture_files": ["plos-biology-0020391.pdf"],
       "expected_pages": [1],
       "question": "Who is the corresponding author on the Alu RNA editing paper?",
@@ -160,6 +174,7 @@
     },
     {
       "id": "multi-invasion-stats",
+      "tier": "advanced",
       "type": "multi_doc",
       "suites": ["baseline"],
       "fixture_files": ["plos-pone-0001208.pdf", "plos-pcbi-1004961.pdf"],
@@ -169,8 +184,9 @@
     },
     {
       "id": "out-of-scope-neptune",
+      "tier": "smoke",
       "type": "out_of_scope",
-      "suites": ["baseline", "sweep_core"],
+      "suites": ["baseline", "sweep_core", "smoke"],
       "fixture_files": ["plos-pone-0001208.pdf"],
       "expected_pages": [],
       "question": "What is the orbital period of Neptune in Earth years?",
@@ -178,6 +194,7 @@
     },
     {
       "id": "date-range-conference",
+      "tier": "advanced",
       "type": "fact",
       "suites": ["baseline", "sweep_core"],
       "fixture_files": ["plos-medicine-0030399.pdf"],
@@ -188,55 +205,47 @@
       "assertions": { "no_internal_knowledge_note": true }
     },
     {
-      "id": "mem0-conversation",
+      "id": "medicine-conversation",
+      "tier": "advanced",
       "type": "conversation",
       "suites": ["baseline"],
-      "optional_fixture": true,
-      "fixture_files": ["2504.19413.pdf"],
+      "fixture_files": ["plos-medicine-0030399.pdf"],
       "assertions": { "no_internal_knowledge_note": true },
       "turns": [
         {
-          "id": "mem0-authors",
-          "question": "Who are the authors of this paper?",
+          "id": "medicine-author",
+          "question": "Who wrote the social medicine essay in this thread?",
           "expected_pages": [1],
-          "answer_match": { "any_contains": ["Mem0", "memory", "author"] },
+          "answer_match": { "any_contains": ["Dorothy Porter", "Porter"] },
           "bypass_clarification": true
         },
         {
-          "id": "mem0-qualifications",
-          "question": "What are their qualifications?",
+          "id": "medicine-period",
+          "question": "What historical period does she emphasize?",
           "expected_pages": [1, 2],
           "answer_match": {
-            "none_contains": ["attached documents do not", "do not address"],
-            "any_contains": ["Ph", "University", "author", "research"]
+            "any_contains": ["Interwar", "Twentieth", "1920", "twentieth"]
           },
           "bypass_clarification": true
         },
         {
-          "id": "mem0-web-search",
-          "question": "use the internet to search for it",
-          "expected_pages": [],
-          "chat_options": { "use_web_search": true },
-          "answer_match": {
-            "none_contains": ["attached documents do not"],
-            "any_contains": ["author", "Ph", "University", "qualification", "research"]
-          },
+          "id": "medicine-meeting-dates",
+          "question": "Does the essay mention a meeting on 27–28 October? If so, what context is given?",
+          "expected_pages": [1, 2],
+          "answer_match": { "any_contains": ["27", "28", "October", "meeting"] },
           "bypass_clarification": true
-        },
-        {
-          "id": "mem0-clarify",
-          "question": "What methodology did they use?",
-          "expected_pages": [],
-          "bypass_clarification": false,
-          "answer_match": { "any_contains": ["method", "approach", "clarif", "which", "mean"] }
-        },
-        {
-          "id": "mem0-date-range",
-          "question": "Does the paper schedule anything for 27–28, and if so what?",
-          "expected_pages": [1, 5],
-          "answer_match": { "any_contains": ["27", "28"] }
         }
       ]
+    },
+    {
+      "id": "pathogen-multi-hop",
+      "tier": "advanced",
+      "type": "multi_doc",
+      "suites": ["baseline"],
+      "fixture_files": ["plos-pathogens-1008410.pdf", "plos-genetics-1003700.pdf"],
+      "expected_pages": [1],
+      "question": "Across the Wolbachia and spore wall papers, which one studies Saccharomyces cerevisiae?",
+      "answer_match": { "any_contains": ["cerevisiae", "Saccharomyces", "spore", "yeast"] }
     }
   ]
 }

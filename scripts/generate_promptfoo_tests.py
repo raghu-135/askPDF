@@ -40,6 +40,9 @@ def main() -> int:
     for case in data.get("questions") or []:
         if case.get("turns"):
             continue
+        tier = str(case.get("tier") or "core").lower()
+        if tier != "smoke":
+            continue
         if "baseline" not in (case.get("suites") or []):
             continue
         tests.append(
