@@ -34,10 +34,12 @@ export function SourceList({
   sources,
   label = 'Sources used',
   onDocumentSourceClick,
+  activeDocumentSourceKey,
 }: {
   sources: DisplaySource[];
   label?: string;
   onDocumentSourceClick?: (source: DisplaySource) => void;
+  activeDocumentSourceKey?: string | null;
 }) {
   if (!sources.length) return null;
   return (
@@ -52,16 +54,22 @@ export function SourceList({
               .filter((origin) => origin.attempt && origin.attempt !== source.origin_attempt)
               .map((origin) => origin.attempt))];
             const documentClickable = Boolean(onDocumentSourceClick && source.file_hash);
+            const sourceKey = source.file_hash
+              ? `${source.file_hash.trim().toLowerCase()}:${(source.sentence_ids || []).map(String).join(',')}`
+              : null;
+            const active = Boolean(sourceKey && sourceKey === activeDocumentSourceKey);
             return (
               <Box
                 key={source.id || `${source.url || source.title}-${index}`}
                 onClick={documentClickable ? () => onDocumentSourceClick?.(source) : undefined}
+                aria-pressed={documentClickable ? active : undefined}
                 sx={{
                   p: 1,
                   borderRadius: 1,
-                  bgcolor: 'action.hover',
                   borderLeft: '3px solid',
-                  borderColor: 'primary.light',
+                  borderColor: active ? 'primary.main' : 'primary.light',
+                  boxShadow: active ? 2 : 0,
+                  bgcolor: active ? 'action.selected' : 'action.hover',
                   cursor: documentClickable ? 'pointer' : 'default',
                 }}
               >

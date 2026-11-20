@@ -139,6 +139,7 @@ type Props = {
   currentId: number | null;
   highlightSentenceIds?: number[] | null;
   onJump: (id: number) => void;
+  onClearHighlight?: () => void;
   autoScroll: boolean;
   isResizing?: boolean;
   highlightEnabled?: boolean;
@@ -424,6 +425,7 @@ function EmbedPdfDocumentBody({
   currentId,
   highlightSentenceIds = null,
   onJump,
+  onClearHighlight,
   autoScroll,
   isResizing,
   highlightEnabled,
@@ -764,10 +766,11 @@ function EmbedPdfDocumentBody({
         target.tagName === 'IMG' ||
         target.closest('canvas, svg, img')
       ) {
+        onClearHighlight?.();
         annotationApi?.deselectAnnotation();
       }
     },
-    [annotationApi]
+    [annotationApi, onClearHighlight]
   );
 
   const renderPage = useCallback(
@@ -1073,6 +1076,7 @@ const PdfViewer = React.memo(function PdfViewer({
   currentId,
   highlightSentenceIds = null,
   onJump,
+  onClearHighlight,
   autoScroll,
   isResizing,
   highlightEnabled = true,
@@ -1145,6 +1149,7 @@ const PdfViewer = React.memo(function PdfViewer({
               currentId={currentId}
               highlightSentenceIds={highlightSentenceIds}
               onJump={onJump}
+              onClearHighlight={onClearHighlight}
               autoScroll={autoScroll}
               isResizing={isResizing}
               highlightEnabled={highlightEnabled}

@@ -437,6 +437,7 @@ type ChatMessageItemProps = {
     delegatedChildRuns: ReturnType<typeof delegatedChildRunsFromRunDetails>;
     onOpenCanvas?: (canvas: CanvasRef) => void;
     onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
+    activeDocumentSourceKey?: string | null;
     formatAgentWorkflowLabel: (msg: ChatMessage) => string;
 };
 
@@ -463,6 +464,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
     delegatedChildRuns,
     onOpenCanvas,
     onOpenDocumentCitation,
+    activeDocumentSourceKey,
     formatAgentWorkflowLabel,
 }: ChatMessageItemProps) {
     const theme = useTheme();
@@ -679,6 +681,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                     <SourceList label="Web sources used" sources={msg.web_sources || []} />
                     <SourceList
                         label="Document sources used"
+                        activeDocumentSourceKey={activeDocumentSourceKey}
                         sources={(msg.document_sources || []).map((source, sourceIndex) => ({
                             id: `document-source-${sourceIndex}`,
                             kind: 'document',
@@ -799,6 +802,7 @@ export interface ChatInterfaceProps {
     onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
     onOpenCanvas?: (canvas: CanvasRef) => void;
     onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
+    activeDocumentSourceKey?: string | null;
     onOpenMemoryReview?: (draftContent?: string) => void;
     testRuntime?: BuilderTestConversationRuntime;
 }
@@ -840,6 +844,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     onOpenDelegatedRun,
     onOpenCanvas,
     onOpenDocumentCitation,
+    activeDocumentSourceKey,
     onOpenMemoryReview,
     testRuntime,
 }) => {
@@ -884,6 +889,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
     const [clarificationDismissSeed, setClarificationDismissSeed] = useState('');
+    const clarificationSourceMessageIdRef = useRef<string | null>(null);
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
     const [hitlCanvasPublish, setHitlCanvasPublish] = useState(false);
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
@@ -1041,6 +1047,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     }, []);
 
     const seedClarificationComposer = useCallback((text: string) => {
+        const sourceMessageId = clarificationSourceMessageIdRef.current;
+        if (sourceMessageId) {
+            setMessages((current) => current.filter((message) => message.id !== sourceMessageId));
+            clarificationSourceMessageIdRef.current = null;
+        }
         setClarificationOptions(null);
         setClarificationDismissSeed('');
         setComposerText(text);
@@ -1263,8 +1274,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const loadMessages = async () => {
+    const loadMessages = async (force = false) => {
         if (!activeThread) return;
+        // A delegated HITL resume owns the transcript until it reaches its
+        // terminal result. Background refreshes can otherwise race the resume
+        // and briefly reinsert the parent/child approval bubbles.
+        if (!force && humanReviewSubmissionKeyRef.current) return;
         try {
             const response = await getThreadMessages(activeThread.id);
             const persisted = response.messages.map(m => ({
@@ -1293,6 +1308,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     };
 
     const recoverPendingHumanReview = async (threadId: string) => {
+        // Do not recover the same approval while its resume request is in
+        // flight. The parent run can remain awaiting_human while the delegated
+        // child finishes, which used to create a second transient bubble.
+        if (humanReviewSubmissionKeyRef.current) return;
         try {
             // Only restore a review for the latest normal-chat run.  Looking
             // exclusively at awaiting_human runs can resurrect an abandoned
@@ -1570,7 +1589,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     useEffect(() => {
         if (pendingHumanReview) return;
         scrollToBottom();
-    }, [messages.length, autoScroll, pendingHumanReview]);
+    }, [messages.length, autoScroll, pendingHumanReview, clarificationOptions?.length]);
 
     // Fetch available LLM models
     useEffect(() => {
@@ -2212,7 +2231,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 try {
                     const persisted = await getAgentRun(reviewSnapshot.runId, activeThread.id);
                     if (shouldDismissRecoveredHumanReview(persisted)) {
-                        await loadMessages();
+                        await loadMessages(true);
                         onThreadUpdate?.();
                         setPendingHumanReview(null);
                         setHumanReviewEditText('');
@@ -2220,7 +2239,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         return true;
                     }
                     if (persisted && isResumeProductTerminalRunStatus(persisted.status)) {
-                        await loadMessages();
+                        await loadMessages(true);
                         onThreadUpdate?.();
                         setPendingHumanReview(null);
                         setHumanReviewEditText('');
@@ -2234,6 +2253,19 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
             const resumedRun = response?.agent_run;
             if (resumedRun?.status === 'awaiting_human' && resumedRun?.pending_interrupt) {
+                // A delegated child may return an interim answer before asking
+                // for its next approval. Keep that answer out of the chat
+                // transcript; it is not the parent workflow's final answer.
+                setMessages((current) => current.map((message) => (
+                    message.id === liveMessageId
+                        ? {
+                            ...message,
+                            content: '',
+                            pending_human_review: true,
+                            agent_run_turn_kind: 'assistant_pending_review',
+                        }
+                        : message
+                )));
                 setPendingHumanReview({
                     ...reviewSnapshot,
                     runId: resumedRun.id || reviewSnapshot.runId,
@@ -2259,7 +2291,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             }));
             setPendingHumanReview(null);
             setHumanReviewEditText('');
-            await loadMessages();
+            await loadMessages(true);
+            try {
+                const finalRun = await getAgentRun(reviewSnapshot.runId, activeThread.id);
+                setAgentRunDetails((current) => ({ ...current, [finalRun.id]: finalRun }));
+            } catch {
+                // The answer is still usable if retained trace metadata is
+                // temporarily unavailable; the normal prefetch will retry.
+            }
             onThreadUpdate?.();
             return true;
         } catch (err: any) {
@@ -2358,6 +2397,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setOpenAgentRunIds((current) => new Set(current).add(tempAssistantMsg.id));
 
         let editDeletionCompleted = false;
+        let shouldRecoverPendingHumanReview = true;
         try {
             if (isEditingQuestion && editMessageId) {
                 const { deleted_ids } = await deleteMessage(editMessageId);
@@ -2419,6 +2459,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         ) {
                             setClarificationDismissSeed(textToSend);
                             setClarificationOptions(streamClarificationChoices);
+                            clarificationSourceMessageIdRef.current = tempUserMsg.id;
                             setMessages((prev) => prev.filter((message) => message.id !== tempAssistantMsg.id));
                             setLoading(false);
                         }
@@ -2535,7 +2576,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     return next;
                 });
                 resetLiveExecutionEvents();
-                setComposerText(textToSend);
+                setComposerText('');
+                setClarificationOptions(null);
+                setClarificationDismissSeed('');
+                clarificationSourceMessageIdRef.current = null;
                 requestAnimationFrame(() => composerInputRef.current?.focus());
                 if (traceWasOpenForTempMessage) {
                     const cancelledRunId = response.agent_run_id || traceStream.snapshot('run.cancelled').runId;
@@ -2559,6 +2603,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             }
 
             if (response.status === 'awaiting_human' && response.agent_run_id && response.pending_interrupt) {
+                shouldRecoverPendingHumanReview = false;
                 const localUserMessageId = response.user_message_id || ('review-user-' + Date.now());
                 const localAssistantMessageId = response.assistant_message_id || ('review-asst-' + Date.now());
                 const pendingReview: PendingHumanReview = {
@@ -2666,6 +2711,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             if (terminalClarificationChoices.length) {
                 setClarificationDismissSeed(textToSend);
                 setClarificationOptions(terminalClarificationChoices);
+                clarificationSourceMessageIdRef.current = tempUserMsg.id;
                 setMessages((prev) => prev.filter((message) => message.id !== tempAssistantMsg.id));
                 if (isEditingQuestion) {
                     setEditingMessageId(null);
@@ -2762,7 +2808,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         } finally {
             setLiveExecution((current) => current?.messageId === tempAssistantMsg.id ? null : current);
             setLoading(false);
-            if (activeThread?.id && !testRuntime) {
+            if (activeThread?.id && !testRuntime && shouldRecoverPendingHumanReview) {
                 void recoverPendingHumanReview(activeThread.id);
             }
         }
@@ -2779,12 +2825,28 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             ? { ...current, canceling: true, error: undefined }
             : current);
         try {
+            const clearCanceledOptimisticTurn = () => {
+                setMessages((current) => {
+                    const activeIndex = current.findIndex((message) => message.id === execution.messageId);
+                    if (activeIndex < 0) return current;
+                    const removeIds = new Set([execution.messageId]);
+                    const previous = current[activeIndex - 1];
+                    if (previous?.id.startsWith('temp-user-')) removeIds.add(previous.id);
+                    return current.filter((message) => !removeIds.has(message.id));
+                });
+                setComposerText('');
+                setClarificationOptions(null);
+                setClarificationDismissSeed('');
+                clarificationSourceMessageIdRef.current = null;
+            };
             if (testRuntime) {
                 await cancelAgentWorkflowBuilderTest(execution.runId);
+                clearCanceledOptimisticTurn();
                 return;
             }
             const result = await cancelChatAgentRun(execution.runId, activeThread.id);
             await refreshLiveRunCapabilities();
+            clearCanceledOptimisticTurn();
             if (result.status === 'already_terminal') {
                 setLiveExecution((current) => current?.runId === execution.runId
                     ? { ...current, canceling: false }
@@ -3283,6 +3345,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
     const latestUserMessageId = [...messages].reverse().find(m => m.role === MessageRole.User)?.id ?? null;
     const pendingReviewInterrupt = pendingHumanReview?.interrupt ?? null;
+    const clarificationOpen = Boolean(clarificationOptions?.length);
     const pendingReviewOperation = runtimeInterruptResponseOperation(pendingReviewInterrupt);
     const pendingReviewAvailability = pendingReviewOperation
         ? runtimeOperationAvailability(humanReviewCapabilities, pendingReviewOperation)
@@ -3339,6 +3402,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             } : stackedWorkbench ? {
                 flex: '1 1 auto',
                 minHeight: 'min(44vh, 320px)',
+            } : clarificationOpen ? {
+                flex: '1 1 0',
+                minHeight: 0,
             } : undefined}
             decisionSx={stackedHumanReviewLayout ? {
                 flex: '1 1 0',
@@ -3346,6 +3412,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
+            } : clarificationOpen ? {
+                flex: '0 0 auto',
+                minHeight: 0,
+                overflow: 'visible',
             } : undefined}
             header={(
             <ConversationHeader
@@ -3475,6 +3545,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                     }
                                     onOpenCanvas={onOpenCanvas}
                                     onOpenDocumentCitation={onOpenDocumentCitation}
+                                    activeDocumentSourceKey={activeDocumentSourceKey}
                                     formatAgentWorkflowLabel={formatAgentWorkflowLabel}
                                 />
                             </Box>
@@ -3490,7 +3561,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     variant="clarification"
                     rootRef={chatRootRef}
                     horizontalInset={1}
-                    compact
+                    compact={false}
+                    bottomSheet
+                    sheetRatioBounds={{ min: 0.18, max: 0.82 }}
                     showResizeHandle
                     onClose={() => {
                         setClarificationOptions(null);

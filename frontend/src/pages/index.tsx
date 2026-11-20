@@ -44,6 +44,7 @@ import { RESEARCH_CANVAS_TAB_ID } from "../lib/canvas-spec";
 import type { CanvasRef, DocumentCanvasCitationTarget } from "../lib/canvas-spec";
 import {
   citationHighlightIds,
+  documentCitationKey,
   normalizeFileHash,
   shouldClearPdfHighlightOnDocumentActivate,
   shouldPreserveCitationHighlight,
@@ -93,6 +94,7 @@ export default function Home() {
   const [activeSource, setActiveSource] = useState<'pdf' | 'chat'>('pdf');
   const [currentPdfId, setCurrentPdfId] = useState<number | null>(null);
   const [pdfHighlightSentenceIds, setPdfHighlightSentenceIds] = useState<number[] | null>(null);
+  const [activeDocumentSourceKey, setActiveDocumentSourceKey] = useState<string | null>(null);
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
   const [playRequestId, setPlayRequestId] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -795,6 +797,14 @@ export default function Home() {
     }
   }, []);
 
+  const clearDocumentCitationHighlight = useCallback(() => {
+    pendingDocumentCitationRef.current = null;
+    setCurrentPdfId(null);
+    setPlayRequestId(null);
+    setPdfHighlightSentenceIds(null);
+    setActiveDocumentSourceKey(null);
+  }, []);
+
   const handleActiveDocumentChange = useCallback((documentId: string) => {
     const previousDocumentId = activeDocumentId;
     setActiveDocumentId(documentId);
@@ -807,6 +817,7 @@ export default function Home() {
       setCurrentPdfId(null);
       setPlayRequestId(null);
       setPdfHighlightSentenceIds(null);
+      setActiveDocumentSourceKey(null);
     }
     setActiveSource('pdf');
     if (tab) hydrateDocumentOnSelect(tab);
@@ -1105,9 +1116,15 @@ export default function Home() {
 
   const handleOpenDocumentCitation = useCallback((target: DocumentCanvasCitationTarget) => {
     const normalizedHash = normalizeFileHash(target.fileHash);
+    const nextKey = documentCitationKey(target.fileHash, target.sentenceIds, target.sentenceId);
+    if (nextKey === activeDocumentSourceKey) {
+      clearDocumentCitationHighlight();
+      return;
+    }
     const documentTab = pdfTabs.find((tab) => normalizeFileHash(tab.fileHash) === normalizedHash);
     if (!documentTab) return;
     pendingDocumentCitationRef.current = target;
+    setActiveDocumentSourceKey(nextKey);
     setActiveTabId(DOCUMENTS_TAB_ID);
     setIsBrowserActive(false);
     setActiveSource('pdf');
@@ -1123,6 +1140,8 @@ export default function Home() {
     pdfTabs,
     persistWorkspaceResume,
     workspaceContextKey,
+    activeDocumentSourceKey,
+    clearDocumentCitationHighlight,
   ]);
 
   const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
@@ -1302,6 +1321,7 @@ export default function Home() {
                 setPdfHighlightSentenceIds([id]);
                 setPlayRequestId(id);
               }}
+              onClearDocumentHighlight={clearDocumentCitationHighlight}
               autoScroll={autoScroll}
               highlightEnabled={highlightEnabled}
               threadId={activeThread?.id ?? null}
@@ -1461,6 +1481,7 @@ export default function Home() {
                   onOpenCanvas={handleOpenCanvas}
                   onOpenMemoryReview={handleOpenConversationReview}
                   onOpenDocumentCitation={handleOpenDocumentCitation}
+                  activeDocumentSourceKey={activeDocumentSourceKey}
                   hideInlineLineage
                   darkMode={pdfDarkMode}
                   autoScroll={autoScroll}

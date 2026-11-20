@@ -25,6 +25,22 @@ export const citationHighlightIds = (target: DocumentCanvasCitationTarget): numb
 
 export const normalizeFileHash = (value: string): string => value.trim().toLowerCase();
 
+export const documentCitationKey = (
+  fileHash: string,
+  sentenceIds?: Array<number | string> | null,
+  sentenceId?: number | string | null,
+): string => {
+  const ids = citationHighlightIds({
+    fileHash,
+    sentenceIds: sentenceIds
+      ?.map(toSentenceId)
+      .filter((value): value is number => value != null),
+    sentenceId: toSentenceId(sentenceId),
+    play: false,
+  });
+  return `${normalizeFileHash(fileHash)}:${ids.join(',')}`;
+};
+
 export const shouldPreserveCitationHighlight = (
   pending: DocumentCanvasCitationTarget | null,
   documentTab: { fileHash: string } | null | undefined,

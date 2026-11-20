@@ -1306,12 +1306,18 @@ class AgentRunService:
         if resolution is None:
             raise RuntimeError("Delegated child resume returned no result")
         run = resolution.run
-        from app.services.agent_runtime_projection import read_terminal_chat_answer_for_run
-
-        answer = await read_terminal_chat_answer_for_run(run)
+        # Delegated child runs are execution details, not independent chat
+        # turns.  Their terminal product result is returned by the resume
+        # handoff and is consumed by the parent workflow in memory.
+        result_payload = resolution.result if isinstance(resolution.result, dict) else {}
+        answer = str(
+            result_payload.get("final_answer")
+            or result_payload.get("answer")
+            or ""
+        ).strip()
         status = str(getattr(run, "status", "") or "")
         pending = getattr(run, "pending_interrupt_json", None)
-        result_payload = {
+        child_result = {
             "status": status,
             "answer": answer,
             "final_answer": answer,
@@ -1323,7 +1329,7 @@ class AgentRunService:
             "final_answer": answer,
             "status": status,
             "pending_interrupt": pending,
-            "result": result_payload,
+            "result": child_result,
         }
 
     async def resume_agent_run(
@@ -1648,7 +1654,10 @@ class AgentRunService:
             result.pop("_corrective_metrics_state", None)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
             status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
-            if status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}:
+            if (
+                status in {AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value}
+                and not getattr(resolution.run, "parent_run_id", None)
+            ):
                 result = await self.projection.project_chat_result(
                     thread_id=resolution.run.thread_id,
                     question=_question_for_run_result(
@@ -1724,6 +1733,7 @@ class AgentRunService:
                         outcome=resolution.outcome,
                         interrupt=paused_run.pending_interrupt_json or resolution.interrupt,
                         duplicate=False,
+                        result=result,
                     )
                 await _finish_human_review_boundary(
                     execution_event_sink,
@@ -1783,6 +1793,7 @@ class AgentRunService:
                 outcome=resolution.outcome,
                 interrupt=resolution.interrupt,
                 duplicate=False,
+                result=result,
             )
         except RuntimeContractError as exc:
             if await _restore_tool_approval_after_runtime_failure(

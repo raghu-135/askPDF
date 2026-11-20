@@ -55,6 +55,7 @@ export default function ThreadWorkspaceContent({
   currentDocumentSentenceId = null,
   highlightSentenceIds = null,
   onDocumentJump,
+  onClearDocumentHighlight,
   autoScroll = false,
   highlightEnabled = true,
   threadId,
@@ -118,6 +119,7 @@ export default function ThreadWorkspaceContent({
   currentDocumentSentenceId?: number | null;
   highlightSentenceIds?: number[] | null;
   onDocumentJump: (id: number) => void;
+  onClearDocumentHighlight?: () => void;
   autoScroll?: boolean;
   highlightEnabled?: boolean;
   threadId?: string | null;
@@ -235,6 +237,7 @@ export default function ThreadWorkspaceContent({
           currentDocumentSentenceId={currentDocumentSentenceId}
           highlightSentenceIds={highlightSentenceIds}
           onDocumentJump={onDocumentJump}
+          onClearDocumentHighlight={onClearDocumentHighlight}
           autoScroll={autoScroll}
           highlightEnabled={highlightEnabled}
           onRequestUpload={onRequestUpload}

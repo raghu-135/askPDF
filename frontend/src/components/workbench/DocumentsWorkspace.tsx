@@ -42,6 +42,7 @@ export default function DocumentsWorkspace({
   currentDocumentSentenceId = null,
   highlightSentenceIds = null,
   onDocumentJump,
+  onClearDocumentHighlight,
   autoScroll = false,
   highlightEnabled = true,
   onRequestUpload,
@@ -77,6 +78,7 @@ export default function DocumentsWorkspace({
   currentDocumentSentenceId?: number | null;
   highlightSentenceIds?: number[] | null;
   onDocumentJump: (id: number) => void;
+  onClearDocumentHighlight?: () => void;
   autoScroll?: boolean;
   highlightEnabled?: boolean;
   onRequestUpload?: () => void;
@@ -189,6 +191,7 @@ export default function DocumentsWorkspace({
             currentId={currentDocumentSentenceId}
             highlightSentenceIds={highlightSentenceIds}
             onJump={onDocumentJump}
+            onClearHighlight={onClearDocumentHighlight}
             autoScroll={autoScroll}
             isResizing={isResizing}
             highlightEnabled={highlightEnabled}

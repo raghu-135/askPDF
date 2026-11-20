@@ -70,6 +70,7 @@ class InterruptResolutionResult:
     outcome: str
     interrupt: Dict[str, Any]
     duplicate: bool = False
+    result: Optional[Dict[str, Any]] = None
 
 
 def compact_interrupt_value(value: Any, *, depth: int = 0) -> Any:
