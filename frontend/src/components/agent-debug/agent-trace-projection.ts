@@ -108,6 +108,7 @@ export interface TraceGraphView {
 
 export interface TraceRunView {
   runId?: string;
+  terminal?: boolean;
   parseError?: string;
   parseCorrelationId?: string;
   debug?: AgentRunDebug;
@@ -381,6 +382,18 @@ const retainedNodeStatus = (row: Record<string, any>): string | undefined => {
     : status;
 };
 
+const isTerminalRunStatus = (status: unknown): boolean => (
+  ['completed', 'failed', 'cancelled', 'expired', 'recovery_required'].includes(String(status || '').toLowerCase())
+);
+
+const terminalizeRetainedActivityStatus = (status: unknown, terminal: boolean): string => {
+  const value = String(status || '');
+  if (!terminal || !['active', 'running', 'started', 'progress', 'pending', 'queued', 'planned'].includes(value.toLowerCase())) {
+    return value;
+  }
+  return 'completed';
+};
+
 const operationViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCatalog): TraceOperationView => {
   const raw = asObject(row.raw);
   const id = String(row.operation_id || row.id || raw.operation_id || 'unknown_operation');
@@ -416,7 +429,7 @@ const operationViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentN
   };
 };
 
-const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
+const toolViewFromSummary = (row: Record<string, any>, terminal = false): TraceToolView => {
   const raw = { ...row, ...asObject(row.payload), ...asObject(row.raw) };
   return {
     name: String(row.name || row.tool_name || raw.tool_name || 'tool'),
@@ -433,7 +446,7 @@ const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
           : undefined,
     callerVisitIndex: asNumber(row.callerVisitIndex ?? row.caller_visit_index ?? raw.caller_visit_index ?? raw.callerVisitIndex),
     ok: row.ok !== false,
-    status: asNonEmptyString(row.status || raw.status),
+    status: terminalizeRetainedActivityStatus(row.status || raw.status, terminal),
     durationMs: asNumber(row.durationMs ?? row.elapsed_ms),
     sourceCount: asNumber(row.sourceCount ?? row.source_count),
     warningCodes: asStringArray(row.warningCodes ?? row.warnings),
@@ -442,7 +455,7 @@ const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
   };
 };
 
-const modelViewFromSummary = (row: Record<string, any>): TraceModelView => {
+const modelViewFromSummary = (row: Record<string, any>, terminal = false): TraceModelView => {
   const raw = { ...row, ...asObject(row.payload), ...asObject(row.raw) };
   return {
     event_id: String(row.event_id || raw.event_id || `model:${row.invocation_id || 'unknown'}`),
@@ -453,7 +466,7 @@ const modelViewFromSummary = (row: Record<string, any>): TraceModelView => {
     visit_index: asNumber(row.visit_index ?? raw.visit_index),
     subagent_id: asNonEmptyString(row.subagent_id || raw.subagent_id),
     parent_id: asNonEmptyString(row.parent_id || raw.parent_id),
-    status: asNonEmptyString(row.status || raw.status),
+    status: terminalizeRetainedActivityStatus(row.status || raw.status, terminal),
     duration_ms: asNumber(row.duration_ms ?? raw.duration_ms),
     retry_count: asNumber(row.retry_count ?? raw.retry_count),
     response_chars: asNumber(row.response_chars ?? raw.response_chars),
@@ -557,8 +570,9 @@ export const buildRunTraceView = (
       [...summaryOperations, ...manifestOperations],
       asArray(debug.details),
     );
-    const tools = asArray(debug.tools).map(toolViewFromSummary);
-    const models = asArray(debug.models).map(modelViewFromSummary);
+    const terminal = isTerminalRunStatus(runDetails.status);
+    const tools = asArray(debug.tools).map((tool) => toolViewFromSummary(tool, terminal));
+    const models = asArray(debug.models).map((model) => modelViewFromSummary(model, terminal));
     const usedOperationCount = Math.max(asNumber(summary.usedOperationCount) ?? 0, operations.filter((operation) => !operation.skipped).length);
     const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
     const memory = asObject(summary.memory);
@@ -568,6 +582,7 @@ export const buildRunTraceView = (
     );
     return {
       runId: runDetails.id,
+      terminal,
       debug,
       trace: getRunTrace(runDetails),
       graph: getRunGraph(debug, options.nodeCatalog),
@@ -576,7 +591,10 @@ export const buildRunTraceView = (
       metrics,
       events: Array.isArray(debug.events) ? debug.events : [],
       visualizations: debug.visualizations || {},
-      operations,
+      operations: operations.map((operation) => ({
+        ...operation,
+        status: terminalizeRetainedActivityStatus(operation.status, terminal),
+      })),
       tools,
       models,
       usedOperationCount,
@@ -586,7 +604,26 @@ export const buildRunTraceView = (
       warningCount: asNumber(summary.warningCount) ?? Number(metrics.tool_warning_count ?? 0),
       errorCount: diagnostics.summary.failure_count,
       diagnostics,
-      parallelGroups: debug.parallel_groups,
+      parallelGroups: asArray(debug.parallel_groups).map((group) => ({
+        ...group,
+        status: terminalizeRetainedActivityStatus(group.status, terminal),
+        barrier: {
+          ...asObject(group.barrier),
+          status: terminalizeRetainedActivityStatus(asObject(group.barrier).status, terminal),
+        },
+        aggregation: {
+          ...asObject(group.aggregation),
+          status: terminalizeRetainedActivityStatus(asObject(group.aggregation).status, terminal),
+        },
+        members: asArray(group.members).map((member) => ({
+          ...member,
+          status: terminalizeRetainedActivityStatus(member.status, terminal),
+          attempts: asArray(member.attempts).map((attempt) => ({
+            ...attempt,
+            status: terminalizeRetainedActivityStatus(attempt.status, terminal),
+          })),
+        })),
+      })) as unknown as AgentTraceParallelGroup[],
       memory: Object.keys(memory).length > 0 ? {
         recalledMemoryIds: asStringArray(memory.recalledMemoryIds),
         searchedScopes: asArray(memory.searchedScopes),
@@ -853,17 +890,51 @@ export const mergeLiveAndRetainedTraceViews = (
     [...retained.detailManifest, ...live.detailManifest]
       .map((row) => [`${row.operation_id}:${row.visit_index}`, row] as const),
   );
+  const terminal = retained.terminal === true;
+  const terminalizeOperation = (operation: TraceOperationView): TraceOperationView => ({
+    ...operation,
+    status: terminalizeRetainedActivityStatus(operation.status, terminal),
+  });
+  const terminalizeTool = (tool: TraceToolView): TraceToolView => ({
+    ...tool,
+    status: terminalizeRetainedActivityStatus(tool.status, terminal),
+  });
+  const terminalizeModel = (model: TraceModelView): TraceModelView => ({
+    ...model,
+    status: terminalizeRetainedActivityStatus(model.status, terminal),
+  });
+  const terminalizeParallelGroup = (group: AgentTraceParallelGroup): AgentTraceParallelGroup => ({
+    ...group,
+    status: terminalizeRetainedActivityStatus(group.status, terminal),
+    barrier: {
+      ...group.barrier,
+      status: terminalizeRetainedActivityStatus(group.barrier?.status, terminal),
+    },
+    aggregation: {
+      ...group.aggregation,
+      status: terminalizeRetainedActivityStatus(group.aggregation?.status, terminal),
+    },
+    members: (group.members || []).map((member) => ({
+      ...member,
+      status: terminalizeRetainedActivityStatus(member.status, terminal),
+      attempts: (member.attempts || []).map((attempt) => ({
+        ...attempt,
+        status: terminalizeRetainedActivityStatus(attempt.status, terminal),
+      })),
+    })),
+  });
   return {
     ...retained,
     ...live,
+    terminal,
     graph: retained.graph || live.graph,
     events: live.events.length > 0 ? live.events : retained.events,
     visualizations: { ...retained.visualizations, ...live.visualizations },
     route: live.route || retained.route,
     routeReason: live.routeReason || retained.routeReason,
-    operations,
-    tools,
-    models,
+    operations: terminal ? operations.map(terminalizeOperation) : operations,
+    tools: terminal ? tools.map(terminalizeTool) : tools,
+    models: terminal ? models.map(terminalizeModel) : models,
     usedOperationCount: new Set(operations.filter((operation) => !operation.skipped).map((operation) => operation.id)).size,
     usedToolCount: tools.length,
     warningCount: operations.reduce((count, operation) => count + operation.warningCodes.length, 0)
@@ -872,7 +943,8 @@ export const mergeLiveAndRetainedTraceViews = (
       ? live.diagnostics.summary.failure_count
       : Math.max(live.diagnostics.summary.failure_count, retained.diagnostics.summary.failure_count),
     diagnostics: live.events.length > 0 ? live.diagnostics : retained.diagnostics,
-    parallelGroups: live.parallelGroups.length > 0 ? live.parallelGroups : retained.parallelGroups,
+    parallelGroups: (live.parallelGroups.length > 0 ? live.parallelGroups : retained.parallelGroups)
+      .map(terminalizeParallelGroup),
     finalOutput: live.finalOutput || retained.finalOutput,
     detailManifest: [...detailManifest.values()],
   };

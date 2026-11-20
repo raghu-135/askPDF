@@ -180,6 +180,26 @@ interface ChatMessage extends Message {
     output_truncated?: boolean;
 }
 
+// Some agent runtimes currently preserve web citations in the answer as
+// [web:https://...] markers but omit the structured web_sources array. Keep
+// the UI source section useful until those runtime results are normalized.
+const inlineWebSources = (content: unknown): WebSource[] => {
+    const matches = String(content ?? '').matchAll(/\[web:(https?:\/\/[^\]\s]+)\]/gi);
+    const urls = new Set<string>();
+    const sources: WebSource[] = [];
+    for (const match of matches) {
+        const url = String(match[1] || '').replace(/[.,;:]+$/, '');
+        if (!url || urls.has(url)) continue;
+        urls.add(url);
+        sources.push({ text: '', url, title: url });
+    }
+    return sources;
+};
+
+const webSourcesForMessage = (message: ChatMessage): WebSource[] => (
+    message.web_sources?.length ? message.web_sources : inlineWebSources(message.content)
+);
+
 type LiveChatExecution = {
     messageId: string;
     runId?: string;
@@ -678,7 +698,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                 )}
                 {msg.role === MessageRole.Assistant && (
                     <>
-                    <SourceList label="Web sources used" sources={msg.web_sources || []} />
+                    <SourceList label="Web sources used" sources={webSourcesForMessage(msg)} />
                     <SourceList
                         label="Document sources used"
                         activeDocumentSourceKey={activeDocumentSourceKey}
@@ -1079,7 +1099,15 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
         const defaults = advancedDefaultsRef.current;
         if (defaults) {
+            // The context dropdown is a browser-session selection. A chat
+            // refresh can replace activeThread with a newer object whose
+            // persisted settings still contain the .env default; never let
+            // that refresh overwrite an explicit local selection.
+            const savedContextWindow = typeof window !== 'undefined'
+                ? Number.parseInt(localStorage.getItem('last_context_window') || '', 10)
+                : NaN;
             const resolvedContextWindow = contextWindowOverride
+                ?? (Number.isFinite(savedContextWindow) && savedContextWindow > 0 ? savedContextWindow : undefined)
                 ?? settings?.context_window
                 ?? defaults.contextWindow;
             setContextWindow(resolvedContextWindow);
@@ -1287,7 +1315,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
                 isRecollected: false,
                 rewritten_query: m.role === MessageRole.User ? m.context_compact : undefined,
-                web_sources: m.role === MessageRole.Assistant ? (m.web_sources || []) : undefined,
+                web_sources: m.role === MessageRole.Assistant
+                    ? (m.web_sources?.length ? m.web_sources : inlineWebSources(m.content))
+                    : undefined,
                 document_sources: m.role === MessageRole.Assistant ? (m.document_sources || []) : undefined,
                 agent_run_id: m.agent_run_id,
                 agent_run_turn_kind: m.agent_run_turn_kind,
@@ -1318,7 +1348,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             // approval after a newer run has already completed.
             const response = await listThreadAgentRuns(threadId, { limit: 20 });
             if (activeThreadIdRef.current !== threadId) return;
-            const chatRuns = (response.agent_runs || []).filter((run) => !run.task_id);
+            // Delegated child runs share the thread and may retain their own
+            // interrupt snapshot after the parent has completed. They are
+            // trace data, not chat turns, and must never be recovered as a
+            // second approval card.
+            const chatRuns = (response.agent_runs || []).filter(
+                (run) => !run.task_id && !run.parent_run_id,
+            );
             const awaitingReview = chatRuns.find((run) => run.status === 'awaiting_human');
             const latest = awaitingReview ?? chatRuns[0];
             if (latest?.status !== 'awaiting_human') {
@@ -1518,7 +1554,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
         if (advancedDefaults) {
             setAdvancedSettings(advancedDefaults);
-            setContextWindow(advancedDefaults.contextWindow);
+            handleContextWindowChange(advancedDefaults.contextWindow);
         }
     };
 
@@ -1526,7 +1562,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!advancedDefaults || !advancedSettings) return;
         if (fieldKey === 'context_window') {
             setAdvancedSettings({ ...advancedSettings, contextWindow: advancedDefaults.contextWindow });
-            setContextWindow(advancedDefaults.contextWindow);
+            handleContextWindowChange(advancedDefaults.contextWindow);
             return;
         }
         if (fieldKey in advancedDefaults.coverageIterations) {
@@ -1801,7 +1837,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
 
-    }, [llmModel]);
+    }, []);
 
     const cancelQuestionEdit = useCallback(() => {
         setEditingMessageId(null);
@@ -2747,7 +2783,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             reasoning: response.reasoning || '',
                             reasoning_available: !!response.reasoning_available,
                             reasoning_format: response.reasoning_format || ReasoningFormat.None,
-                            web_sources: response.web_sources || [],
+                            web_sources: response.web_sources?.length
+                                ? response.web_sources
+                                : inlineWebSources(response.answer),
                             document_sources: response.document_sources || [],
                             agent_run_id: response.agent_run_id,
                             agent_run_turn_kind: response.agent_run_turn_kind,
@@ -3064,13 +3102,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             advancedFieldSpecs,
             onAdvancedChange: (value) => {
                 setAdvancedSettings(value);
-                setContextWindow(value.contextWindow);
+                handleContextWindowChange(value.contextWindow);
             },
             onAdvancedResetField: handleAdvancedResetField,
             onAdvancedResetSection: () => {
                 if (advancedDefaults) {
                     setAdvancedSettings(advancedDefaults);
-                    setContextWindow(advancedDefaults.contextWindow);
+                    handleContextWindowChange(advancedDefaults.contextWindow);
                 }
             },
             onSave: () => { void handleSaveThreadSettings(); },
@@ -3188,7 +3226,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     }, [activeThread?.id, agentRunDetails, isTestRuntime, messages]);
 
     const handleOpenAgentRun = useCallback(async (msg: ChatMessage) => {
-        const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
+        const liveForMessage = liveExecution?.messageId === msg.id
+            && (liveExecution.running || msg.pending_human_review || !msg.agent_run_id)
+            ? liveExecution
+            : null;
         const runId = msg.agent_run_id || liveForMessage?.runId;
         const tabId = traceTabIdForRun(runId, msg.id);
         setWorkspaceTraceMessageId(msg.id);
@@ -3253,7 +3294,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             return;
         }
         workspaceTraceMessageIdRef.current = workspaceTraceMessageId;
-        const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
+        const liveForMessage = liveExecution?.messageId === msg.id
+            && (liveExecution.running || msg.pending_human_review || !msg.agent_run_id)
+            ? liveExecution
+            : null;
         const runId = msg.agent_run_id || liveForMessage?.runId;
         const tabId = traceTabIdForRun(runId, msg.id);
         onOpenTrace({
@@ -3709,13 +3753,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 advancedFieldSpecs={advancedFieldSpecs}
                 onAdvancedChange={(value) => {
                     setAdvancedSettings(value);
-                    setContextWindow(value.contextWindow);
+                    handleContextWindowChange(value.contextWindow);
                 }}
                 onAdvancedResetField={handleAdvancedResetField}
                 onAdvancedResetSection={() => {
                     if (advancedDefaults) {
                         setAdvancedSettings(advancedDefaults);
-                        setContextWindow(advancedDefaults.contextWindow);
+                        handleContextWindowChange(advancedDefaults.contextWindow);
                     }
                 }}
             />

@@ -299,6 +299,24 @@ async def thread_chat_endpoint(
                     event = str(item.get("event") or "message")
                     data = item.get("data") or {}
                     if event == "__result__":
+                        # The runtime stream can contain terminal events for
+                        # delegated child runs before the parent produces its
+                        # product-level result.  Emit exactly one terminal
+                        # envelope for the parent result so the chat client
+                        # cannot render a child completion as the answer while
+                        # the parent is paused for HITL approval.
+                        result_status = str(data.get("status") or "")
+                        terminal_event = (
+                            "interrupt.requested"
+                            if result_status == "awaiting_human"
+                            else "run.failed"
+                            if result_status == "failed"
+                            else "run.cancelled"
+                            if result_status == "cancelled"
+                            else "run.completed"
+                        )
+                        sequence += 1
+                        yield _chat_sse({"event": terminal_event, "data": {**data, "response": data}}, sequence)
                         break
                     if event == "__error__":
                         sequence += 1
@@ -306,8 +324,12 @@ async def thread_chat_endpoint(
                         break
                     sequence += 1
                     yield _chat_sse(item, sequence)
-                    if event in {"run.completed", "run.failed", "run.cancelled"}:
-                        break
+                    # Do not close on a runtime terminal event. Delegated
+                    # workflows can emit a child run.completed before the
+                    # parent has produced its product-level result (including
+                    # an awaiting_human web-search approval). The authoritative
+                    # completion is the __result__ envelope queued by
+                    # run_chat() below.
             finally:
                 sink.detach_delivery()
 
