@@ -35,6 +35,7 @@ export default function TraceWorkspace({
   onBackToMessage,
   suspendHeavyContent = false,
   onOpenDelegatedRun,
+  darkMode = false,
 }: {
   tabs: TraceRunTab[];
   activeRunId: string | null;
@@ -43,6 +44,7 @@ export default function TraceWorkspace({
   onBackToMessage?: (messageId: string) => void;
   suspendHeavyContent?: boolean;
   onOpenDelegatedRun?: (childRunId: string, childWorkflowId?: string) => void;
+  darkMode?: boolean;
 }) {
   const activeTab = tabs.find((tab) => tab.id === activeRunId) || tabs[0];
   if (!activeTab) {
@@ -51,6 +53,7 @@ export default function TraceWorkspace({
         icon={<BugReportIcon sx={{ fontSize: 42, opacity: 0.45 }} />}
         title="No trace open"
         description="Open a trace from an assistant response to inspect its run."
+        darkMode={darkMode}
       />
     );
   }

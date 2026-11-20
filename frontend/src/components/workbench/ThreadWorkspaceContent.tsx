@@ -157,7 +157,15 @@ export default function ThreadWorkspaceContent({
   onDeleteProject?: () => void;
 }) {
   return (
-    <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
+    <Box
+      sx={{
+        height: '100%',
+        position: 'relative',
+        overflow: 'hidden',
+        bgcolor: darkMode ? '#222' : 'grey.50',
+        color: darkMode ? '#eee' : 'inherit',
+      }}
+    >
       {activeTabId === 'home-tab' ? (
         <HomeInstructions
           darkMode={darkMode}
@@ -263,6 +271,7 @@ export default function ThreadWorkspaceContent({
           onCanvasTabUpdate={onCanvasTabUpdate || (() => undefined)}
           onOpenDocumentCitation={onOpenDocumentCitation}
           refreshVersion={canvasRefreshVersion}
+          darkMode={darkMode}
         />
       ) : activeTabId === EMBEDDINGS_TAB_ID ? (
         threadId ? (
@@ -284,6 +293,7 @@ export default function ThreadWorkspaceContent({
           onClose={onCloseTrace}
           onOpenDelegatedRun={onOpenDelegatedRun}
           suspendHeavyContent={isResizing}
+          darkMode={darkMode}
         />
       ) : activeTabId === 'memory-tab' ? (
         <MemoryWorkspace

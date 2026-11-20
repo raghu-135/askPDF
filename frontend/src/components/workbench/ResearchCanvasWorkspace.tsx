@@ -28,6 +28,7 @@ export default function ResearchCanvasWorkspace({
   onOpenDocumentCitation,
   onCanvasTabUpdate,
   refreshVersion = 0,
+  darkMode = false,
 }: {
   threadId: string | null;
   projectId?: string | null;
@@ -38,6 +39,7 @@ export default function ResearchCanvasWorkspace({
   onOpenDocumentCitation?: (target: DocumentCanvasCitationTarget) => void;
   onCanvasTabUpdate: (canvasId: string, patch: Partial<CanvasRunTab>) => void;
   refreshVersion?: number;
+  darkMode?: boolean;
 }) {
   const hydrateTab = useCallback(async (canvasId: string) => {
     if (!threadId) return;
@@ -81,7 +83,7 @@ export default function ResearchCanvasWorkspace({
 
   if (!threadId) {
     return (
-      <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3, color: 'text.secondary' }}>
+    <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3, bgcolor: darkMode ? '#222' : 'grey.50', color: 'text.secondary' }}>
         <Typography>Open a thread to view research canvases.</Typography>
       </Box>
     );
@@ -108,7 +110,7 @@ export default function ResearchCanvasWorkspace({
   }));
 
   return (
-    <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: canvasTabs.length > 0 ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)' }}>
+    <Box sx={{ height: '100%', minHeight: 0, display: 'grid', bgcolor: darkMode ? '#222' : 'grey.50', gridTemplateRows: canvasTabs.length > 0 ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)' }}>
       {canvasTabs.length > 0 ? (
         <NestedInstanceTabs
           tabs={nestedTabs}
@@ -117,7 +119,7 @@ export default function ResearchCanvasWorkspace({
           ariaLabel="Open canvases"
         />
       ) : null}
-      <Box sx={{ minHeight: 0, overflow: 'auto' }}>
+      <Box sx={{ minHeight: 0, overflow: 'auto', bgcolor: darkMode ? '#222' : 'grey.50' }}>
         {activeTab?.error ? (
           <Typography color="error" sx={{ p: 2 }}>{activeTab.error}</Typography>
         ) : activeTab?.record ? (
@@ -134,6 +136,7 @@ export default function ResearchCanvasWorkspace({
             title="No canvas open"
             description="Open a canvas from chat or deep research to inspect it here. Open canvases stay in the tab strip until you close them."
             maxWidth={420}
+            darkMode={darkMode}
           />
         )}
       </Box>
