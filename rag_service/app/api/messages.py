@@ -66,6 +66,19 @@ def _agent_message_metadata(message) -> dict:
     return {key: metadata[key] for key in allowed_keys if key in metadata}
 
 
+def _apply_thread_setting_overrides(req: ThreadChatRequest, thread_settings: dict) -> None:
+    """Apply persisted settings only for request fields the client omitted."""
+    if req.context_budget is None and thread_settings.get("context_budget"):
+        req.context_budget = thread_settings["context_budget"]
+    # The default token budget is a valid explicit selection. Use Pydantic's
+    # field-set metadata instead of treating the default value as a sentinel.
+    if (
+        "context_window" not in req.model_fields_set
+        and int(thread_settings.get("context_window") or DEFAULT_TOKEN_BUDGET) != DEFAULT_TOKEN_BUDGET
+    ):
+        req.context_window = int(thread_settings["context_window"])
+
+
 @router.get("/threads/{thread_id}/messages")
 async def get_thread_messages_endpoint(
     thread_id: str, limit: int = 100, offset: int = 0
@@ -230,10 +243,7 @@ async def thread_chat_endpoint(
         # Override thread_id from path
         req.thread_id = thread_id
         thread_settings = merge_thread_settings(await get_thread_settings(thread_id))
-        if req.context_budget is None and thread_settings.get("context_budget"):
-            req.context_budget = thread_settings["context_budget"]
-        if req.context_window == DEFAULT_TOKEN_BUDGET and int(thread_settings.get("context_window") or DEFAULT_TOKEN_BUDGET) != DEFAULT_TOKEN_BUDGET:
-            req.context_window = int(thread_settings["context_window"])
+        _apply_thread_setting_overrides(req, thread_settings)
         if req.replans is None and await _settings_workflow_supports_replans(thread_settings):
             req.replans = thread_settings["replans"]
         if req.system_role_override is None:

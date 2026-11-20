@@ -858,6 +858,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [indexingStatus, setIndexingStatus] = useState<ChatComposerIndexingStatusValue>(ChatComposerIndexingStatus.Checking);
     const [useWebSearch, setUseWebSearch] = useState(false);
     const { mode: webSearchMode, setMode: setSharedWebSearchMode } = useWebSearchMode();
+    const webSearchModeRef = useRef(webSearchMode);
     const { mode: browserAccessMode, setMode: setSharedBrowserAccessMode } = useBrowserAccessMode();
     const [contextWindow, setContextWindow] = useState<number>(0);
     const {
@@ -888,6 +889,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
     const [savingBrowserAccessMode, setSavingBrowserAccessMode] = useState(false);
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
+
+    useEffect(() => {
+        webSearchModeRef.current = webSearchMode;
+    }, [webSearchMode]);
     const [defaultHitlCanvasPublish, setDefaultHitlCanvasPublish] = useState(false);
     const [useReranker, setUseReranker] = useState(false);
     const [defaultUseReranker, setDefaultUseReranker] = useState(false);
@@ -1042,12 +1047,15 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         focusComposer();
     }, [focusComposer, setComposerText]);
 
-    const applyThreadSettingsToState = useCallback((settings?: Thread['settings']) => {
+    const applyThreadSettingsToState = useCallback((
+        settings?: Thread['settings'],
+        contextWindowOverride?: number,
+    ) => {
         setReplans(settings?.replans ?? 1);
         setSystemRole(settings?.system_role ?? defaultSystemRole);
         setToolInstructions(settings?.tool_instructions ?? {});
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
-        setHitlWebApproval(webSearchMode === 'ask');
+        setHitlWebApproval(webSearchModeRef.current === 'ask');
         setHitlCanvasPublish(settings?.hitl_canvas_publish ?? defaultHitlCanvasPublish);
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
         setUseMemory(settings?.memory?.memory_enabled ?? true);
@@ -1058,13 +1066,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (settings?.auto_limits) {
             setAutoLimits(settings.auto_limits);
         }
-        if (settings?.context_window) {
-            setContextWindow(settings.context_window);
-        }
         const defaults = advancedDefaultsRef.current;
         if (defaults) {
+            const resolvedContextWindow = contextWindowOverride
+                ?? settings?.context_window
+                ?? defaults.contextWindow;
+            setContextWindow(resolvedContextWindow);
             setAdvancedSettings({
-                contextWindow: settings?.context_window ?? defaults.contextWindow,
+                contextWindow: resolvedContextWindow,
                 contextBudget: {
                     ...defaults.contextBudget,
                     ...(settings?.context_budget ?? {}),
@@ -1080,7 +1089,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         defaultHitlCanvasPublish,
         defaultSystemRole,
         defaultUseReranker,
-        webSearchMode,
     ]);
 
     const loadProjectMemorySettings = useCallback(async () => {
@@ -1240,17 +1248,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         loadTools();
     }, [activeThread]);
 
-    const loadThreadSettings = async () => {
+    const loadThreadSettings = async (preserveContextWindow = false) => {
         const threadId = activeThread?.id;
         if (!threadId) return;
+        const contextWindowOverride = preserveContextWindow ? contextWindow : undefined;
         try {
             const settings = await getThreadSettings(threadId);
             if (activeThreadIdRef.current !== threadId) return;
-            applyThreadSettingsToState(settings);
+            applyThreadSettingsToState(settings, contextWindowOverride);
         } catch (error) {
             if (activeThreadIdRef.current !== threadId) return;
             console.error('Failed to load thread settings:', error);
-            applyThreadSettingsToState(undefined);
+            applyThreadSettingsToState(undefined, contextWindowOverride);
         }
     };
 
@@ -1490,6 +1499,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
         if (advancedDefaults) {
             setAdvancedSettings(advancedDefaults);
+            setContextWindow(advancedDefaults.contextWindow);
         }
     };
 
@@ -1620,6 +1630,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const handleContextWindowChange = (val: number) => {
         setContextWindow(val);
+        setAdvancedSettings((current) => (
+            current
+                ? { ...current, contextWindow: val }
+                : current
+        ));
         if (val > 0 && typeof window !== 'undefined') {
             localStorage.setItem('last_context_window', val.toString());
         }
@@ -2908,10 +2923,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     };
 
     const handleOpenThreadSettings = () => {
-        if (activeThread?.settings) {
-            applyThreadSettingsToState(activeThread.settings);
-        }
-        loadThreadSettings();
+        void loadThreadSettings(true);
         loadProjectMemorySettings();
         setSettingsDialogOpen(true);
     };
@@ -2927,7 +2939,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const handleCloseThreadSettings = () => {
         setSettingsDialogOpen(false);
-        loadThreadSettings();
+        // Cancel restores persisted prompt settings, but the context dropdown
+        // is a live per-session override and must remain selected.
+        void loadThreadSettings(true);
     };
 
     useEffect(() => {

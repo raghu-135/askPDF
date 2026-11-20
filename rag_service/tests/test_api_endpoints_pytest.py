@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api import threads as threads_api
+from app.api import messages as messages_api
 from app.models.requests import (
     PromptDefaults,
     PromptPreviewRequest,
@@ -1004,6 +1005,30 @@ class TestMessageEndpoints:
         """Test deleting a message that doesn't exist."""
         response = client.delete("/api/messages/nonexistent-id")
         assert response.status_code == 200
+
+    def test_explicit_default_context_window_is_not_overridden_by_thread_settings(self):
+        explicit = ThreadChatRequest(
+            thread_id="thread-1",
+            question="hello",
+            llm_model="test-model",
+            context_window=messages_api.DEFAULT_TOKEN_BUDGET,
+        )
+        messages_api._apply_thread_setting_overrides(
+            explicit,
+            {"context_window": 16_384},
+        )
+        assert explicit.context_window == messages_api.DEFAULT_TOKEN_BUDGET
+
+        omitted = ThreadChatRequest(
+            thread_id="thread-1",
+            question="hello",
+            llm_model="test-model",
+        )
+        messages_api._apply_thread_setting_overrides(
+            omitted,
+            {"context_window": 16_384},
+        )
+        assert omitted.context_window == 16_384
 
 
 class TestFileEndpoints:
